@@ -1,3 +1,4 @@
+
 <resources>
     <string name="app_name">TaskFlow</string>
     <string name="tagline_subtitle">Verified micro-tasks, instant tracking &amp; zero-trust rewards</string>
@@ -21,4 +22,6 @@
     <string name="approve_submission">Approve &amp; Credit</string>
     <string name="reject_submission">Reject</string>
     <string name="security_info_title">Firebase Config &amp; Security Status</string>
+
+    <string name="default_web_client_id" translatable="false">54814309263-uralqcp874c3v5nrk9r4ajj9scpt93ug.apps.googleusercontent.com</string>
 </resources>
