@@ -19,35 +19,42 @@ fun handleFirestoreError(
   operationType: OperationType,
   path: String?
 ): String {
-  val auth = FirebaseAuth.getInstance()
-  val currentUser = auth.currentUser
+  return runCatching {
+      val auth = runCatching { FirebaseAuth.getInstance() }.getOrNull()
+      val currentUser = auth?.currentUser
 
-  val providerInfoList =
-    currentUser?.providerData?.map { provider ->
-      JSONObject().apply {
-        put("providerId", provider.providerId)
-        put("email", provider.email)
-      }
-    } ?: emptyList()
+      val providerInfoList =
+        currentUser?.providerData?.map { provider ->
+          JSONObject().apply {
+            put("providerId", provider.providerId)
+            put("email", provider.email)
+          }
+        } ?: emptyList()
 
-  val authInfoJson =
-    JSONObject().apply {
-      put("userId", currentUser?.uid)
-      put("email", currentUser?.email)
-      put("emailVerified", currentUser?.isEmailVerified)
-      put("tenantId", currentUser?.tenantId)
-      put("providerInfo", JSONArray(providerInfoList))
+      val authInfoJson =
+        JSONObject().apply {
+          put("userId", currentUser?.uid)
+          put("email", currentUser?.email)
+          put("emailVerified", currentUser?.isEmailVerified)
+          put("tenantId", currentUser?.tenantId)
+          put("providerInfo", JSONArray(providerInfoList))
+        }
+
+      val errorInfoJson =
+        JSONObject().apply {
+          put("error", exception.message ?: exception.toString())
+          put("operationType", operationType.value)
+          put("path", path)
+          put("authInfo", authInfoJson)
+        }
+
+      val jsonString = errorInfoJson.toString()
+      Log.e("FirestoreError", "Firestore Error: $jsonString")
+      jsonString
     }
-
-  val errorInfoJson =
-    JSONObject().apply {
-      put("error", exception.message ?: exception.toString())
-      put("operationType", operationType.value)
-      put("path", path)
-      put("authInfo", authInfoJson)
+    .getOrElse {
+      val fallback = "Firestore Error (${operationType.value} on $path): ${exception.message}"
+      Log.e("FirestoreError", fallback)
+      fallback
     }
-
-  val jsonString = errorInfoJson.toString()
-  Log.e("FirestoreError", "Firestore Error: $jsonString")
-  return jsonString
 }

@@ -91,12 +91,26 @@ import kotlinx.coroutines.flow.callbackFlow
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    enableEdgeToEdge()
+    ensureFirebaseInitialized(applicationContext)
+    runCatching { enableEdgeToEdge() }
     setContent {
       TaskFlowTheme {
         TaskFlowAppRoot()
       }
     }
+  }
+}
+
+internal fun ensureFirebaseInitialized(context: android.content.Context): Boolean {
+  return try {
+    if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
+      com.google.firebase.FirebaseApp.initializeApp(context) != null
+    } else {
+      true
+    }
+  } catch (e: Throwable) {
+    android.util.Log.e("MainActivity", "Failed to initialize FirebaseApp", e)
+    false
   }
 }
 
@@ -107,8 +121,31 @@ internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
 }
 
 @Composable
-fun TaskFlowAppRoot(auth: FirebaseAuth = Firebase.auth) {
-  val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+fun TaskFlowAppRoot(auth: FirebaseAuth? = null) {
+  val context = LocalContext.current
+  val resolvedAuth =
+    remember(auth, context) {
+      auth
+        ?: runCatching {
+            ensureFirebaseInitialized(context.applicationContext)
+            Firebase.auth
+          }
+          .getOrNull()
+    }
+
+  if (resolvedAuth == null) {
+    var preferredPortal by rememberSaveable { mutableStateOf(PortalLoginTarget.USER_APP) }
+    AuthScreen(
+      selectedPortal = preferredPortal,
+      onSelectPortal = { preferredPortal = it },
+      onAuthSuccess = {}
+    )
+    return
+  }
+
+  val authFlow = remember(resolvedAuth) { resolvedAuth.authStateFlow() }
+  val currentUser by
+    authFlow.collectAsStateWithLifecycle(initialValue = resolvedAuth.currentUser)
   var preferredPortal by rememberSaveable { mutableStateOf(PortalLoginTarget.USER_APP) }
 
   val user = currentUser
@@ -134,8 +171,10 @@ private fun AuthenticatedWorkspace(
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
-  val credentialManager = remember { CredentialManager.create(context) }
-  val databaseId = remember { context.getString(R.string.firestore_database_id) }
+  val credentialManager = remember(context) { CredentialManager.create(context) }
+  val databaseId = remember(context) {
+    runCatching { context.getString(R.string.firestore_database_id).trim() }.getOrDefault("(default)")
+  }
 
   val viewModel: TaskFlowViewModel =
     viewModel(
@@ -147,8 +186,16 @@ private fun AuthenticatedWorkspace(
               checkNotNull(this[APPLICATION_KEY]) {
                 "APPLICATION_KEY missing from CreationExtras"
               }
-            val dbId = app.getString(R.string.firestore_database_id)
-            val db = FirebaseFirestore.getInstance(dbId)
+            ensureFirebaseInitialized(app)
+            val dbId =
+              runCatching { app.getString(R.string.firestore_database_id).trim() }
+                .getOrDefault("(default)")
+            val db =
+              if (dbId.isEmpty() || dbId == "(default)") {
+                FirebaseFirestore.getInstance()
+              } else {
+                FirebaseFirestore.getInstance(dbId)
+              }
             TaskFlowViewModel(
               repository = TaskFlowRepository(db),
               currentUserId = user.uid,

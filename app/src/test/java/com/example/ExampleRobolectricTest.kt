@@ -18,4 +18,12 @@ class ExampleRobolectricTest {
     val appName = context.getString(R.string.app_name)
     assertEquals("TaskFlow", appName)
   }
+
+  @Test
+  fun `launch MainActivity does not crash`() {
+    org.robolectric.Robolectric.buildActivity(MainActivity::class.java).use { controller ->
+      controller.setup()
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+    }
+  }
 }

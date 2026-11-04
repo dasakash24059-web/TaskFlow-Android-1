@@ -27,12 +27,21 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
   constructor(
     context: Context
   ) : this(
-    FirebaseFirestore.getInstance(
-      context.applicationContext.getString(R.string.firestore_database_id)
-    )
+    kotlin
+      .runCatching {
+        val dbId =
+          context.applicationContext.getString(R.string.firestore_database_id).trim()
+        if (dbId.isEmpty() || dbId == "(default)") {
+          FirebaseFirestore.getInstance()
+        } else {
+          FirebaseFirestore.getInstance(dbId)
+        }
+      }
+      .getOrElse { FirebaseFirestore.getInstance() }
   )
 
-  private val auth = Firebase.auth
+  private val auth
+    get() = Firebase.auth
 
   private fun requireUserId(): String {
     return auth.currentUser?.uid
@@ -168,6 +177,7 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
   }
 
   fun observeUserProfile(userId: String): Flow<UserProfile?> {
+    if (userId.isBlank()) return kotlinx.coroutines.flow.flowOf(null)
     val path = "users/$userId"
     return db
       .collection("users")
@@ -175,10 +185,13 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
       .snapshots()
       .map { snapshot ->
         if (snapshot.exists()) {
-          snapshot.toObject(
-            UserProfile::class.java,
-            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-          )
+          runCatching {
+              snapshot.toObject(
+                UserProfile::class.java,
+                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+              )
+            }
+            .getOrNull()
         } else {
           null
         }
@@ -231,14 +244,23 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
   }
 
   fun observeUserTasks(userId: String): Flow<List<TaskItem>> {
+    if (userId.isBlank()) return kotlinx.coroutines.flow.flowOf(emptyList())
     val path = "tasks"
     return db
       .collection(path)
       .whereEqualTo("assignedUserId", userId)
       .snapshots()
       .map { snapshot ->
-        snapshot
-          .toObjects(TaskItem::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        snapshot.documents
+          .mapNotNull { doc ->
+            runCatching {
+                doc.toObject(
+                  TaskItem::class.java,
+                  DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                )
+              }
+              .getOrNull()
+          }
           .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
       }
       .catch { error ->
@@ -248,17 +270,23 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
   }
 
   fun observeUserSubmissions(userId: String): Flow<List<SubmissionItem>> {
+    if (userId.isBlank()) return kotlinx.coroutines.flow.flowOf(emptyList())
     val path = "submissions"
     return db
       .collection(path)
       .whereEqualTo("userId", userId)
       .snapshots()
       .map { snapshot ->
-        snapshot
-          .toObjects(
-            SubmissionItem::class.java,
-            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-          )
+        snapshot.documents
+          .mapNotNull { doc ->
+            runCatching {
+                doc.toObject(
+                  SubmissionItem::class.java,
+                  DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                )
+              }
+              .getOrNull()
+          }
           .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
       }
       .catch { error ->
@@ -407,6 +435,7 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
   // --- ADMIN OPERATIONS ---
 
   fun observeAdminTasks(adminUid: String, isAdminAuthorized: Boolean): Flow<List<TaskItem>> {
+    if (!isAdminAuthorized && adminUid.isBlank()) return kotlinx.coroutines.flow.flowOf(emptyList())
     val path = "tasks"
     val query =
       if (isAdminAuthorized) {
@@ -417,8 +446,16 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
     return query
       .snapshots()
       .map { snapshot ->
-        snapshot
-          .toObjects(TaskItem::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        snapshot.documents
+          .mapNotNull { doc ->
+            runCatching {
+                doc.toObject(
+                  TaskItem::class.java,
+                  DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                )
+              }
+              .getOrNull()
+          }
           .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
       }
       .catch { error ->
@@ -431,6 +468,7 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
     adminUid: String,
     isAdminAuthorized: Boolean
   ): Flow<List<UserProfile>> {
+    if (!isAdminAuthorized && adminUid.isBlank()) return kotlinx.coroutines.flow.flowOf(emptyList())
     val path = "users"
     val query =
       if (isAdminAuthorized) {
@@ -441,8 +479,16 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
     return query
       .snapshots()
       .map { snapshot ->
-        snapshot
-          .toObjects(UserProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        snapshot.documents
+          .mapNotNull { doc ->
+            runCatching {
+                doc.toObject(
+                  UserProfile::class.java,
+                  DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                )
+              }
+              .getOrNull()
+          }
           .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
       }
       .catch { error ->

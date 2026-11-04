@@ -109,11 +109,14 @@ class TaskFlowViewModel(
   @OptIn(ExperimentalCoroutinesApi::class)
   val adminTasksState: StateFlow<UiState<List<TaskItem>>> =
     _isAdminAuthorized
-      .flatMapLatest { isAdmin -> repository.observeAdminTasks(currentUserId, isAdmin) }
-      .map<List<TaskItem>, UiState<List<TaskItem>>> { UiState.Success(it) }
-      .catch { e ->
-        Log.w(TAG, "Error observing admin tasks", e)
-        emit(UiState.Error(e.localizedMessage ?: "Failed to load admin tasks"))
+      .flatMapLatest { isAdmin ->
+        repository
+          .observeAdminTasks(currentUserId, isAdmin)
+          .map<List<TaskItem>, UiState<List<TaskItem>>> { UiState.Success(it) }
+          .catch { e ->
+            Log.w(TAG, "Error observing admin tasks", e)
+            emit(UiState.Error(e.localizedMessage ?: "Failed to load admin tasks"))
+          }
       }
       .stateIn(
         scope = viewModelScope,
@@ -124,11 +127,14 @@ class TaskFlowViewModel(
   @OptIn(ExperimentalCoroutinesApi::class)
   val registeredUsersState: StateFlow<UiState<List<UserProfile>>> =
     _isAdminAuthorized
-      .flatMapLatest { isAdmin -> repository.observeRegisteredUsers(currentUserId, isAdmin) }
-      .map<List<UserProfile>, UiState<List<UserProfile>>> { UiState.Success(it) }
-      .catch { e ->
-        Log.w(TAG, "Error observing registered users", e)
-        emit(UiState.Error(e.localizedMessage ?: "Failed to load registered users"))
+      .flatMapLatest { isAdmin ->
+        repository
+          .observeRegisteredUsers(currentUserId, isAdmin)
+          .map<List<UserProfile>, UiState<List<UserProfile>>> { UiState.Success(it) }
+          .catch { e ->
+            Log.w(TAG, "Error observing registered users", e)
+            emit(UiState.Error(e.localizedMessage ?: "Failed to load registered users"))
+          }
       }
       .stateIn(
         scope = viewModelScope,
@@ -138,13 +144,19 @@ class TaskFlowViewModel(
 
   init {
     viewModelScope.launch {
-      repository.ensureUserProfile(
-        uid = currentUserId,
-        email = currentUserEmail,
-        displayName = currentUserDisplayName
-      )
-      val adminStatus = repository.checkIsAdmin(currentUserId, currentUserEmail)
-      _isAdminAuthorized.value = adminStatus
+      try {
+        repository.ensureUserProfile(
+          uid = currentUserId,
+          email = currentUserEmail,
+          displayName = currentUserDisplayName
+        )
+        val adminStatus = repository.checkIsAdmin(currentUserId, currentUserEmail)
+        _isAdminAuthorized.value = adminStatus
+      } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+      } catch (e: Throwable) {
+        Log.e(TAG, "Failed to initialize user/admin profile state", e)
+      }
     }
   }
 
