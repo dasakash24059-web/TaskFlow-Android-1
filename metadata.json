@@ -1,0 +1,6 @@
+{
+  "name": "TaskFlow",
+  "description": "Mobile-first Task Management application with a responsive user workflow and integrated Admin Dashboard backed by Firebase Auth and Cloud Firestore.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

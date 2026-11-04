@@ -1,0 +1,5 @@
+{
+  "summary": "Final deployment-ready Cloud Firestore Security Rules for TaskFlow targeting the (default) database of project taskflow-8852d, including strict validation when clearing or setting assignedTaskId.",
+  "updatedAt": "2026-11-03T19:37:26.683024454Z",
+  "userFacing": true
+}

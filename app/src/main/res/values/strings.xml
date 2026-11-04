@@ -1,0 +1,24 @@
+<resources>
+    <string name="app_name">TaskFlow</string>
+    <string name="tagline_subtitle">Verified micro-tasks, instant tracking &amp; zero-trust rewards</string>
+    <string name="sign_in_with_google">Continue with Google</string>
+    <string name="sign_out">Sign Out</string>
+    <string name="mode_user_app">User App</string>
+    <string name="mode_admin_dashboard">Admin Dashboard</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_tracking">Tracking</string>
+    <string name="nav_profile">Profile</string>
+    <string name="nav_admin_tasks">Tasks</string>
+    <string name="nav_admin_submissions">Submissions</string>
+    <string name="nav_admin_users">Users</string>
+    <string name="currently_assigned_task">Currently Assigned Task</string>
+    <string name="no_assigned_task_title">No Active Pending Task</string>
+    <string name="no_assigned_task_desc">All caught up! New tasks assigned by an administrator will appear here automatically in real time.</string>
+    <string name="submit_proof_title">Submit Task Proof (Text-Only)</string>
+    <string name="submit_proof_hint">Provide detailed verification notes, links, or completion steps…</string>
+    <string name="submit_proof_cta">Submit Proof for Review</string>
+    <string name="create_task_cta">New Task</string>
+    <string name="approve_submission">Approve &amp; Credit</string>
+    <string name="reject_submission">Reject</string>
+    <string name="security_info_title">Firebase Config &amp; Security Status</string>
+</resources>

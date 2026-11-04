@@ -1,0 +1,249 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Registered TaskFlow user profile with role, approval status, and reward balance.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The unique Firebase Auth UID of the user."
+        },
+        "email": {
+          "type": "string",
+          "description": "The user's email address."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "The user's display name."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "admin"],
+          "description": "Role of the user in TaskFlow."
+        },
+        "approvalStatus": {
+          "type": "string",
+          "enum": ["approved", "pending", "suspended"],
+          "description": "Account approval status managed by admins."
+        },
+        "balanceCents": {
+          "type": "integer",
+          "description": "Accumulated task reward balance in cents (read-only for regular users)."
+        },
+        "completedTasksCount": {
+          "type": "integer",
+          "description": "Total number of approved tasks for this user."
+        },
+        "assignedTaskId": {
+          "type": "string",
+          "description": "Optional ID of the primary highlighted task assigned to the user."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the user registered (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "email",
+        "displayName",
+        "role",
+        "approvalStatus",
+        "balanceCents",
+        "completedTasksCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "A task assigned to a user with reward details, text proof submission, and review status.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Short descriptive title of the task."
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed instructions and acceptance criteria for the task."
+        },
+        "category": {
+          "type": "string",
+          "description": "Task category label (e.g., QA Testing, Content Review, Survey)."
+        },
+        "rewardCents": {
+          "type": "integer",
+          "description": "Reward value in cents upon approval."
+        },
+        "assignedUserId": {
+          "type": "string",
+          "description": "UID of the user to whom this task is assigned."
+        },
+        "assignedUserName": {
+          "type": "string",
+          "description": "Display name of the assigned user."
+        },
+        "assignedUserEmail": {
+          "type": "string",
+          "description": "Email of the assigned user."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "submitted", "approved", "rejected"],
+          "description": "Current workflow status of the task."
+        },
+        "proofText": {
+          "type": "string",
+          "description": "Text-only proof submitted by the assigned user."
+        },
+        "adminFeedback": {
+          "type": "string",
+          "description": "Optional review feedback provided by an administrator."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "UID of the administrator who created the task."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the task was created (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the task was last updated (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "category",
+        "rewardCents",
+        "assignedUserId",
+        "assignedUserName",
+        "assignedUserEmail",
+        "status",
+        "proofText",
+        "adminFeedback",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "Text-only task proof submission stored in the submissions collection.",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "description": "ID of the task this submission fulfills."
+        },
+        "taskTitle": {
+          "type": "string",
+          "description": "Title of the task."
+        },
+        "rewardCents": {
+          "type": "integer",
+          "description": "Reward value in cents associated with the task."
+        },
+        "userId": {
+          "type": "string",
+          "description": "UID of the user submitting the proof."
+        },
+        "userName": {
+          "type": "string",
+          "description": "Display name of the submitting user."
+        },
+        "userEmail": {
+          "type": "string",
+          "description": "Email of the submitting user."
+        },
+        "proofText": {
+          "type": "string",
+          "description": "Text-only proof submitted by the user."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["submitted", "approved", "rejected"],
+          "description": "Review status of the submission."
+        },
+        "adminFeedback": {
+          "type": "string",
+          "description": "Optional review note from an administrator."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the submission was created (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the submission was last updated (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "taskId",
+        "taskTitle",
+        "rewardCents",
+        "userId",
+        "userName",
+        "userEmail",
+        "proofText",
+        "status",
+        "adminFeedback",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted administrator membership record.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID of the administrator."
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address of the administrator."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the admin record was created."
+        }
+      },
+      "required": ["userId", "email", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Stores registered user profiles, balances, and account statuses."
+    },
+    "/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/Task" },
+      "description": "Stores tasks assigned to users along with status and reward information."
+    },
+    "/submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/Submission" },
+      "description": "Stores text-only task proof submissions and their review statuses."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Stores trusted administrator UIDs for role-based access control."
+    }
+  }
+}
