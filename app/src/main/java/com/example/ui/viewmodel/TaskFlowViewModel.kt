@@ -234,13 +234,13 @@ class TaskFlowViewModel(
     title: String,
     description: String,
     category: String,
-    rewardDollars: String,
+    rewardAmountInr: String,
     assignedUser: UserProfile,
     onSuccess: () -> Unit = {}
   ) {
-    val rewardCents = parseDollarsToCents(rewardDollars)
+    val rewardCents = parseInrToPaise(rewardAmountInr)
     if (title.isBlank() || description.isBlank() || rewardCents <= 0L) {
-      _bannerMessage.value = "Please provide a valid title, description, and positive reward."
+      _bannerMessage.value = "Please provide a valid title, description, and positive INR (₹) reward."
       return
     }
     viewModelScope.launch {
@@ -272,13 +272,13 @@ class TaskFlowViewModel(
     title: String,
     description: String,
     category: String,
-    rewardDollars: String,
+    rewardAmountInr: String,
     assignedUser: UserProfile,
     onSuccess: () -> Unit = {}
   ) {
-    val rewardCents = parseDollarsToCents(rewardDollars)
+    val rewardCents = parseInrToPaise(rewardAmountInr)
     if (title.isBlank() || description.isBlank() || rewardCents <= 0L) {
-      _bannerMessage.value = "Please provide a valid title, description, and positive reward."
+      _bannerMessage.value = "Please provide a valid title, description, and positive INR (₹) reward."
       return
     }
     viewModelScope.launch {
@@ -354,8 +354,16 @@ class TaskFlowViewModel(
     }
   }
 
-  private fun parseDollarsToCents(input: String): Long {
-    val cleaned = input.replace("$", "").replace(",", "").trim()
+  private fun parseInrToPaise(input: String): Long {
+    val cleaned =
+      input
+        .replace("₹", "")
+        .replace("INR", "", ignoreCase = true)
+        .replace("Rs.", "", ignoreCase = true)
+        .replace("Rs", "", ignoreCase = true)
+        .replace("$", "")
+        .replace(",", "")
+        .trim()
     val amount = cleaned.toDoubleOrNull() ?: return 0L
     return Math.round(amount * 100.0)
   }

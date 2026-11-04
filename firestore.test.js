@@ -553,6 +553,16 @@ test("6. Atomic task creation, task reassignment, task deletion consistency, and
   });
   await assertSucceeds(createBatch.commit());
 
+  // 2a. Any authenticated user (including newly registered Bob) can read and list tasks created by Admin -> MUST SUCCEED
+  const bobDb = testEnv
+    .authenticatedContext(BOB_UID, {
+      email: BOB_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  await assertSucceeds(bobDb.collection("tasks").doc(taskId).get());
+  await assertSucceeds(bobDb.collection("tasks").get());
+
   // 2b. Admin attempting to clear Alice's assignedTaskId to "" alone while taskId still exists and is assigned to Alice -> MUST FAIL
   await assertFails(
     adminDb.collection("users").doc(ALICE_UID).update({

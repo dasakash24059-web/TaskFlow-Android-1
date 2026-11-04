@@ -72,7 +72,8 @@ import com.example.R
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.UserProfile
-import com.example.data.model.formatRewardUsd
+import com.example.data.model.formatRewardInr
+import com.example.data.model.formatVisibleUserEmail
 import com.example.ui.components.RewardBadge
 import com.example.ui.components.StatusBadge
 import com.example.ui.components.TaskItemCard
@@ -176,7 +177,7 @@ fun UserHomeScreen(
                     color = Color(0xFF94A3B8)
                   )
                   Text(
-                    text = formatRewardUsd(profile?.balanceCents ?: 0L),
+                    text = formatRewardInr(profile?.balanceCents ?: 0L),
                     style = MaterialTheme.typography.titleLarge,
                     color = Color.White,
                     fontWeight = FontWeight.Bold
@@ -605,7 +606,7 @@ fun UserTaskDetailScreen(
           Text(
             text =
               if (task.status == TaskStatus.APPROVED) {
-                "ADMIN REVIEW: APPROVED (${formatRewardUsd(task.rewardCents)} CREDITED)"
+                "ADMIN REVIEW: APPROVED (${formatRewardInr(task.rewardCents)} CREDITED)"
               } else {
                 "ADMIN REVIEW: REJECTED"
               },
@@ -918,7 +919,11 @@ fun UserProfileScreen(
                   style = MaterialTheme.typography.titleLarge
                 )
                 Text(
-                  text = profile?.email?.ifBlank { userEmail } ?: userEmail,
+                  text =
+                    formatVisibleUserEmail(
+                      email = profile?.email?.ifBlank { userEmail } ?: userEmail,
+                      role = profile?.role
+                    ),
                   style = MaterialTheme.typography.bodyMedium,
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -947,7 +952,7 @@ fun UserProfileScreen(
           ) {
             ProfileMetricBox(
               label = "EARNED BALANCE",
-              value = formatRewardUsd(profile?.balanceCents ?: 0L),
+              value = formatRewardInr(profile?.balanceCents ?: 0L),
               modifier = Modifier.weight(1f)
             )
             ProfileMetricBox(

@@ -91,7 +91,22 @@ data class AdminRecord(
   @ServerTimestamp val createdAt: Timestamp? = null
 )
 
-fun formatRewardUsd(cents: Long): String {
-  val dollars = cents / 100.0
-  return String.format(Locale.US, "$%.2f", dollars)
+fun formatRewardInr(amountMinorUnits: Long): String {
+  val rupees = amountMinorUnits / 100.0
+  return String.format(Locale.US, "₹%.2f", rupees)
 }
+
+fun formatRewardUsd(cents: Long): String = formatRewardInr(cents)
+
+fun isAdminIdentity(email: String?, role: String? = null): Boolean {
+  return role?.trim()?.equals("admin", ignoreCase = true) == true ||
+    email?.trim()?.equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true) == true
+}
+
+fun formatVisibleUserEmail(email: String?, role: String? = null): String {
+  if (isAdminIdentity(email, role)) {
+    return "Authorized Administrator"
+  }
+  return email?.trim()?.takeIf { it.isNotEmpty() } ?: "Verified User"
+}
+

@@ -29,7 +29,7 @@
         },
         "balanceCents": {
           "type": "integer",
-          "description": "Accumulated task reward balance in cents (read-only for regular users)."
+          "description": "Accumulated task reward balance in INR paise (100 paise = ₹1.00, read-only for regular users)."
         },
         "completedTasksCount": {
           "type": "integer",
@@ -64,7 +64,7 @@
     },
     "Task": {
       "title": "Task",
-      "description": "A task assigned to a user with reward details, text proof submission, and review status.",
+      "description": "A task created by an admin and visible to authenticated users, with INR reward details, text proof submission, and review status.",
       "type": "object",
       "properties": {
         "title": {
@@ -81,7 +81,7 @@
         },
         "rewardCents": {
           "type": "integer",
-          "description": "Reward value in cents upon approval."
+          "description": "Reward value in INR paise (100 paise = ₹1.00) upon approval."
         },
         "assignedUserId": {
           "type": "string",

@@ -240,11 +240,16 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
       assertEquals(1500L, aliceAfterRejection.balanceCents)
       assertEquals(1L, aliceAfterRejection.completedTasksCount)
 
-      // 7. Create a 3rd pending task for Alice, reassign it to Bob via updateTaskDetails, and delete it via deleteTask
+      // 7. Newly registered user Bob signs up and can immediately see tasks created/updated by Admin
       val bobEmail = "bob_reassign_${UUID.randomUUID()}@test.com"
       val bobUid = signInTestUser(bobEmail, emailVerified = true)
       withTimeout(DEFAULT_TIMEOUT_MS) {
         repository.ensureUserProfile(bobUid, bobEmail, "Bob").getOrThrow()
+        val bobVisibleTasks = repository.getUserTasks(bobUid).getOrThrow()
+        assertTrue(
+          "Expected newly registered user Bob to see tasks created by Admin",
+          bobVisibleTasks.any { it.id == task1Id } && bobVisibleTasks.any { it.id == task2Id }
+        )
       }
 
       signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)

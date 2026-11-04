@@ -71,11 +71,19 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
       val currentUid = requireUserId()
       check(currentUid == uid) { "Users may only initialize their own profile." }
       val safeEmail = requireVerifiedTokenEmail()
-      val safeName =
-        displayName.ifBlank { safeEmail.substringBefore("@").ifBlank { "TaskFlow User" } }.take(100)
       val isBootstrappedAdmin =
         safeEmail.equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true) &&
           auth.currentUser?.isEmailVerified == true
+      val safeName =
+        displayName
+          .ifBlank {
+            if (isBootstrappedAdmin) {
+              "Administrator"
+            } else {
+              safeEmail.substringBefore("@").ifBlank { "TaskFlow User" }
+            }
+          }
+          .take(100)
 
       val existingSnap = docRef.get().await()
       if (existingSnap.exists()) {
@@ -248,7 +256,6 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
     val path = "tasks"
     return db
       .collection(path)
-      .whereEqualTo("assignedUserId", userId)
       .snapshots()
       .map { snapshot ->
         snapshot.documents
@@ -261,7 +268,10 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
               }
               .getOrNull()
           }
-          .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+          .sortedWith(
+            compareByDescending<TaskItem> { it.assignedUserId == userId }
+              .thenByDescending { it.updatedAt ?: it.createdAt ?: Timestamp(0, 0) }
+          )
       }
       .catch { error ->
         if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
@@ -320,11 +330,22 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
   suspend fun getUserTasks(userId: String = requireUserId()): Result<List<TaskItem>> {
     val path = "tasks"
     return try {
-      val snapshot = db.collection(path).whereEqualTo("assignedUserId", userId).get().await()
+      val snapshot = db.collection(path).get().await()
       val list =
-        snapshot
-          .toObjects(TaskItem::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-          .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+        snapshot.documents
+          .mapNotNull { doc ->
+            runCatching {
+                doc.toObject(
+                  TaskItem::class.java,
+                  DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                )
+              }
+              .getOrNull()
+          }
+          .sortedWith(
+            compareByDescending<TaskItem> { it.assignedUserId == userId }
+              .thenByDescending { it.updatedAt ?: it.createdAt ?: Timestamp(0, 0) }
+          )
       Result.success(list)
     } catch (e: CancellationException) {
       throw e

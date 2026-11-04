@@ -61,12 +61,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.TaskCategories
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.UserProfile
-import com.example.data.model.formatRewardUsd
+import com.example.data.model.formatVisibleUserEmail
 import com.example.ui.components.RewardBadge
 import com.example.ui.components.StatusBadge
 import com.example.ui.viewmodel.AdminTab
@@ -382,7 +381,7 @@ private fun AdminTasksTabContent(
                   style = MaterialTheme.typography.labelLarge
                 )
                 Text(
-                  text = "${task.assignedUserEmail} • ${task.category}",
+                  text = "${formatVisibleUserEmail(task.assignedUserEmail)} • ${task.category}",
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -515,7 +514,7 @@ private fun SubmissionReviewCard(
 
       Text(text = task.title, style = MaterialTheme.typography.titleLarge)
       Text(
-        text = "Submitted by ${task.assignedUserName} (${task.assignedUserEmail})",
+        text = "Submitted by ${task.assignedUserName} (${formatVisibleUserEmail(task.assignedUserEmail)})",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
       )
@@ -643,7 +642,7 @@ private fun AdminUsersTabContent(
               Column {
                 Text(text = user.displayName, style = MaterialTheme.typography.titleMedium)
                 Text(
-                  text = user.email,
+                  text = formatVisibleUserEmail(user.email, user.role),
                   style = MaterialTheme.typography.bodyMedium,
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -761,7 +760,7 @@ private fun TaskEditorDialog(
         OutlinedTextField(
           value = rewardDollars,
           onValueChange = { rewardDollars = it },
-          label = { Text("Reward Amount (USD $)") },
+          label = { Text("Reward Amount (INR ₹)") },
           singleLine = true,
           modifier = Modifier.fillMaxWidth().testTag("task_modal_reward_input")
         )
@@ -815,7 +814,7 @@ private fun TaskEditorDialog(
                     style = MaterialTheme.typography.labelLarge
                   )
                   Text(
-                    text = user.email,
+                    text = formatVisibleUserEmail(user.email, user.role),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
@@ -881,8 +880,8 @@ private fun UnauthorizedAdminGate(currentUserEmail: String) {
         Spacer(modifier = Modifier.height(8.dp))
         Text(
           text =
-            "Signed in as $currentUserEmail.\n\n" +
-              "TaskFlow's zero-trust Firestore rules restrict task creation, submission approval, and user management to the verified admin account ($BOOTSTRAPPED_ADMIN_EMAIL) or UIDs registered in /admins/{adminId}.",
+            "Signed in as ${formatVisibleUserEmail(currentUserEmail)}.\n\n" +
+              "TaskFlow's zero-trust Firestore rules restrict task creation, submission approval, and user management to verified administrator accounts registered in /admins/{adminId}.",
           style = MaterialTheme.typography.bodyMedium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           textAlign = TextAlign.Center

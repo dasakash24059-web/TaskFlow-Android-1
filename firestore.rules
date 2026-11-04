@@ -372,12 +372,9 @@ service cloud.firestore {
 
     // 5. Collection Rules: /tasks/{taskId}
     match /tasks/{taskId} {
-      allow get: if isSignedIn() &&
-                    isValidId(taskId) &&
-                    (resource == null || existing().assignedUserId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(taskId);
 
-      allow list: if isSignedIn() &&
-                     (resource.data.assignedUserId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn();
 
       // CREATE: Only admins can create tasks; must start in 'pending' state and atomically update assignee's assignedTaskId
       allow create: if isSignedIn() &&

@@ -42,10 +42,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
-import com.example.data.model.formatRewardUsd
+import com.example.data.model.formatRewardInr
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -119,7 +118,7 @@ fun RewardBadge(rewardCents: Long, modifier: Modifier = Modifier) {
     modifier = modifier
   ) {
     Text(
-      text = formatRewardUsd(rewardCents),
+      text = formatRewardInr(rewardCents),
       style = MaterialTheme.typography.labelMedium,
       color = MaterialTheme.colorScheme.onPrimaryContainer,
       fontWeight = FontWeight.Bold,
@@ -296,7 +295,7 @@ fun FirebaseConfigSecurityDialog(
             "• Project ID: taskflow-8852d\n" +
               "• Package Name: com.aistudio.taskflow.kxmpzq\n" +
               "• Firestore Named DB: $databaseId\n" +
-              "• Bootstrapped Admin: $BOOTSTRAPPED_ADMIN_EMAIL\n" +
+              "• Admin Access: Enforced via verified server-side Admin Registry (/admins/{adminId})\n" +
               "• Config Files: app/google-services.json & res/values/firebase_applet_config.xml"
         )
         ConfigSection(

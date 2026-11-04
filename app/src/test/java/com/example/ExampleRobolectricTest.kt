@@ -123,7 +123,8 @@ class ExampleRobolectricTest {
     }
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("Test Worker").assertIsDisplayed()
-    composeTestRule.onNodeWithText("$25.00").assertIsDisplayed()
+    composeTestRule.onNodeWithText("₹25.00").assertIsDisplayed()
+    composeTestRule.onNodeWithText("₹15.00").assertIsDisplayed()
     composeTestRule.onNodeWithText("Verify Checkout UI").assertIsDisplayed()
   }
 
@@ -151,10 +152,11 @@ class ExampleRobolectricTest {
     }
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("Admin Access Restricted").assertIsDisplayed()
+    composeTestRule.onNodeWithText(BOOTSTRAPPED_ADMIN_EMAIL, substring = true).assertDoesNotExist()
   }
 
   @Test
-  fun `AdminDashboardScreen renders metrics and create task FAB for authorized admin`() {
+  fun `AdminDashboardScreen renders metrics and create task FAB for authorized admin without exposing admin email`() {
     val adminUser =
       UserProfile(
         id = "admin_1",
@@ -171,7 +173,7 @@ class ExampleRobolectricTest {
           currentUserId = "admin_1",
           currentUserEmail = BOOTSTRAPPED_ADMIN_EMAIL,
           currentUserDisplayName = "Primary Admin",
-          activeTab = AdminTab.TASKS,
+          activeTab = AdminTab.USERS,
           adminTasksState = UiState.Success(emptyList()),
           registeredUsersState = UiState.Success(listOf(adminUser)),
           submissionFilter = "submitted",
@@ -185,21 +187,22 @@ class ExampleRobolectricTest {
       }
     }
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("admin_create_task_fab").assertIsDisplayed()
     composeTestRule.onNodeWithText("TOTAL TASKS").assertIsDisplayed()
     composeTestRule.onNodeWithText("NEEDS REVIEW").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Authorized Administrator").assertIsDisplayed()
+    composeTestRule.onNodeWithText(BOOTSTRAPPED_ADMIN_EMAIL, substring = true).assertDoesNotExist()
   }
 
   @Test
-  fun `UserProfileScreen triggers signOut callback`() {
+  fun `UserProfileScreen hides admin personal email and triggers signOut callback`() {
     var signedOut = false
-    val profile =
+    val adminProfile =
       UserProfile(
-        id = "user_1",
-        userId = "user_1",
-        email = "worker@example.com",
-        displayName = "Test Worker",
-        role = "user",
+        id = "admin_1",
+        userId = "admin_1",
+        email = BOOTSTRAPPED_ADMIN_EMAIL,
+        displayName = "Primary Admin",
+        role = "admin",
         approvalStatus = "approved",
         balanceCents = 1500L,
         completedTasksCount = 1L
@@ -207,10 +210,10 @@ class ExampleRobolectricTest {
     composeTestRule.setContent {
       TaskFlowTheme {
         UserProfileScreen(
-          profileState = UiState.Success(profile),
+          profileState = UiState.Success(adminProfile),
           tasksState = UiState.Success(emptyList()),
-          userEmail = "worker@example.com",
-          userUid = "user_1",
+          userEmail = BOOTSTRAPPED_ADMIN_EMAIL,
+          userUid = "admin_1",
           onUpdateDisplayName = {},
           onOpenSecurityInfo = {},
           onSelectTask = {},
@@ -219,6 +222,9 @@ class ExampleRobolectricTest {
       }
     }
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("₹15.00").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Authorized Administrator").assertIsDisplayed()
+    composeTestRule.onNodeWithText(BOOTSTRAPPED_ADMIN_EMAIL, substring = true).assertDoesNotExist()
     composeTestRule.onNodeWithTag("sign_out_button").performClick()
     composeTestRule.waitForIdle()
     assertTrue(signedOut)

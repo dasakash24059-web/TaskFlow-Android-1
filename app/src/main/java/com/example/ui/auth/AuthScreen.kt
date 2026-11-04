@@ -73,7 +73,6 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
 import com.example.R
-import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.ensureFirebaseInitialized
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -453,9 +452,9 @@ fun AuthScreen(
             Text(
               text =
                 if (selectedPortal == PortalLoginTarget.ADMIN_DASHBOARD) {
-                  "Sign in with your authorized Google account ($BOOTSTRAPPED_ADMIN_EMAIL) to create tasks, inspect user proof submissions, and approve rewards."
+                  "Sign in with an authorized administrator Google account to create tasks, inspect user proof submissions, and approve INR (₹) rewards."
                 } else {
-                  "Sign in or register instantly with Google Credential Manager. Your profile, assigned tasks, and reward history are secured by Cloud Firestore."
+                  "Sign in or register instantly with Google Credential Manager. Your profile, assigned tasks, and INR (₹) reward history are secured by Cloud Firestore."
                 },
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
