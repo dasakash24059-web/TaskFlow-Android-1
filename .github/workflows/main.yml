@@ -1,4 +1,3 @@
-
 name: Build TaskFlow APK
 
 on:
@@ -18,11 +17,39 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Restore debug.keystore from GitHub Secret
+        env:
+          KEYSTORE_BASE64: ${{ secrets.TASKFLOW_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Missing required GitHub Secret: TASKFLOW_DEBUG_KEYSTORE_BASE64"
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > debug.keystore
+          if [ -f google-services.json ] && [ ! -f app/google-services.json ]; then
+            cp google-services.json app/google-services.json
+          fi
+
       - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build Debug APK
         run: gradle assembleDebug
+
+      - name: Verify APK Signing Certificate SHA-1
+        run: |
+          EXPECTED_SHA1="a7aacdf1fa3e6bda90b72480c73200f8a6c2ea09"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" "$ANDROID_SDK_ROOT/build-tools" -name apksigner 2>/dev/null | sort -V | tail -n 1)
+          ACTUAL_SHA1=$("$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -m1 "SHA-1 digest:" | awk '{print tolower($NF)}')
+          echo "Verified APK SHA-1: $ACTUAL_SHA1"
+          if [ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]; then
+            echo "::error::APK SHA-1 ($ACTUAL_SHA1) does not match Firebase SHA-1 ($EXPECTED_SHA1)"
+            exit 1
+          fi
+
+      - name: Clean up restored keystore
+        if: always()
+        run: rm -f debug.keystore
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -30,4 +57,3 @@ jobs:
           name: TaskFlow-APK
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          

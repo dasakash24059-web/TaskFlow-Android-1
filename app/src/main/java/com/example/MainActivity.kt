@@ -1,7 +1,10 @@
 package com.example
 
+import android.content.Context
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
@@ -44,6 +47,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,6 +84,8 @@ import com.example.ui.viewmodel.TaskFlowViewModel
 import com.example.ui.viewmodel.UiState
 import com.example.ui.viewmodel.UserTab
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
@@ -101,20 +107,36 @@ class MainActivity : ComponentActivity() {
   }
 }
 
-internal fun ensureFirebaseInitialized(context: android.content.Context): Boolean {
+internal fun ensureFirebaseInitialized(context: Context): Boolean {
+  val appContext = context.applicationContext
   return try {
-    if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
-      com.google.firebase.FirebaseApp.initializeApp(context) != null
-    } else {
+    if (FirebaseApp.getApps(appContext).isNotEmpty()) {
       true
+    } else {
+      val defaultApp = FirebaseApp.initializeApp(appContext)
+      if (defaultApp != null) {
+        true
+      } else {
+        // Verified fallback configuration matching project taskflow-8852d and com.aistudio.taskflow.kxmpzq
+        val options =
+          FirebaseOptions.Builder()
+            .setProjectId("taskflow-8852d")
+            .setApplicationId("1:54814309263:android:0fbf81074748ad213129fa")
+            .setApiKey("AIzaSyDCTK19jN75ZS7gFaJz5aWuYi-Y-2xeH8o")
+            .setStorageBucket("taskflow-8852d.firebasestorage.app")
+            .setGcmSenderId("54814309263")
+            .build()
+        FirebaseApp.initializeApp(appContext, options) != null
+      }
     }
   } catch (e: Throwable) {
-    android.util.Log.e("MainActivity", "Failed to initialize FirebaseApp", e)
+    Log.e("MainActivity", "Failed to initialize FirebaseApp", e)
     false
   }
 }
 
 internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
+  trySend(currentUser)
   val listener = FirebaseAuth.AuthStateListener { auth -> trySend(auth.currentUser) }
   addAuthStateListener(listener)
   awaitClose { removeAuthStateListener(listener) }
@@ -133,32 +155,36 @@ fun TaskFlowAppRoot(auth: FirebaseAuth? = null) {
           .getOrNull()
     }
 
-  if (resolvedAuth == null) {
-    var preferredPortal by rememberSaveable { mutableStateOf(PortalLoginTarget.USER_APP) }
-    AuthScreen(
-      selectedPortal = preferredPortal,
-      onSelectPortal = { preferredPortal = it },
-      onAuthSuccess = {}
-    )
-    return
-  }
-
-  val authFlow = remember(resolvedAuth) { resolvedAuth.authStateFlow() }
-  val currentUser by
-    authFlow.collectAsStateWithLifecycle(initialValue = resolvedAuth.currentUser)
   var preferredPortal by rememberSaveable { mutableStateOf(PortalLoginTarget.USER_APP) }
+  var manualUserOverride by remember { mutableStateOf<FirebaseUser?>(resolvedAuth?.currentUser) }
 
-  val user = currentUser
-  if (user == null) {
+  val observedUser =
+    if (resolvedAuth != null) {
+      val authFlow = remember(resolvedAuth) { resolvedAuth.authStateFlow() }
+      val flowUser by authFlow.collectAsStateWithLifecycle(initialValue = resolvedAuth.currentUser)
+      flowUser
+    } else {
+      null
+    }
+
+  val activeUser = observedUser ?: manualUserOverride
+
+  if (activeUser == null) {
     AuthScreen(
       selectedPortal = preferredPortal,
       onSelectPortal = { preferredPortal = it },
-      onAuthSuccess = {}
+      onAuthSuccess = { signedInUser ->
+        manualUserOverride =
+          signedInUser ?: runCatching { Firebase.auth.currentUser }.getOrNull()
+      }
     )
   } else {
     AuthenticatedWorkspace(
-      user = user,
-      initialPortal = preferredPortal
+      user = activeUser,
+      initialPortal = preferredPortal,
+      onSignedOut = {
+        manualUserOverride = null
+      }
     )
   }
 }
@@ -167,7 +193,8 @@ fun TaskFlowAppRoot(auth: FirebaseAuth? = null) {
 @Composable
 private fun AuthenticatedWorkspace(
   user: FirebaseUser,
-  initialPortal: PortalLoginTarget
+  initialPortal: PortalLoginTarget,
+  onSignedOut: () -> Unit = {}
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
@@ -207,6 +234,10 @@ private fun AuthenticatedWorkspace(
         }
     )
 
+  LaunchedEffect(initialPortal) {
+    viewModel.setPortal(initialPortal)
+  }
+
   val activePortal by viewModel.activePortal.collectAsStateWithLifecycle()
   val activeUserTab by viewModel.activeUserTab.collectAsStateWithLifecycle()
   val activeAdminTab by viewModel.activeAdminTab.collectAsStateWithLifecycle()
@@ -221,6 +252,21 @@ private fun AuthenticatedWorkspace(
   val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
   val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
   val showSecuritySheet by viewModel.showSecuritySheet.collectAsStateWithLifecycle()
+
+  BackHandler(
+    enabled =
+      selectedTaskId != null ||
+        (activePortal == PortalLoginTarget.USER_APP && activeUserTab != UserTab.HOME) ||
+        (activePortal == PortalLoginTarget.ADMIN_DASHBOARD && activeAdminTab != AdminTab.TASKS)
+  ) {
+    when {
+      selectedTaskId != null -> viewModel.selectTask(null)
+      activePortal == PortalLoginTarget.USER_APP && activeUserTab != UserTab.HOME ->
+        viewModel.setUserTab(UserTab.HOME)
+      activePortal == PortalLoginTarget.ADMIN_DASHBOARD && activeAdminTab != AdminTab.TASKS ->
+        viewModel.setAdminTab(AdminTab.TASKS)
+    }
+  }
 
   if (showSecuritySheet) {
     FirebaseConfigSecurityDialog(
@@ -465,7 +511,7 @@ private fun AuthenticatedWorkspace(
                     signOutUser(
                       context = context,
                       credentialManager = credentialManager,
-                      onSignOutComplete = {},
+                      onSignOutComplete = onSignedOut,
                       scope = scope
                     )
                   }
