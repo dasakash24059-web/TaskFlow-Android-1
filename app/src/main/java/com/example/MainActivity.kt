@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FactCheck
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Home
@@ -34,7 +35,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Task
-import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -74,12 +74,15 @@ import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.PortalLoginTarget
 import com.example.ui.auth.signOutUser
 import com.example.ui.components.FirebaseConfigSecurityDialog
+import com.example.ui.components.TaskFlowBrandLogo
 import com.example.ui.theme.TaskFlowTheme
 import com.example.ui.user.UserHomeScreen
 import com.example.ui.user.UserProfileScreen
 import com.example.ui.user.UserTaskDetailScreen
 import com.example.ui.user.UserTrackingScreen
+import com.example.ui.user.UserWalletScreen
 import com.example.ui.viewmodel.AdminTab
+import com.example.ui.viewmodel.ProfileSubScreen
 import com.example.ui.viewmodel.TaskFlowViewModel
 import com.example.ui.viewmodel.UiState
 import com.example.ui.viewmodel.UserTab
@@ -240,6 +243,7 @@ private fun AuthenticatedWorkspace(
 
   val activePortal by viewModel.activePortal.collectAsStateWithLifecycle()
   val activeUserTab by viewModel.activeUserTab.collectAsStateWithLifecycle()
+  val profileSubScreen by viewModel.profileSubScreen.collectAsStateWithLifecycle()
   val activeAdminTab by viewModel.activeAdminTab.collectAsStateWithLifecycle()
   val selectedTaskId by viewModel.selectedTaskId.collectAsStateWithLifecycle()
   val trackingFilter by viewModel.trackingStatusFilter.collectAsStateWithLifecycle()
@@ -247,9 +251,14 @@ private fun AuthenticatedWorkspace(
   val isAdminAuthorized by viewModel.isAdminAuthorized.collectAsStateWithLifecycle()
   val userProfileState by viewModel.userProfileState.collectAsStateWithLifecycle()
   val userTasksState by viewModel.userTasksState.collectAsStateWithLifecycle()
+  val userWithdrawalRequestsState by viewModel.userWithdrawalRequestsState.collectAsStateWithLifecycle()
   val adminTasksState by viewModel.adminTasksState.collectAsStateWithLifecycle()
+  val adminSubmissionsState by viewModel.adminSubmissionsState.collectAsStateWithLifecycle()
+  val adminWithdrawalRequestsState by viewModel.adminWithdrawalRequestsState.collectAsStateWithLifecycle()
   val registeredUsersState by viewModel.registeredUsersState.collectAsStateWithLifecycle()
   val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
+  val submissionError by viewModel.submissionError.collectAsStateWithLifecycle()
+  val withdrawalValidationError by viewModel.withdrawalValidationError.collectAsStateWithLifecycle()
   val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
   val uploadProgress by viewModel.uploadProgress.collectAsStateWithLifecycle()
   val showSecuritySheet by viewModel.showSecuritySheet.collectAsStateWithLifecycle()
@@ -257,11 +266,18 @@ private fun AuthenticatedWorkspace(
   BackHandler(
     enabled =
       selectedTaskId != null ||
+        (activePortal == PortalLoginTarget.USER_APP &&
+          activeUserTab == UserTab.PROFILE &&
+          profileSubScreen != ProfileSubScreen.MAIN) ||
         (activePortal == PortalLoginTarget.USER_APP && activeUserTab != UserTab.HOME) ||
         (activePortal == PortalLoginTarget.ADMIN_DASHBOARD && activeAdminTab != AdminTab.TASKS)
   ) {
     when {
       selectedTaskId != null -> viewModel.selectTask(null)
+      activePortal == PortalLoginTarget.USER_APP &&
+        activeUserTab == UserTab.PROFILE &&
+        profileSubScreen != ProfileSubScreen.MAIN ->
+        viewModel.setProfileSubScreen(ProfileSubScreen.MAIN)
       activePortal == PortalLoginTarget.USER_APP && activeUserTab != UserTab.HOME ->
         viewModel.setUserTab(UserTab.HOME)
       activePortal == PortalLoginTarget.ADMIN_DASHBOARD && activeAdminTab != AdminTab.TASKS ->
@@ -283,14 +299,9 @@ private fun AuthenticatedWorkspace(
         title = {
           Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
           ) {
-            Icon(
-              imageVector = Icons.Default.TaskAlt,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(24.dp)
-            )
+            TaskFlowBrandLogo(size = 32.dp)
             Text(
               text = stringResource(R.string.app_name),
               style = MaterialTheme.typography.titleLarge,
@@ -378,12 +389,22 @@ private fun AuthenticatedWorkspace(
             selected = activeUserTab == UserTab.TRACKING,
             onClick = { viewModel.setUserTab(UserTab.TRACKING) },
             icon = { Icon(Icons.AutoMirrored.Filled.FactCheck, contentDescription = null) },
-            label = { Text(stringResource(R.string.nav_tracking)) },
+            label = { Text(stringResource(R.string.nav_tasks)) },
             modifier = Modifier.testTag("nav_user_tracking")
           )
           NavigationBarItem(
+            selected = activeUserTab == UserTab.WALLET,
+            onClick = { viewModel.setUserTab(UserTab.WALLET) },
+            icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null) },
+            label = { Text(stringResource(R.string.nav_wallet)) },
+            modifier = Modifier.testTag("nav_user_wallet")
+          )
+          NavigationBarItem(
             selected = activeUserTab == UserTab.PROFILE,
-            onClick = { viewModel.setUserTab(UserTab.PROFILE) },
+            onClick = {
+              viewModel.setUserTab(UserTab.PROFILE)
+              viewModel.setProfileSubScreen(ProfileSubScreen.MAIN)
+            },
             icon = { Icon(Icons.Default.Person, contentDescription = null) },
             label = { Text(stringResource(R.string.nav_profile)) },
             modifier = Modifier.testTag("nav_user_profile")
@@ -464,7 +485,7 @@ private fun AuthenticatedWorkspace(
 
           if (selectedTask != null) {
             val currentApprovalStatus =
-              (userProfileState as? UiState.Success)?.data?.approvalStatus ?: "pending"
+              (userProfileState as? UiState.Success)?.data?.approvalStatus ?: "approved"
             UserTaskDetailScreen(
               task = selectedTask,
               isBusy = isBusy,
@@ -474,7 +495,8 @@ private fun AuthenticatedWorkspace(
               },
               userApprovalStatus = currentApprovalStatus,
               currentUserId = user.uid,
-              uploadProgress = uploadProgress
+              uploadProgress = uploadProgress,
+              submissionError = submissionError
             )
           } else {
             when (activeUserTab) {
@@ -502,6 +524,37 @@ private fun AuthenticatedWorkspace(
                   currentUserId = user.uid
                 )
               }
+              UserTab.WALLET -> {
+                UserWalletScreen(
+                  profileState = userProfileState,
+                  tasksState = userTasksState,
+                  withdrawalRequestsState = userWithdrawalRequestsState,
+                  currentUserId = user.uid,
+                  isBusy = isBusy,
+                  withdrawalValidationError = withdrawalValidationError,
+                  onClearValidationError = { viewModel.clearWithdrawalValidationError() },
+                  onSubmitDemoWithdrawal = {
+                      amountInr,
+                      method,
+                      holderName,
+                      bankName,
+                      accountNum,
+                      ifsc,
+                      upiId,
+                      onSuccess ->
+                    viewModel.submitDemoWithdrawal(
+                      amountInrInput = amountInr,
+                      method = method,
+                      accountHolderName = holderName,
+                      bankName = bankName,
+                      accountNumber = accountNum,
+                      ifscCode = ifsc,
+                      upiId = upiId,
+                      onSuccess = onSuccess
+                    )
+                  }
+                )
+              }
               UserTab.PROFILE -> {
                 UserProfileScreen(
                   profileState = userProfileState,
@@ -518,7 +571,10 @@ private fun AuthenticatedWorkspace(
                       onSignOutComplete = onSignedOut,
                       scope = scope
                     )
-                  }
+                  },
+                  withdrawalRequestsState = userWithdrawalRequestsState,
+                  activeSubScreen = profileSubScreen,
+                  onNavigateSubScreen = { viewModel.setProfileSubScreen(it) }
                 )
               }
             }
@@ -561,7 +617,59 @@ private fun AuthenticatedWorkspace(
             onReviewSubmission = { task, approve, feedback ->
               viewModel.reviewSubmission(task, approve, feedback)
             },
-            onToggleUserStatus = { viewModel.toggleUserApprovalStatus(it) }
+            onToggleUserStatus = { viewModel.toggleUserApprovalStatus(it) },
+            adminSubmissionsState = adminSubmissionsState,
+            adminWithdrawalRequestsState = adminWithdrawalRequestsState,
+            onCreateTaskExtended = {
+                title,
+                desc,
+                cat,
+                rewardStr,
+                assignee,
+                instructions,
+                taskLink,
+                appName,
+                appIconUrl,
+                requiredProof ->
+              viewModel.createTask(
+                title = title,
+                description = desc,
+                category = cat,
+                rewardAmountInr = rewardStr,
+                assignedUser = assignee,
+                instructions = instructions,
+                taskLink = taskLink,
+                appName = appName,
+                appIconUrl = appIconUrl,
+                requiredProof = requiredProof
+              )
+            },
+            onUpdateTaskExtended = {
+                taskId,
+                title,
+                desc,
+                cat,
+                rewardStr,
+                assignee,
+                instructions,
+                taskLink,
+                appName,
+                appIconUrl,
+                requiredProof ->
+              viewModel.updateTask(
+                taskId = taskId,
+                title = title,
+                description = desc,
+                category = cat,
+                rewardAmountInr = rewardStr,
+                assignedUser = assignee,
+                instructions = instructions,
+                taskLink = taskLink,
+                appName = appName,
+                appIconUrl = appIconUrl,
+                requiredProof = requiredProof
+              )
+            }
           )
         }
       }

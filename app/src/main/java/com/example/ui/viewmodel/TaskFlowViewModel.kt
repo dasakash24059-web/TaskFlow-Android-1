@@ -1,15 +1,21 @@
 package com.example.ui.viewmodel
 
 import android.net.Uri
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
+import com.example.data.model.DemoWithdrawalRequest
+import com.example.data.model.MIN_WITHDRAWAL_CENTS
+import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
+import com.example.data.model.TaskStatus
 import com.example.data.model.UserProfile
+import com.example.data.model.WithdrawalMethod
+import com.example.data.model.formatRewardInr
+import com.example.data.model.isValidImageUrlOrDataUri
 import com.example.data.model.isValidTaskUrl
 import com.example.data.repository.TaskFlowRepository
 import com.example.ui.auth.PortalLoginTarget
+import kotlin.math.roundToLong
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -30,7 +36,17 @@ sealed interface UiState<out T> {
 enum class UserTab {
   HOME,
   TRACKING,
+  WALLET,
   PROFILE
+}
+
+enum class ProfileSubScreen {
+  MAIN,
+  ACTIVITY,
+  HISTORY,
+  REWARDS,
+  SETTINGS,
+  ABOUT
 }
 
 enum class AdminTab {
@@ -47,17 +63,14 @@ class TaskFlowViewModel(
   initialPortal: PortalLoginTarget = PortalLoginTarget.USER_APP
 ) : ViewModel() {
 
-  val isVerifiedBootstrappedAdmin: Boolean =
-    currentUserEmail.equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true)
-
-  private val _isAdminAuthorized = MutableStateFlow(isVerifiedBootstrappedAdmin)
-  val isAdminAuthorized: StateFlow<Boolean> = _isAdminAuthorized.asStateFlow()
-
   private val _activePortal = MutableStateFlow(initialPortal)
   val activePortal: StateFlow<PortalLoginTarget> = _activePortal.asStateFlow()
 
   private val _activeUserTab = MutableStateFlow(UserTab.HOME)
   val activeUserTab: StateFlow<UserTab> = _activeUserTab.asStateFlow()
+
+  private val _profileSubScreen = MutableStateFlow(ProfileSubScreen.MAIN)
+  val profileSubScreen: StateFlow<ProfileSubScreen> = _profileSubScreen.asStateFlow()
 
   private val _activeAdminTab = MutableStateFlow(AdminTab.TASKS)
   val activeAdminTab: StateFlow<AdminTab> = _activeAdminTab.asStateFlow()
@@ -68,11 +81,17 @@ class TaskFlowViewModel(
   private val _trackingStatusFilter = MutableStateFlow("all")
   val trackingStatusFilter: StateFlow<String> = _trackingStatusFilter.asStateFlow()
 
-  private val _adminSubmissionFilter = MutableStateFlow("submitted")
+  private val _adminSubmissionFilter = MutableStateFlow(TaskStatus.SUBMITTED)
   val adminSubmissionFilter: StateFlow<String> = _adminSubmissionFilter.asStateFlow()
 
   private val _bannerMessage = MutableStateFlow<String?>(null)
   val bannerMessage: StateFlow<String?> = _bannerMessage.asStateFlow()
+
+  private val _submissionError = MutableStateFlow<String?>(null)
+  val submissionError: StateFlow<String?> = _submissionError.asStateFlow()
+
+  private val _withdrawalValidationError = MutableStateFlow<String?>(null)
+  val withdrawalValidationError: StateFlow<String?> = _withdrawalValidationError.asStateFlow()
 
   private val _isBusy = MutableStateFlow(false)
   val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
@@ -83,105 +102,122 @@ class TaskFlowViewModel(
   private val _showSecuritySheet = MutableStateFlow(false)
   val showSecuritySheet: StateFlow<Boolean> = _showSecuritySheet.asStateFlow()
 
+  val isAdminAuthorized: StateFlow<Boolean> =
+    repository
+      .observeAdminAuthorization(currentUserId, currentUserEmail)
+      .catch { emit(false) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
   val userProfileState: StateFlow<UiState<UserProfile?>> =
     repository
       .observeUserProfile(currentUserId)
       .map<UserProfile?, UiState<UserProfile?>> { UiState.Success(it) }
-      .catch { e ->
-        Log.w(TAG, "Error observing user profile", e)
-        emit(UiState.Error(e.localizedMessage ?: "Failed to load user profile"))
-      }
-      .stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
-        initialValue = UiState.Loading
-      )
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load user profile")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
 
   val userTasksState: StateFlow<UiState<List<TaskItem>>> =
     repository
       .observeUserTasks(currentUserId)
       .map<List<TaskItem>, UiState<List<TaskItem>>> { UiState.Success(it) }
-      .catch { e ->
-        Log.w(TAG, "Error observing user tasks", e)
-        emit(UiState.Error(e.localizedMessage ?: "Failed to load assigned tasks"))
-      }
-      .stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
-        initialValue = UiState.Loading
-      )
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load tasks")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  val userWithdrawalRequestsState: StateFlow<UiState<List<DemoWithdrawalRequest>>> =
+    repository
+      .observeUserWithdrawalRequests(currentUserId)
+      .map<List<DemoWithdrawalRequest>, UiState<List<DemoWithdrawalRequest>>> { UiState.Success(it) }
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load withdrawal requests")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
 
   @OptIn(ExperimentalCoroutinesApi::class)
   val adminTasksState: StateFlow<UiState<List<TaskItem>>> =
-    _isAdminAuthorized
-      .flatMapLatest { isAdmin ->
-        repository
-          .observeAdminTasks(currentUserId, isAdmin)
-          .map<List<TaskItem>, UiState<List<TaskItem>>> { UiState.Success(it) }
-          .catch { e ->
-            Log.w(TAG, "Error observing admin tasks", e)
-            emit(UiState.Error(e.localizedMessage ?: "Failed to load admin tasks"))
-          }
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        repository.observeAdminTasks(currentUserId, authorized)
       }
-      .stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
-        initialValue = UiState.Loading
-      )
+      .map<List<TaskItem>, UiState<List<TaskItem>>> { UiState.Success(it) }
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load admin tasks")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  val adminSubmissionsState: StateFlow<UiState<List<SubmissionItem>>> =
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        repository.observeAdminSubmissions(currentUserId, authorized)
+      }
+      .map<List<SubmissionItem>, UiState<List<SubmissionItem>>> { UiState.Success(it) }
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load submissions")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  val adminWithdrawalRequestsState: StateFlow<UiState<List<DemoWithdrawalRequest>>> =
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        repository.observeAdminWithdrawalRequests(currentUserId, authorized)
+      }
+      .map<List<DemoWithdrawalRequest>, UiState<List<DemoWithdrawalRequest>>> {
+        UiState.Success(it)
+      }
+      .catch {
+        emit(UiState.Error(it.localizedMessage ?: "Failed to load withdrawal requests"))
+      }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
 
   @OptIn(ExperimentalCoroutinesApi::class)
   val registeredUsersState: StateFlow<UiState<List<UserProfile>>> =
-    _isAdminAuthorized
-      .flatMapLatest { isAdmin ->
-        repository
-          .observeRegisteredUsers(currentUserId, isAdmin)
-          .map<List<UserProfile>, UiState<List<UserProfile>>> { UiState.Success(it) }
-          .catch { e ->
-            Log.w(TAG, "Error observing registered users", e)
-            emit(UiState.Error(e.localizedMessage ?: "Failed to load registered users"))
-          }
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        repository.observeRegisteredUsers(currentUserId, authorized)
       }
-      .stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
-        initialValue = UiState.Loading
-      )
+      .map<List<UserProfile>, UiState<List<UserProfile>>> { UiState.Success(it) }
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load users")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
 
   init {
     viewModelScope.launch {
-      try {
-        repository.ensureUserProfile(
+      repository
+        .ensureUserProfile(
           uid = currentUserId,
           email = currentUserEmail,
           displayName = currentUserDisplayName
         )
-        val adminStatus = repository.checkIsAdmin(currentUserId, currentUserEmail)
-        _isAdminAuthorized.value = adminStatus
-      } catch (e: kotlinx.coroutines.CancellationException) {
-        throw e
-      } catch (e: Throwable) {
-        Log.e(TAG, "Failed to initialize user/admin profile state", e)
-      }
+        .onFailure { err ->
+          _bannerMessage.value =
+            "Profile initialization notice: ${err.localizedMessage ?: "Check connection"}"
+        }
     }
   }
 
   fun setPortal(portal: PortalLoginTarget) {
-    _selectedTaskId.value = null
     _activePortal.value = portal
+    _selectedTaskId.value = null
+    _submissionError.value = null
+    _withdrawalValidationError.value = null
   }
 
   fun setUserTab(tab: UserTab) {
-    _selectedTaskId.value = null
     _activeUserTab.value = tab
+    _selectedTaskId.value = null
+    _submissionError.value = null
+    _withdrawalValidationError.value = null
+    if (tab != UserTab.PROFILE) {
+      _profileSubScreen.value = ProfileSubScreen.MAIN
+    }
+  }
+
+  fun setProfileSubScreen(subScreen: ProfileSubScreen) {
+    _profileSubScreen.value = subScreen
   }
 
   fun setAdminTab(tab: AdminTab) {
-    _selectedTaskId.value = null
     _activeAdminTab.value = tab
+    _selectedTaskId.value = null
+    _submissionError.value = null
   }
 
   fun selectTask(taskId: String?) {
     _selectedTaskId.value = taskId
+    _submissionError.value = null
   }
 
   fun setTrackingStatusFilter(filter: String) {
@@ -200,63 +236,168 @@ class TaskFlowViewModel(
     _bannerMessage.value = null
   }
 
-  fun submitProof(
-    task: TaskItem,
-    proofText: String,
-    imageUri: Uri?,
-    onSuccess: () -> Unit = {}
-  ) {
-    if (proofText.isBlank() && imageUri == null) {
-      _bannerMessage.value =
-        "Both written text proof and a photo/screenshot from your Gallery are mandatory."
-      return
-    }
-    if (proofText.isBlank()) {
-      _bannerMessage.value =
-        "Written text proof is mandatory. Text-only or photo-only submissions are not allowed."
-      return
-    }
-    if (imageUri == null) {
-      _bannerMessage.value =
-        "At least one photo or screenshot from your Gallery is mandatory."
-      return
-    }
-    viewModelScope.launch {
-      _isBusy.value = true
-      _uploadProgress.value = 0
-      val result =
-        repository.submitTaskProof(
-          task = task,
-          proofText = proofText,
-          imageUri = imageUri,
-          onUploadProgress = { pct -> _uploadProgress.value = pct }
-        )
-      _uploadProgress.value = null
-      _isBusy.value = false
-      result
-        .onSuccess {
-          _bannerMessage.value =
-            "Photo uploaded to Firebase Storage & task proof submitted for review!"
-          onSuccess()
-        }
-        .onFailure { e ->
-          _bannerMessage.value = e.localizedMessage ?: "Failed to upload and submit task proof."
-        }
-    }
+  fun clearSubmissionError() {
+    _submissionError.value = null
+  }
+
+  fun clearWithdrawalValidationError() {
+    _withdrawalValidationError.value = null
   }
 
   fun updateProfileDisplayName(newName: String) {
-    if (newName.isBlank()) {
-      _bannerMessage.value = "Display name cannot be empty."
-      return
-    }
     viewModelScope.launch {
       _isBusy.value = true
-      val result = repository.updateDisplayName(currentUserId, newName)
+      repository
+        .updateUserDisplayName(currentUserId, newName)
+        .onSuccess { _bannerMessage.value = "Display name updated." }
+        .onFailure { _bannerMessage.value = it.localizedMessage ?: "Could not update name." }
       _isBusy.value = false
-      result
-        .onSuccess { _bannerMessage.value = "Profile display name updated." }
-        .onFailure { e -> _bannerMessage.value = e.localizedMessage ?: "Failed to update name." }
+    }
+  }
+
+  fun submitDemoWithdrawal(
+    amountInrInput: String,
+    method: String,
+    accountHolderName: String = "",
+    bankName: String = "",
+    accountNumber: String = "",
+    ifscCode: String = "",
+    upiId: String = "",
+    onSuccess: () -> Unit = {}
+  ) {
+    _withdrawalValidationError.value = null
+    val cleanedMethod = method.trim()
+    if (cleanedMethod !in WithdrawalMethod.ALL) {
+      val msg = "Please select a withdrawal method (Bank Account or UPI ID)."
+      _withdrawalValidationError.value = msg
+      return
+    }
+
+    if (cleanedMethod == WithdrawalMethod.BANK_ACCOUNT) {
+      if (accountHolderName.isBlank() ||
+        bankName.isBlank() ||
+        accountNumber.isBlank() ||
+        ifscCode.isBlank()
+      ) {
+        val msg =
+          "Please fill in Account Holder Name, Bank Name, Account Number, and IFSC Code."
+        _withdrawalValidationError.value = msg
+        return
+      }
+    } else if (cleanedMethod == WithdrawalMethod.UPI_ID) {
+      if (upiId.isBlank() || !upiId.contains("@")) {
+        val msg = "Please enter a valid UPI ID (e.g., name@upi)."
+        _withdrawalValidationError.value = msg
+        return
+      }
+    }
+
+    val parsedAmountInr = amountInrInput.trim().toDoubleOrNull()
+    if (parsedAmountInr == null || parsedAmountInr <= 0.0) {
+      val msg = "Please enter a valid withdrawal amount in INR (₹)."
+      _withdrawalValidationError.value = msg
+      return
+    }
+
+    val amountCents = (parsedAmountInr * 100.0).roundToLong()
+    if (amountCents < MIN_WITHDRAWAL_CENTS) {
+      val msg = "Minimum withdrawal amount is ₹200.00."
+      _withdrawalValidationError.value = msg
+      return
+    }
+
+    val profile = (userProfileState.value as? UiState.Success)?.data
+    val availableBalanceCents = profile?.balanceCents ?: 0L
+    if (amountCents > availableBalanceCents) {
+      val msg =
+        "Entered amount (${formatRewardInr(amountCents)}) exceeds your available balance of ${formatRewardInr(availableBalanceCents)}."
+      _withdrawalValidationError.value = msg
+      return
+    }
+
+    val resolvedName =
+      profile?.displayName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
+
+    // Sensitive demo inputs (accountNumber, ifscCode, bankName, upiId) are intentionally NOT
+    // passed to the repository or stored in Firestore.
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository
+        .submitDemoWithdrawalRequest(
+          uid = currentUserId,
+          userName = resolvedName,
+          amountCents = amountCents,
+          method = cleanedMethod
+        )
+        .onSuccess {
+          _withdrawalValidationError.value = null
+          _bannerMessage.value =
+            "Demo withdrawal request of ${formatRewardInr(amountCents)} via $cleanedMethod submitted! Status: Demo / Pending."
+          onSuccess()
+        }
+        .onFailure { err ->
+          val msg = err.localizedMessage ?: "Could not submit withdrawal request."
+          _withdrawalValidationError.value = msg
+          _bannerMessage.value = msg
+        }
+      _isBusy.value = false
+    }
+  }
+
+  fun submitProof(task: TaskItem, proofText: String, imageUri: Uri?) {
+    val cleanedText = proofText.trim()
+    if (cleanedText.isEmpty() && imageUri == null) {
+      val msg = "Both written text proof AND at least one Gallery photo are mandatory."
+      _submissionError.value = msg
+      _bannerMessage.value = msg
+      return
+    }
+    if (cleanedText.isEmpty()) {
+      val msg = "Written text proof is mandatory. Please describe your task completion."
+      _submissionError.value = msg
+      _bannerMessage.value = msg
+      return
+    }
+    if (imageUri == null) {
+      val msg = "At least one Gallery photo or screenshot is mandatory."
+      _submissionError.value = msg
+      _bannerMessage.value = msg
+      return
+    }
+
+    val profile = (userProfileState.value as? UiState.Success)?.data
+    val resolvedName =
+      profile?.displayName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
+    val resolvedEmail =
+      profile?.email?.ifBlank { currentUserEmail } ?: currentUserEmail
+
+    viewModelScope.launch {
+      _isBusy.value = true
+      _submissionError.value = null
+      _uploadProgress.value = 5
+      repository
+        .submitTaskProof(
+          task = task,
+          userName = resolvedName,
+          userEmail = resolvedEmail,
+          proofText = cleanedText,
+          imageUri = imageUri,
+          onProgress = { pct -> _uploadProgress.value = pct }
+        )
+        .onSuccess {
+          _submissionError.value = null
+          _bannerMessage.value =
+            "Proof text and screenshot submitted for '${task.title}'! Status is now Pending Review."
+          _selectedTaskId.value = null
+          _activeUserTab.value = UserTab.TRACKING
+        }
+        .onFailure {
+          val errMsg = it.localizedMessage ?: "Failed to submit proof. Please try again."
+          _submissionError.value = errMsg
+          _bannerMessage.value = errMsg
+        }
+      _uploadProgress.value = null
+      _isBusy.value = false
     }
   }
 
@@ -268,22 +409,31 @@ class TaskFlowViewModel(
     assignedUser: UserProfile,
     instructions: String = "",
     taskLink: String = "",
-    onSuccess: () -> Unit = {}
+    appName: String = "",
+    appIconUrl: String = "",
+    requiredProof: String = ""
   ) {
-    val rewardCents = parseInrToPaise(rewardAmountInr)
-    if (title.isBlank() || description.isBlank() || rewardCents <= 0L) {
-      _bannerMessage.value = "Please provide a valid title, description, and positive INR (₹) reward."
+    val parsedAmountInr = rewardAmountInr.trim().toDoubleOrNull()
+    if (parsedAmountInr == null || parsedAmountInr <= 0.0) {
+      _bannerMessage.value = "Enter a valid reward amount in INR (e.g., 15.00)."
       return
     }
-    if (taskLink.isBlank() || !isValidTaskUrl(taskLink)) {
+    val cleanedLink = taskLink.trim()
+    if (cleanedLink.isNotEmpty() && !isValidTaskUrl(cleanedLink)) {
       _bannerMessage.value =
-        "Please enter a valid HTTPS Task Link (e.g., https://play.google.com/...)."
+        "Please enter a valid HTTPS URL (e.g., https://play.google.com/store/apps/details?id=...)."
       return
     }
+    val cleanedIcon = appIconUrl.trim()
+    if (!isValidImageUrlOrDataUri(cleanedIcon)) {
+      _bannerMessage.value = "Please enter a valid HTTPS icon URL or pick an icon from Gallery."
+      return
+    }
+    val rewardCents = (parsedAmountInr * 100.0).roundToLong()
     viewModelScope.launch {
       _isBusy.value = true
-      val result =
-        repository.createTask(
+      repository
+        .createTask(
           title = title,
           description = description,
           category = category,
@@ -292,17 +442,19 @@ class TaskFlowViewModel(
           assignedUserName = assignedUser.displayName,
           assignedUserEmail = assignedUser.email,
           instructions = instructions,
-          taskLink = taskLink
+          taskLink = cleanedLink,
+          appName = appName,
+          appIconUrl = cleanedIcon,
+          requiredProof = requiredProof
         )
-      _isBusy.value = false
-      result
         .onSuccess {
-          _bannerMessage.value = "Task created and assigned to ${assignedUser.displayName}!"
-          onSuccess()
+          _bannerMessage.value =
+            "Task '$title' created (${formatRewardInr(rewardCents)}) and published to TaskFlow."
         }
-        .onFailure { e ->
-          _bannerMessage.value = e.localizedMessage ?: "Failed to create task."
+        .onFailure {
+          _bannerMessage.value = it.localizedMessage ?: "Failed to create task."
         }
+      _isBusy.value = false
     }
   }
 
@@ -315,22 +467,31 @@ class TaskFlowViewModel(
     assignedUser: UserProfile,
     instructions: String = "",
     taskLink: String = "",
-    onSuccess: () -> Unit = {}
+    appName: String = "",
+    appIconUrl: String = "",
+    requiredProof: String = ""
   ) {
-    val rewardCents = parseInrToPaise(rewardAmountInr)
-    if (title.isBlank() || description.isBlank() || rewardCents <= 0L) {
-      _bannerMessage.value = "Please provide a valid title, description, and positive INR (₹) reward."
+    val parsedAmountInr = rewardAmountInr.trim().toDoubleOrNull()
+    if (parsedAmountInr == null || parsedAmountInr <= 0.0) {
+      _bannerMessage.value = "Enter a valid reward amount in INR (e.g., 15.00)."
       return
     }
-    if (taskLink.isBlank() || !isValidTaskUrl(taskLink)) {
+    val cleanedLink = taskLink.trim()
+    if (cleanedLink.isNotEmpty() && !isValidTaskUrl(cleanedLink)) {
       _bannerMessage.value =
-        "Please enter a valid HTTPS Task Link (e.g., https://play.google.com/...)."
+        "Please enter a valid HTTPS URL (e.g., https://play.google.com/store/apps/details?id=...)."
       return
     }
+    val cleanedIcon = appIconUrl.trim()
+    if (!isValidImageUrlOrDataUri(cleanedIcon)) {
+      _bannerMessage.value = "Please enter a valid HTTPS icon URL or pick an icon from Gallery."
+      return
+    }
+    val rewardCents = (parsedAmountInr * 100.0).roundToLong()
     viewModelScope.launch {
       _isBusy.value = true
-      val result =
-        repository.updateTaskDetails(
+      repository
+        .updateTaskDetails(
           taskId = taskId,
           title = title,
           description = description,
@@ -340,84 +501,67 @@ class TaskFlowViewModel(
           assignedUserName = assignedUser.displayName,
           assignedUserEmail = assignedUser.email,
           instructions = instructions,
-          taskLink = taskLink
+          taskLink = cleanedLink,
+          appName = appName,
+          appIconUrl = cleanedIcon,
+          requiredProof = requiredProof
         )
-      _isBusy.value = false
-      result
         .onSuccess {
-          _bannerMessage.value = "Task updated successfully."
-          onSuccess()
+          _bannerMessage.value = "Task '$title' updated."
         }
-        .onFailure { e ->
-          _bannerMessage.value = e.localizedMessage ?: "Failed to update task."
+        .onFailure {
+          _bannerMessage.value = it.localizedMessage ?: "Failed to update task."
         }
+      _isBusy.value = false
     }
   }
 
   fun deleteTask(taskId: String) {
     viewModelScope.launch {
       _isBusy.value = true
-      val result = repository.deleteTask(taskId)
+      repository
+        .deleteTask(taskId)
+        .onSuccess { _bannerMessage.value = "Pending task deleted." }
+        .onFailure { _bannerMessage.value = it.localizedMessage ?: "Failed to delete task." }
       _isBusy.value = false
-      result
-        .onSuccess { _bannerMessage.value = "Task deleted." }
-        .onFailure { e -> _bannerMessage.value = e.localizedMessage ?: "Failed to delete task." }
     }
   }
 
   fun reviewSubmission(task: TaskItem, approve: Boolean, feedback: String) {
     viewModelScope.launch {
       _isBusy.value = true
-      val result = repository.reviewSubmission(task, approve, feedback)
-      _isBusy.value = false
-      result
+      repository
+        .reviewSubmission(task = task, approve = approve, adminFeedback = feedback)
         .onSuccess {
-          _bannerMessage.value =
+          val actionLabel =
             if (approve) {
-              "Submission approved & INR reward credited to ${task.assignedUserName}!"
+              "approved & ${formatRewardInr(task.rewardCents)} credited"
             } else {
-              "Submission rejected."
+              "rejected"
             }
+          _bannerMessage.value = "Submission for '${task.title}' $actionLabel."
         }
-        .onFailure { e ->
-          _bannerMessage.value = e.localizedMessage ?: "Failed to review submission."
+        .onFailure {
+          _bannerMessage.value = it.localizedMessage ?: "Failed to review submission."
         }
+      _isBusy.value = false
     }
   }
 
   fun toggleUserApprovalStatus(user: UserProfile) {
-    val targetUid = user.userId.ifBlank { user.id }
+    val uid = user.userId.ifBlank { user.id }
     val nextStatus = if (user.approvalStatus == "approved") "suspended" else "approved"
     viewModelScope.launch {
       _isBusy.value = true
-      val result = repository.updateUserApprovalStatus(targetUid, nextStatus)
-      _isBusy.value = false
-      result
+      repository
+        .updateUserApprovalStatus(uid, nextStatus)
         .onSuccess {
-          _bannerMessage.value = "${user.displayName} status changed to $nextStatus."
+          _bannerMessage.value = "Updated ${user.displayName} status to $nextStatus."
         }
-        .onFailure { e ->
-          _bannerMessage.value = e.localizedMessage ?: "Failed to update user status."
+        .onFailure {
+          _bannerMessage.value = it.localizedMessage ?: "Failed to update user status."
         }
+      _isBusy.value = false
     }
-  }
-
-  private fun parseInrToPaise(input: String): Long {
-    val cleaned =
-      input
-        .replace("₹", "")
-        .replace("INR", "", ignoreCase = true)
-        .replace("Rs.", "", ignoreCase = true)
-        .replace("Rs", "", ignoreCase = true)
-        .replace("$", "")
-        .replace(",", "")
-        .trim()
-    val amount = cleaned.toDoubleOrNull() ?: return 0L
-    return Math.round(amount * 100.0)
-  }
-
-  private companion object {
-    const val TAG = "TaskFlowVM"
-    const val STOP_TIMEOUT_MILLIS = 5000L
   }
 }

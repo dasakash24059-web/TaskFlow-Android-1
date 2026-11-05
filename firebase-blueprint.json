@@ -64,12 +64,20 @@
     },
     "Task": {
       "title": "Task",
-      "description": "A task created by an admin and visible to authenticated users, with INR reward details, clickable HTTPS URL, step-by-step instructions, text + photo proof submission, and review status.",
+      "description": "A task created by an admin and visible to authenticated users, with app/website metadata, INR reward details, clickable HTTPS URL, step-by-step instructions, required proof details, mandatory text + photo proof submission, and review status.",
       "type": "object",
       "properties": {
         "title": {
           "type": "string",
           "description": "Short descriptive title of the task."
+        },
+        "appName": {
+          "type": "string",
+          "description": "Name of the target mobile app or website."
+        },
+        "appIconUrl": {
+          "type": "string",
+          "description": "Optional app icon or preview image HTTPS URL or data URI."
         },
         "description": {
           "type": "string",
@@ -79,13 +87,17 @@
           "type": "string",
           "description": "Step-by-step instructions explaining what the user must do."
         },
+        "requiredProof": {
+          "type": "string",
+          "description": "Description of the exact written and screenshot proof required from the user."
+        },
         "taskLink": {
           "type": "string",
           "description": "Validated HTTPS URL (e.g., Google Play Store or website link) for the task."
         },
         "category": {
           "type": "string",
-          "description": "Task category label (e.g., QA Testing, Content Review, Survey)."
+          "description": "Task category label (e.g., App Install, Website Visit, QA Testing, Content Review)."
         },
         "rewardCents": {
           "type": "integer",
@@ -93,15 +105,15 @@
         },
         "assignedUserId": {
           "type": "string",
-          "description": "UID of the user to whom this task is assigned."
+          "description": "UID of the user to whom this task is assigned or who submitted proof."
         },
         "assignedUserName": {
           "type": "string",
-          "description": "Display name of the assigned user."
+          "description": "Display name of the assigned or submitting user."
         },
         "assignedUserEmail": {
           "type": "string",
-          "description": "Email of the assigned user."
+          "description": "Email of the assigned or submitting user."
         },
         "status": {
           "type": "string",
@@ -110,11 +122,11 @@
         },
         "proofText": {
           "type": "string",
-          "description": "Written text proof submitted by the assigned user."
+          "description": "Written text proof submitted by the user."
         },
         "proofImageUrl": {
           "type": "string",
-          "description": "Firebase Storage HTTPS download URL of the submitted proof screenshot/photo."
+          "description": "Firebase Storage HTTPS download URL or encoded image URI of the submitted proof screenshot/photo."
         },
         "proofStoragePath": {
           "type": "string",
@@ -168,6 +180,14 @@
           "type": "string",
           "description": "Title of the task."
         },
+        "appName": {
+          "type": "string",
+          "description": "Optional app or website name associated with the task."
+        },
+        "appIconUrl": {
+          "type": "string",
+          "description": "Optional app icon or image URL associated with the task."
+        },
         "rewardCents": {
           "type": "integer",
           "description": "Reward value in INR paise associated with the task."
@@ -190,7 +210,7 @@
         },
         "proofImageUrl": {
           "type": "string",
-          "description": "Mandatory Firebase Storage HTTPS download URL for the uploaded photo/screenshot."
+          "description": "Mandatory Firebase Storage HTTPS download URL or encoded image URI for the uploaded photo/screenshot."
         },
         "proofStoragePath": {
           "type": "string",
@@ -232,6 +252,58 @@
         "updatedAt"
       ]
     },
+    "DemoWithdrawalRequest": {
+      "title": "DemoWithdrawalRequest",
+      "description": "Safe demo-only withdrawal request record without banking/UPI PII or balance deduction.",
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "description": "Unique ID of the demo withdrawal request."
+        },
+        "userId": {
+          "type": "string",
+          "description": "UID of the requesting user."
+        },
+        "userName": {
+          "type": "string",
+          "description": "Display name of the requesting user."
+        },
+        "amountCents": {
+          "type": "integer",
+          "description": "Requested demo withdrawal amount in INR paise (minimum 20000 = ₹200.00)."
+        },
+        "method": {
+          "type": "string",
+          "enum": ["Bank Account", "UPI ID"],
+          "description": "Selected payout method name only (no account numbers or UPI IDs stored)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending_demo"],
+          "description": "Status marking this as a demo/pending request."
+        },
+        "isDemo": {
+          "type": "boolean",
+          "description": "Always true to indicate demo/request-only mode."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the demo request was submitted."
+        }
+      },
+      "required": [
+        "requestId",
+        "userId",
+        "userName",
+        "amountCents",
+        "method",
+        "status",
+        "isDemo",
+        "createdAt"
+      ]
+    },
     "AdminRecord": {
       "title": "AdminRecord",
       "description": "Trusted administrator membership record.",
@@ -261,11 +333,15 @@
     },
     "/tasks/{taskId}": {
       "schema": { "$ref": "#/entities/Task" },
-      "description": "Stores tasks assigned to users along with status and reward information."
+      "description": "Stores tasks visible to authenticated users along with status, proof, and reward information."
     },
     "/submissions/{submissionId}": {
       "schema": { "$ref": "#/entities/Submission" },
-      "description": "Stores text-only task proof submissions and their review statuses."
+      "description": "Stores mandatory text + photo task proof submissions and their review statuses."
+    },
+    "/withdrawal_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/DemoWithdrawalRequest" },
+      "description": "Stores safe demo-only withdrawal requests (without banking/UPI PII or balance deduction) for Admin Dashboard visibility."
     },
     "/admins/{adminId}": {
       "schema": { "$ref": "#/entities/AdminRecord" },

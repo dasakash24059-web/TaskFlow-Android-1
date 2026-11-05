@@ -1,5 +1,9 @@
 package com.example.ui.admin
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,8 +28,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -60,23 +66,33 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import com.example.data.model.DemoWithdrawalRequest
+import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskCategories
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.UserProfile
+import com.example.data.model.WithdrawalMethod
+import com.example.data.model.formatRewardInr
 import com.example.data.model.formatVisibleUserEmail
+import com.example.data.model.isValidImageUrlOrDataUri
 import com.example.data.model.isValidTaskUrl
+import com.example.data.repository.encodeGalleryImageAsDataUri
+import com.example.ui.components.AppIconThumbnail
 import com.example.ui.components.ClickableTaskLinkCard
 import com.example.ui.components.FullSizeImageDialog
+import com.example.ui.components.ProofImageView
 import com.example.ui.components.RewardBadge
 import com.example.ui.components.StatusBadge
+import com.example.ui.components.resolveAppOrWebsiteLabel
 import com.example.ui.viewmodel.AdminTab
 import com.example.ui.viewmodel.UiState
 import java.text.SimpleDateFormat
@@ -97,7 +113,15 @@ fun AdminDashboardScreen(
   onUpdateTask: (String, String, String, String, String, UserProfile, String, String) -> Unit,
   onDeleteTask: (String) -> Unit,
   onReviewSubmission: (TaskItem, Boolean, String) -> Unit,
-  onToggleUserStatus: (UserProfile) -> Unit
+  onToggleUserStatus: (UserProfile) -> Unit,
+  adminSubmissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList()),
+  adminWithdrawalRequestsState: UiState<List<DemoWithdrawalRequest>> = UiState.Success(emptyList()),
+  onCreateTaskExtended:
+    ((String, String, String, String, UserProfile, String, String, String, String, String) -> Unit)? =
+    null,
+  onUpdateTaskExtended:
+    ((String, String, String, String, String, UserProfile, String, String, String, String, String) -> Unit)? =
+    null
 ) {
   if (!isAdminAuthorized) {
     UnauthorizedAdminGate(currentUserEmail = currentUserEmail)
@@ -105,6 +129,9 @@ fun AdminDashboardScreen(
   }
 
   val tasks = (adminTasksState as? UiState.Success)?.data ?: emptyList()
+  val submissions = (adminSubmissionsState as? UiState.Success)?.data ?: emptyList()
+  val withdrawalRequests =
+    (adminWithdrawalRequestsState as? UiState.Success)?.data ?: emptyList()
   val registeredUsers =
     (registeredUsersState as? UiState.Success)?.data.let { list ->
       if (list.isNullOrEmpty()) {
@@ -123,6 +150,53 @@ fun AdminDashboardScreen(
       }
     }
 
+  // Merge tasks and /submissions records so any submission in /submissions/{taskId} is always visible to Admin
+  val mergedReviewTasks =
+    remember(tasks, submissions) {
+      val taskById = tasks.associateBy { it.id }.toMutableMap()
+      submissions.forEach { sub ->
+        val key = sub.taskId.ifBlank { sub.id }
+        val existingTask = taskById[key]
+        if (existingTask != null) {
+          taskById[key] =
+            existingTask.copy(
+              status = sub.status.ifBlank { existingTask.status },
+              assignedUserId = sub.userId.ifBlank { existingTask.assignedUserId },
+              assignedUserName = sub.userName.ifBlank { existingTask.assignedUserName },
+              assignedUserEmail = sub.userEmail.ifBlank { existingTask.assignedUserEmail },
+              proofText = sub.proofText.ifBlank { existingTask.proofText },
+              proofImageUrl = sub.proofImageUrl.ifBlank { existingTask.proofImageUrl },
+              proofStoragePath = sub.proofStoragePath.ifBlank { existingTask.proofStoragePath },
+              adminFeedback = sub.adminFeedback.ifBlank { existingTask.adminFeedback },
+              updatedAt = sub.updatedAt ?: existingTask.updatedAt
+            )
+        } else if (key.isNotBlank()) {
+          taskById[key] =
+            TaskItem(
+              id = key,
+              title = sub.taskTitle.ifBlank { "Submitted Task" },
+              appName = sub.appName,
+              appIconUrl = sub.appIconUrl,
+              description = "Submitted proof for ${sub.taskTitle}",
+              rewardCents = sub.rewardCents,
+              assignedUserId = sub.userId,
+              assignedUserName = sub.userName,
+              assignedUserEmail = sub.userEmail,
+              status = sub.status.ifBlank { TaskStatus.SUBMITTED },
+              proofText = sub.proofText,
+              proofImageUrl = sub.proofImageUrl,
+              proofStoragePath = sub.proofStoragePath,
+              adminFeedback = sub.adminFeedback,
+              createdAt = sub.createdAt,
+              updatedAt = sub.updatedAt
+            )
+        }
+      }
+      taskById.values.sortedByDescending {
+        it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L
+      }
+    }
+
   var showTaskModal by remember { mutableStateOf(false) }
   var editingTask by remember { mutableStateOf<TaskItem?>(null) }
   var preselectedAssignee by remember { mutableStateOf<UserProfile?>(null) }
@@ -137,12 +211,53 @@ fun AdminDashboardScreen(
         editingTask = null
         preselectedAssignee = null
       },
-      onSave = { title, desc, cat, rewardStr, assignee, instructions, taskLink ->
+      onSave = {
+          title,
+          desc,
+          cat,
+          rewardStr,
+          assignee,
+          instructions,
+          taskLink,
+          appName,
+          appIconUrl,
+          requiredProof ->
         val target = editingTask
         if (target == null) {
-          onCreateTask(title, desc, cat, rewardStr, assignee, instructions, taskLink)
+          if (onCreateTaskExtended != null) {
+            onCreateTaskExtended(
+              title,
+              desc,
+              cat,
+              rewardStr,
+              assignee,
+              instructions,
+              taskLink,
+              appName,
+              appIconUrl,
+              requiredProof
+            )
+          } else {
+            onCreateTask(title, desc, cat, rewardStr, assignee, instructions, taskLink)
+          }
         } else {
-          onUpdateTask(target.id, title, desc, cat, rewardStr, assignee, instructions, taskLink)
+          if (onUpdateTaskExtended != null) {
+            onUpdateTaskExtended(
+              target.id,
+              title,
+              desc,
+              cat,
+              rewardStr,
+              assignee,
+              instructions,
+              taskLink,
+              appName,
+              appIconUrl,
+              requiredProof
+            )
+          } else {
+            onUpdateTask(target.id, title, desc, cat, rewardStr, assignee, instructions, taskLink)
+          }
         }
         showTaskModal = false
         editingTask = null
@@ -150,6 +265,11 @@ fun AdminDashboardScreen(
       }
     )
   }
+
+  val pendingSubmissionsCount =
+    mergedReviewTasks.count { it.status == TaskStatus.SUBMITTED }
+  val approvedSubmissionsCount =
+    mergedReviewTasks.count { it.status == TaskStatus.APPROVED }
 
   Scaffold(
     floatingActionButton = {
@@ -182,19 +302,21 @@ fun AdminDashboardScreen(
           .padding(innerPadding)
           .padding(horizontal = 18.dp, vertical = 12.dp)
     ) {
-      // Top Summary Row
+      // 4 Dashboard Statistics Cards: Total Tasks, Needs Review (Pending), Approved, Users
       AdminMetricsBanner(
         totalTasks = tasks.size,
-        pendingReviews = tasks.count { it.status == TaskStatus.SUBMITTED },
+        pendingReviews = pendingSubmissionsCount,
+        approvedSubmissions = approvedSubmissionsCount,
         totalUsers = registeredUsers.size
       )
 
-      Spacer(modifier = Modifier.height(16.dp))
+      Spacer(modifier = Modifier.height(14.dp))
 
       when (activeTab) {
         AdminTab.TASKS -> {
           AdminTasksTabContent(
-            tasks = tasks,
+            tasks = mergedReviewTasks,
+            withdrawalRequests = withdrawalRequests,
             onCreateClick = {
               editingTask = null
               preselectedAssignee = null
@@ -209,7 +331,8 @@ fun AdminDashboardScreen(
         }
         AdminTab.SUBMISSIONS -> {
           AdminSubmissionsTabContent(
-            tasks = tasks,
+            tasks = mergedReviewTasks,
+            withdrawalRequests = withdrawalRequests,
             selectedFilter = submissionFilter,
             onSelectFilter = onSelectSubmissionFilter,
             onReviewSubmission = onReviewSubmission
@@ -235,30 +358,39 @@ fun AdminDashboardScreen(
 private fun AdminMetricsBanner(
   totalTasks: Int,
   pendingReviews: Int,
+  approvedSubmissions: Int,
   totalUsers: Int
 ) {
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    horizontalArrangement = Arrangement.spacedBy(10.dp)
-  ) {
-    AdminMetricCard(
-      label = "TOTAL TASKS",
-      value = totalTasks.toString(),
-      icon = Icons.Default.Task,
-      modifier = Modifier.weight(1f)
-    )
-    AdminMetricCard(
-      label = "NEEDS REVIEW",
-      value = pendingReviews.toString(),
-      icon = Icons.Default.RateReview,
-      modifier = Modifier.weight(1f)
-    )
-    AdminMetricCard(
-      label = "USERS",
-      value = totalUsers.toString(),
-      icon = Icons.Default.People,
-      modifier = Modifier.weight(1f)
-    )
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+      AdminMetricCard(
+        label = "TOTAL TASKS",
+        value = totalTasks.toString(),
+        icon = Icons.Default.Task,
+        modifier = Modifier.weight(1f)
+      )
+      AdminMetricCard(
+        label = "NEEDS REVIEW",
+        value = pendingReviews.toString(),
+        icon = Icons.Default.RateReview,
+        modifier = Modifier.weight(1f)
+      )
+      AdminMetricCard(
+        label = "APPROVED",
+        value = approvedSubmissions.toString(),
+        icon = Icons.Default.CheckCircle,
+        modifier = Modifier.weight(1f)
+      )
+      AdminMetricCard(
+        label = "USERS",
+        value = totalUsers.toString(),
+        icon = Icons.Default.People,
+        modifier = Modifier.weight(1f)
+      )
+    }
   }
 }
 
@@ -266,7 +398,7 @@ private fun AdminMetricsBanner(
 private fun AdminMetricCard(
   label: String,
   value: String,
-  icon: androidx.compose.ui.graphics.vector.ImageVector,
+  icon: ImageVector,
   modifier: Modifier = Modifier
 ) {
   Surface(
@@ -275,21 +407,23 @@ private fun AdminMetricCard(
     tonalElevation = 2.dp,
     modifier = modifier
   ) {
-    Column(modifier = Modifier.padding(14.dp)) {
+    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)) {
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
       ) {
         Icon(
           imageVector = icon,
           contentDescription = null,
           tint = MaterialTheme.colorScheme.primary,
-          modifier = Modifier.size(16.dp)
+          modifier = Modifier.size(14.dp)
         )
         Text(
           text = label,
           style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
         )
       }
       Spacer(modifier = Modifier.height(6.dp))
@@ -303,59 +437,176 @@ private fun AdminMetricCard(
 }
 
 @Composable
+private fun AdminWithdrawalRequestsSection(
+  withdrawalRequests: List<DemoWithdrawalRequest>
+) {
+  Card(
+    modifier = Modifier.fillMaxWidth().testTag("admin_withdrawal_requests_section"),
+    shape = RoundedCornerShape(20.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Text(
+          text = "Withdrawal Requests (${withdrawalRequests.size})",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold
+        )
+        Surface(
+          shape = RoundedCornerShape(50),
+          color = MaterialTheme.colorScheme.primaryContainer
+        ) {
+          Text(
+            text = "Demo / Request Only",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+          )
+        }
+      }
+
+      if (withdrawalRequests.isEmpty()) {
+        Text(
+          text = "No withdrawal requests submitted yet.",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      } else {
+        withdrawalRequests.forEach { req ->
+          val reqId = req.id.ifBlank { req.requestId }
+          val dateStr =
+            req.createdAt?.toDate()?.let {
+              SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
+            } ?: "Recently submitted"
+          Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            modifier =
+              Modifier.fillMaxWidth()
+                .testTag("admin_withdrawal_card_$reqId")
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(14.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = req.userName.ifBlank { "TaskFlow User" },
+                  style = MaterialTheme.typography.titleMedium,
+                  fontWeight = FontWeight.Bold,
+                  modifier = Modifier.testTag("admin_withdrawal_user_$reqId")
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                  text = "Method: ${req.method} • Date: $dateStr",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.testTag("admin_withdrawal_method_$reqId")
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                  shape = RoundedCornerShape(50),
+                  color = MaterialTheme.colorScheme.secondaryContainer,
+                  modifier = Modifier.testTag("admin_withdrawal_status_$reqId")
+                ) {
+                  Text(
+                    text = "Demo / Pending",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                  )
+                }
+              }
+              Text(
+                text = formatRewardInr(req.amountCents),
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.testTag("admin_withdrawal_amount_$reqId")
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
 private fun AdminTasksTabContent(
   tasks: List<TaskItem>,
+  withdrawalRequests: List<DemoWithdrawalRequest>,
   onCreateClick: () -> Unit,
   onEditTask: (TaskItem) -> Unit,
   onDeleteTask: (String) -> Unit
 ) {
-  if (tasks.isEmpty()) {
-    Card(
-      modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-      shape = RoundedCornerShape(24.dp),
-      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-      Column(
-        modifier = Modifier.fillMaxWidth().padding(28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-      ) {
-        Icon(
-          imageVector = Icons.Default.AdminPanelSettings,
-          contentDescription = null,
-          tint = MaterialTheme.colorScheme.primary,
-          modifier = Modifier.size(44.dp)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        Text(
-          text = "No Tasks Created Yet",
-          style = MaterialTheme.typography.titleLarge
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-          text = "Create your first task with an HTTPS link and step-by-step instructions to test the end-to-end submission and approval workflow.",
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(18.dp))
-        Button(
-          onClick = onCreateClick,
-          shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.testTag("empty_state_create_task_button")
-        ) {
-          Icon(imageVector = Icons.Default.Add, contentDescription = null)
-          Spacer(modifier = Modifier.width(8.dp))
-          Text("Create First Task")
-        }
+  LazyColumn(
+    modifier = Modifier.fillMaxSize(),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+    contentPadding = PaddingValues(bottom = 88.dp)
+  ) {
+    if (withdrawalRequests.isNotEmpty()) {
+      item {
+        AdminWithdrawalRequestsSection(withdrawalRequests = withdrawalRequests)
       }
     }
-  } else {
-    LazyColumn(
-      modifier = Modifier.fillMaxSize(),
-      verticalArrangement = Arrangement.spacedBy(12.dp),
-      contentPadding = PaddingValues(bottom = 88.dp)
-    ) {
+
+    if (tasks.isEmpty()) {
+      item {
+        Card(
+          modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+          shape = RoundedCornerShape(24.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+          Column(
+            modifier = Modifier.fillMaxWidth().padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+          ) {
+            Icon(
+              imageVector = Icons.Default.AdminPanelSettings,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(44.dp)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+              text = "No Tasks Created Yet",
+              style = MaterialTheme.typography.titleLarge
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+              text = "Create your first task with an App/Website name, HTTPS link, step-by-step instructions, and required proof details.",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(18.dp))
+            Button(
+              onClick = onCreateClick,
+              shape = RoundedCornerShape(12.dp),
+              modifier = Modifier.testTag("empty_state_create_task_button")
+            ) {
+              Icon(imageVector = Icons.Default.Add, contentDescription = null)
+              Spacer(modifier = Modifier.width(8.dp))
+              Text("Create First Task")
+            }
+          }
+        }
+      }
+    } else {
       items(tasks, key = { it.id }) { task ->
+        val appOrSiteLabel = resolveAppOrWebsiteLabel(task)
         Card(
           modifier = Modifier.fillMaxWidth().testTag("admin_task_card_${task.id}"),
           shape = RoundedCornerShape(20.dp),
@@ -371,9 +622,33 @@ private fun AdminTasksTabContent(
               StatusBadge(status = task.status)
               RewardBadge(rewardCents = task.rewardCents)
             }
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(text = task.title, style = MaterialTheme.typography.titleLarge)
-            Spacer(modifier = Modifier.height(4.dp))
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+              AppIconThumbnail(
+                appIconUrl = task.appIconUrl,
+                appName = task.appName,
+                category = task.category,
+                size = 48.dp
+              )
+              Column(modifier = Modifier.weight(1f)) {
+                Text(text = task.title, style = MaterialTheme.typography.titleLarge)
+                Text(
+                  text = "$appOrSiteLabel • ${task.category}",
+                  style = MaterialTheme.typography.labelMedium,
+                  color = MaterialTheme.colorScheme.primary,
+                  fontWeight = FontWeight.SemiBold
+                )
+              }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             Text(
               text = task.description,
               style = MaterialTheme.typography.bodyMedium,
@@ -391,11 +666,36 @@ private fun AdminTasksTabContent(
                   Text(
                     text = "STEP-BY-STEP INSTRUCTIONS",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
                   )
                   Spacer(modifier = Modifier.height(4.dp))
                   Text(
                     text = task.instructions,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                }
+              }
+            }
+
+            if (task.requiredProof.isNotBlank()) {
+              Spacer(modifier = Modifier.height(8.dp))
+              Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f),
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                  Text(
+                    text = "REQUIRED PROOF",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    fontWeight = FontWeight.Bold
+                  )
+                  Spacer(modifier = Modifier.height(2.dp))
+                  Text(
+                    text = task.requiredProof,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
@@ -464,6 +764,7 @@ private fun AdminTasksTabContent(
 @Composable
 private fun AdminSubmissionsTabContent(
   tasks: List<TaskItem>,
+  withdrawalRequests: List<DemoWithdrawalRequest>,
   selectedFilter: String,
   onSelectFilter: (String) -> Unit,
   onReviewSubmission: (TaskItem, Boolean, String) -> Unit
@@ -472,6 +773,7 @@ private fun AdminSubmissionsTabContent(
     remember(tasks, selectedFilter) {
       when (selectedFilter) {
         "all" -> tasks.filter { it.status != TaskStatus.PENDING }
+        "withdrawals" -> emptyList()
         else -> tasks.filter { it.status == selectedFilter }
       }
     }
@@ -481,7 +783,8 @@ private fun AdminSubmissionsTabContent(
       TaskStatus.SUBMITTED to "Needs Review (${tasks.count { it.status == TaskStatus.SUBMITTED }})",
       TaskStatus.APPROVED to "Approved (${tasks.count { it.status == TaskStatus.APPROVED }})",
       TaskStatus.REJECTED to "Rejected (${tasks.count { it.status == TaskStatus.REJECTED }})",
-      "all" to "All Submissions"
+      "all" to "All Submissions (${tasks.count { it.status != TaskStatus.PENDING }})",
+      "withdrawals" to "Withdrawal Requests (${withdrawalRequests.size})"
     )
 
   Column(modifier = Modifier.fillMaxSize()) {
@@ -501,28 +804,38 @@ private fun AdminSubmissionsTabContent(
 
     Spacer(modifier = Modifier.height(12.dp))
 
-    if (filtered.isEmpty()) {
-      Box(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        contentAlignment = Alignment.Center
-      ) {
-        Text(
-          text = "No submissions in this queue.",
-          style = MaterialTheme.typography.bodyLarge,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+    LazyColumn(
+      modifier = Modifier.fillMaxSize(),
+      verticalArrangement = Arrangement.spacedBy(14.dp),
+      contentPadding = PaddingValues(bottom = 24.dp)
+    ) {
+      if (selectedFilter == "withdrawals" || withdrawalRequests.isNotEmpty()) {
+        item {
+          AdminWithdrawalRequestsSection(withdrawalRequests = withdrawalRequests)
+        }
       }
-    } else {
-      LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        contentPadding = PaddingValues(bottom = 24.dp)
-      ) {
-        items(filtered, key = { it.id }) { task ->
-          SubmissionReviewCard(
-            task = task,
-            onReview = { approve, feedback -> onReviewSubmission(task, approve, feedback) }
-          )
+
+      if (selectedFilter != "withdrawals") {
+        if (filtered.isEmpty()) {
+          item {
+            Box(
+              modifier = Modifier.fillMaxWidth().padding(24.dp),
+              contentAlignment = Alignment.Center
+            ) {
+              Text(
+                text = "No submissions in this queue.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+          }
+        } else {
+          items(filtered, key = { it.id }) { task ->
+            SubmissionReviewCard(
+              task = task,
+              onReview = { approve, feedback -> onReviewSubmission(task, approve, feedback) }
+            )
+          }
         }
       }
     }
@@ -541,6 +854,7 @@ private fun SubmissionReviewCard(
     task.updatedAt?.toDate()?.let {
       SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
     } ?: "Recently submitted"
+  val appOrSiteLabel = resolveAppOrWebsiteLabel(task)
 
   if (showFullSizeImage && task.proofImageUrl.isNotBlank()) {
     FullSizeImageDialog(
@@ -567,18 +881,32 @@ private fun SubmissionReviewCard(
         RewardBadge(rewardCents = task.rewardCents)
       }
 
+      Spacer(modifier = Modifier.height(12.dp))
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        AppIconThumbnail(
+          appIconUrl = task.appIconUrl,
+          appName = task.appName,
+          category = task.category,
+          size = 46.dp
+        )
+        Column(modifier = Modifier.weight(1f)) {
+          Text(text = task.title, style = MaterialTheme.typography.titleLarge)
+          Text(
+            text = "$appOrSiteLabel • Submitted by ${task.assignedUserName} (${formatVisibleUserEmail(task.assignedUserEmail)})",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+        }
+      }
+
       Spacer(modifier = Modifier.height(10.dp))
 
-      Text(text = task.title, style = MaterialTheme.typography.titleLarge)
-      Text(
-        text = "Submitted by ${task.assignedUserName} (${formatVisibleUserEmail(task.assignedUserEmail)})",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-      )
-
-      Spacer(modifier = Modifier.height(8.dp))
-
-      // Submission Metadata: User UID, Task ID, and Submission Date
+      // Submission Metadata: User Name, User UID, Task ID, and Submission Date/Time
       Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
@@ -588,6 +916,13 @@ private fun SubmissionReviewCard(
           modifier = Modifier.padding(12.dp),
           verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+          Text(
+            text = "User Name: ${task.assignedUserName}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.testTag("review_user_name_${task.id}")
+          )
           Text(
             text = "User UID: ${task.assignedUserId}",
             style = MaterialTheme.typography.labelSmall,
@@ -693,8 +1028,8 @@ private fun SubmissionReviewCard(
                   .testTag("review_proof_image_${task.id}"),
               contentAlignment = Alignment.Center
             ) {
-              AsyncImage(
-                model = task.proofImageUrl,
+              ProofImageView(
+                imageSource = task.proofImageUrl,
                 contentDescription = "Submitted proof screenshot",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -897,15 +1232,41 @@ private fun AdminUsersTabContent(
   }
 }
 
+/**
+ * Admin Create / Edit Task Dialog supporting all 9 fields:
+ * 1. Task Title
+ * 2. App Name or Website Name
+ * 3. Optional App Icon / Image (HTTPS URL or Gallery Picker)
+ * 4. Category
+ * 5. Reward Amount (INR ₹)
+ * 6. Download / Website URL
+ * 7. Task Overview
+ * 8. Step-by-Step Instructions
+ * 9. Required Proof Description
+ */
 @Composable
 private fun TaskEditorDialog(
   existingTask: TaskItem?,
   registeredUsers: List<UserProfile>,
   defaultAssignee: UserProfile?,
   onDismiss: () -> Unit,
-  onSave: (String, String, String, String, UserProfile, String, String) -> Unit
+  onSave: (
+    title: String,
+    description: String,
+    category: String,
+    rewardInr: String,
+    assignee: UserProfile,
+    instructions: String,
+    taskLink: String,
+    appName: String,
+    appIconUrl: String,
+    requiredProof: String
+  ) -> Unit
 ) {
+  val context = LocalContext.current
   var title by rememberSaveable { mutableStateOf(existingTask?.title ?: "") }
+  var appName by rememberSaveable { mutableStateOf(existingTask?.appName ?: "") }
+  var appIconUrl by rememberSaveable { mutableStateOf(existingTask?.appIconUrl ?: "") }
   var taskLink by rememberSaveable { mutableStateOf(existingTask?.taskLink ?: "") }
   var category by rememberSaveable {
     mutableStateOf(existingTask?.category ?: TaskCategories.ALL.first())
@@ -917,6 +1278,23 @@ private fun TaskEditorDialog(
   }
   var description by rememberSaveable { mutableStateOf(existingTask?.description ?: "") }
   var instructions by rememberSaveable { mutableStateOf(existingTask?.instructions ?: "") }
+  var requiredProof by rememberSaveable {
+    mutableStateOf(
+      existingTask?.requiredProof
+        ?: "Submit written completion notes and a clear screenshot showing the completed task."
+    )
+  }
+
+  val iconPickerLauncher =
+    rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+      if (uri != null) {
+        val dataUri =
+          encodeGalleryImageAsDataUri(context, uri, maxDimensionPx = 256, initialQuality = 75)
+        appIconUrl = dataUri ?: uri.toString()
+      }
+    }
 
   var selectedAssignee by remember {
     mutableStateOf(
@@ -927,18 +1305,20 @@ private fun TaskEditorDialog(
   }
 
   val isLinkValid = taskLink.isBlank() || isValidTaskUrl(taskLink)
+  val isIconValid = isValidImageUrlOrDataUri(appIconUrl)
   val isRewardValid = (rewardInr.trim().toDoubleOrNull() ?: 0.0) > 0.0
   val canSave =
     title.isNotBlank() &&
       description.isNotBlank() &&
       isRewardValid &&
-      isLinkValid
+      isLinkValid &&
+      isIconValid
 
   AlertDialog(
     onDismissRequest = onDismiss,
     title = {
       Text(
-        text = if (existingTask == null) "Create & Assign Task" else "Edit Task",
+        text = if (existingTask == null) "Create & Publish Task" else "Edit Task",
         style = MaterialTheme.typography.titleLarge
       )
     },
@@ -957,29 +1337,80 @@ private fun TaskEditorDialog(
           modifier = Modifier.fillMaxWidth().testTag("task_modal_title_input")
         )
 
-        // 2. Task Link (URL)
+        // 2. App Name or Website Name
         OutlinedTextField(
-          value = taskLink,
-          onValueChange = { taskLink = it },
-          label = { Text("Task Link (HTTPS URL)") },
-          placeholder = { Text("https://play.google.com/store/apps/details?id=...") },
+          value = appName,
+          onValueChange = { appName = it },
+          label = { Text("App Name or Website Name") },
+          placeholder = { Text("e.g., TaskFlow Companion / Acme Store") },
           singleLine = true,
-          isError = taskLink.isNotBlank() && !isLinkValid,
-          supportingText = {
-            if (taskLink.isNotBlank() && !isLinkValid) {
-              Text(
-                text = "Enter a valid HTTPS URL starting with https:// (e.g., Google Play Store or website link).",
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("task_modal_link_error")
-              )
-            } else {
-              Text("Supports Google Play Store links, website links, or any valid https:// URL.")
-            }
-          },
-          modifier = Modifier.fillMaxWidth().testTag("task_modal_link_input")
+          modifier = Modifier.fillMaxWidth().testTag("task_modal_app_name_input")
         )
 
-        // 3. Task Category
+        // 3. Optional App Icon / Image
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+          AppIconThumbnail(
+            appIconUrl = appIconUrl,
+            appName = appName,
+            category = category,
+            size = 48.dp
+          )
+          Column(modifier = Modifier.weight(1f)) {
+            OutlinedTextField(
+              value =
+                if (appIconUrl.startsWith("data:image/")) {
+                  "(Gallery Image Attached)"
+                } else {
+                  appIconUrl
+                },
+              onValueChange = {
+                if (!it.startsWith("(Gallery")) {
+                  appIconUrl = it
+                }
+              },
+              label = { Text("App Icon URL (Optional HTTPS)") },
+              placeholder = { Text("https://example.com/icon.png") },
+              singleLine = true,
+              isError = !isIconValid,
+              modifier = Modifier.fillMaxWidth().testTag("task_modal_app_icon_input")
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              OutlinedButton(
+                onClick = {
+                  iconPickerLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                  )
+                },
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier.testTag("task_modal_pick_icon_button")
+              ) {
+                Icon(
+                  imageVector = Icons.Default.AddPhotoAlternate,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Gallery Icon", style = MaterialTheme.typography.labelSmall)
+              }
+              if (appIconUrl.isNotBlank()) {
+                TextButton(
+                  onClick = { appIconUrl = "" },
+                  contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                  Text("Clear Icon", style = MaterialTheme.typography.labelSmall)
+                }
+              }
+            }
+          }
+        }
+
+        // 4. Task Category
         Text(
           text = "Task Category",
           style = MaterialTheme.typography.labelLarge
@@ -998,7 +1429,7 @@ private fun TaskEditorDialog(
           }
         }
 
-        // 4. Reward Amount (INR ₹)
+        // 5. Reward Amount (INR ₹)
         OutlinedTextField(
           value = rewardInr,
           onValueChange = { rewardInr = it },
@@ -1008,18 +1439,40 @@ private fun TaskEditorDialog(
           modifier = Modifier.fillMaxWidth().testTag("task_modal_reward_input")
         )
 
-        // 5. Task Description
+        // 6. Download / Website URL
+        OutlinedTextField(
+          value = taskLink,
+          onValueChange = { taskLink = it },
+          label = { Text("Download / Website Link (HTTPS URL)") },
+          placeholder = { Text("https://play.google.com/store/apps/details?id=...") },
+          singleLine = true,
+          isError = taskLink.isNotBlank() && !isLinkValid,
+          supportingText = {
+            if (taskLink.isNotBlank() && !isLinkValid) {
+              Text(
+                text = "Enter a valid HTTPS URL starting with https:// (e.g., Google Play Store or website link).",
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("task_modal_link_error")
+              )
+            } else {
+              Text("Supports Google Play Store links, website links, or any valid https:// URL.")
+            }
+          },
+          modifier = Modifier.fillMaxWidth().testTag("task_modal_link_input")
+        )
+
+        // 7. Task Overview / Description
         OutlinedTextField(
           value = description,
           onValueChange = { description = it },
-          label = { Text("Task Description") },
+          label = { Text("Task Overview / Description") },
           placeholder = { Text("Summarize the goal and overview of this task…") },
           minLines = 2,
           maxLines = 5,
           modifier = Modifier.fillMaxWidth().testTag("task_modal_desc_input")
         )
 
-        // 6. Step-by-step Instructions
+        // 8. Step-by-Step Instructions
         OutlinedTextField(
           value = instructions,
           onValueChange = { instructions = it },
@@ -1034,8 +1487,21 @@ private fun TaskEditorDialog(
           modifier = Modifier.fillMaxWidth().testTag("task_modal_instructions_input")
         )
 
+        // 9. Required Proof Description
+        OutlinedTextField(
+          value = requiredProof,
+          onValueChange = { requiredProof = it },
+          label = { Text("Required Proof Description") },
+          placeholder = {
+            Text("Specify what written details and screenshot the user must submit…")
+          },
+          minLines = 2,
+          maxLines = 4,
+          modifier = Modifier.fillMaxWidth().testTag("task_modal_required_proof_input")
+        )
+
         Text(
-          text = "Assign to Registered User",
+          text = "Initial Highlighted Assignee (All users can view & complete)",
           style = MaterialTheme.typography.labelLarge
         )
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1094,7 +1560,10 @@ private fun TaskEditorDialog(
             rewardInr.trim(),
             selectedAssignee,
             instructions.trim().ifBlank { description.trim() },
-            taskLink.trim()
+            taskLink.trim(),
+            appName.trim(),
+            appIconUrl.trim(),
+            requiredProof.trim()
           )
         },
         enabled = canSave,

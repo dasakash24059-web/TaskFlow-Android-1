@@ -1,29 +1,35 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
-import com.example.R
+import android.util.Base64
+import com.example.data.model.AdminRecord
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
+import com.example.data.model.DemoWithdrawalRequest
+import com.example.data.model.MIN_WITHDRAWAL_CENTS
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.UserProfile
+import com.example.data.model.WithdrawalMethod
+import com.example.data.model.formatRewardInr
+import com.example.data.model.isValidImageUrlOrDataUri
 import com.example.data.model.isValidTaskUrl
-import com.example.data.remote.OperationType
-import com.example.data.remote.handleFirestoreError
 import com.google.firebase.Firebase
-import com.google.firebase.Timestamp
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
-import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.snapshots
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.storage.FirebaseStorage
-import com.google.firebase.storage.StorageMetadata
-import kotlinx.coroutines.CancellationException
+import java.io.ByteArrayOutputStream
+import java.util.Locale
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 
 data class UploadedProofPhoto(
@@ -40,597 +46,446 @@ fun interface ProofPhotoUploader {
   ): UploadedProofPhoto
 }
 
-object FirebaseStorageProofUploader : ProofPhotoUploader {
+/**
+ * Encodes a Gallery image URI into a compact JPEG data URI (<= 180 KB) for Firestore-safe persistence.
+ */
+fun encodeGalleryImageAsDataUri(
+  context: Context,
+  imageUri: Uri,
+  maxDimensionPx: Int = 900,
+  initialQuality: Int = 72
+): String? {
+  return runCatching {
+    val rawBytes =
+      context.contentResolver.openInputStream(imageUri)?.use { it.readBytes() }
+        ?: return null
+    if (rawBytes.isEmpty()) return null
+
+    val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, boundsOptions)
+
+    var sampleSize = 1
+    val width = boundsOptions.outWidth
+    val height = boundsOptions.outHeight
+    if (width > 0 && height > 0) {
+      while (width / sampleSize > maxDimensionPx * 2 || height / sampleSize > maxDimensionPx * 2) {
+        sampleSize *= 2
+      }
+    }
+
+    val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+    val decodedBitmap =
+      BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, decodeOptions) ?: return null
+
+    val scaledBitmap =
+      if (decodedBitmap.width > maxDimensionPx || decodedBitmap.height > maxDimensionPx) {
+        val ratio =
+          minOf(
+            maxDimensionPx.toFloat() / decodedBitmap.width.toFloat(),
+            maxDimensionPx.toFloat() / decodedBitmap.height.toFloat()
+          )
+        val targetW = (decodedBitmap.width * ratio).toInt().coerceAtLeast(1)
+        val targetH = (decodedBitmap.height * ratio).toInt().coerceAtLeast(1)
+        Bitmap.createScaledBitmap(decodedBitmap, targetW, targetH, true)
+      } else {
+        decodedBitmap
+      }
+
+    var quality = initialQuality
+    var compressedBytes: ByteArray
+    do {
+      val out = ByteArrayOutputStream()
+      scaledBitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+      compressedBytes = out.toByteArray()
+      quality -= 12
+    } while (compressedBytes.size > 160_000 && quality >= 30)
+
+    val base64Str = Base64.encodeToString(compressedBytes, Base64.NO_WRAP)
+    "data:image/jpeg;base64,$base64Str"
+  }.getOrNull()
+}
+
+class FirebaseStorageProofUploader(
+  private val storageProvider: () -> FirebaseStorage = { FirebaseStorage.getInstance() },
+  private val contextProvider: () -> Context? = {
+    runCatching { FirebaseApp.getInstance().applicationContext }.getOrNull()
+  }
+) : ProofPhotoUploader {
   override suspend fun uploadProofPhoto(
     userId: String,
     taskId: String,
     imageUri: Uri,
     onProgress: (Int) -> Unit
   ): UploadedProofPhoto {
-    val storage = FirebaseStorage.getInstance()
-    val storagePath = "submissions/$userId/$taskId/proof_${System.currentTimeMillis()}.jpg"
-    val storageRef = storage.reference.child(storagePath)
-    val metadata =
-      StorageMetadata.Builder()
-        .setContentType("image/jpeg")
-        .setCustomMetadata("userId", userId)
-        .setCustomMetadata("taskId", taskId)
-        .build()
+    val timestamp = System.currentTimeMillis()
+    val storagePath = "submissions/$userId/$taskId/proof_${timestamp}.jpg"
+    onProgress(10)
 
-    onProgress(5)
-    val uploadTask = storageRef.putFile(imageUri, metadata)
-    uploadTask.addOnProgressListener { snapshot ->
-      val total = snapshot.totalByteCount
-      if (total > 0L) {
-        val pct = ((snapshot.bytesTransferred * 90L) / total).toInt().coerceIn(5, 95)
-        onProgress(pct)
+    // 1. Primary path: Upload to Firebase Storage and retrieve HTTPS download URL
+    val firebaseUploadResult = runCatching {
+      val storageRef = storageProvider().reference.child(storagePath)
+      val uploadTask = storageRef.putFile(imageUri)
+      uploadTask.addOnProgressListener { snapshot ->
+        val total = snapshot.totalByteCount
+        if (total > 0L) {
+          val pct = ((snapshot.bytesTransferred * 100L) / total).toInt().coerceIn(10, 95)
+          onProgress(pct)
+        }
+      }
+      uploadTask.await()
+      val downloadUrl = storageRef.downloadUrl.await().toString().trim()
+      check(downloadUrl.isNotEmpty()) {
+        "Firebase Storage did not return a valid download URL for the uploaded proof image."
+      }
+      onProgress(100)
+      UploadedProofPhoto(
+        downloadUrl = downloadUrl,
+        storagePath = storagePath
+      )
+    }
+
+    if (firebaseUploadResult.isSuccess) {
+      return firebaseUploadResult.getOrThrow()
+    }
+
+    // 2. Resilient fallback: If Firebase Storage rules/bucket are not yet published in Console,
+    // compress & encode the selected Gallery screenshot as a real JPEG data URI stored in Firestore
+    val appContext = contextProvider()
+    if (appContext != null) {
+      onProgress(55)
+      val encodedDataUri = encodeGalleryImageAsDataUri(appContext, imageUri)
+      if (!encodedDataUri.isNullOrBlank()) {
+        onProgress(100)
+        return UploadedProofPhoto(
+          downloadUrl = encodedDataUri,
+          storagePath = "inline://$storagePath"
+        )
       }
     }
-    uploadTask.await()
-    onProgress(95)
-    val downloadUrl = storageRef.downloadUrl.await().toString()
-    onProgress(100)
-    return UploadedProofPhoto(
-      downloadUrl = downloadUrl,
-      storagePath = storagePath
-    )
+
+    throw firebaseUploadResult.exceptionOrNull()
+      ?: IllegalStateException("Failed to upload proof image. Please select a valid screenshot from Gallery.")
   }
 }
 
 class TaskFlowRepository(
-  private val db: FirebaseFirestore,
-  private val photoUploader: ProofPhotoUploader = FirebaseStorageProofUploader
+  private val firestore: FirebaseFirestore,
+  private val authProvider: () -> FirebaseAuth = { Firebase.auth },
+  private val photoUploader: ProofPhotoUploader = FirebaseStorageProofUploader()
 ) {
+  private val usersCollection = firestore.collection("users")
+  private val tasksCollection = firestore.collection("tasks")
+  private val submissionsCollection = firestore.collection("submissions")
+  private val adminsCollection = firestore.collection("admins")
+  private val withdrawalRequestsCollection = firestore.collection("withdrawal_requests")
 
-  constructor(
-    context: Context
-  ) : this(
-    kotlin
-      .runCatching {
-        val dbId =
-          context.applicationContext.getString(R.string.firestore_database_id).trim()
-        if (dbId.isEmpty() || dbId == "(default)") {
-          FirebaseFirestore.getInstance()
-        } else {
-          FirebaseFirestore.getInstance(dbId)
-        }
-      }
-      .getOrElse { FirebaseFirestore.getInstance() }
-  )
-
-  private val auth
-    get() = Firebase.auth
-
-  private fun requireUserId(): String {
-    return auth.currentUser?.uid
-      ?: throw IllegalStateException("User must be signed in before accessing Firestore.")
-  }
-
-  private fun requireVerifiedTokenEmail(): String {
-    val currentUser =
-      auth.currentUser
-        ?: throw IllegalStateException("User must be signed in before accessing Firestore.")
-    check(currentUser.isEmailVerified) {
-      "Authenticated user email must be verified before performing this operation."
+  /**
+   * Checks if the current user is an authorized administrator.
+   */
+  fun observeAdminAuthorization(uid: String, email: String): Flow<Boolean> = callbackFlow {
+    require(uid.isNotBlank()) { "uid must not be blank" }
+    val normalizedEmail = email.trim().lowercase(Locale.US)
+    val isBootstrappedEmail = normalizedEmail == BOOTSTRAPPED_ADMIN_EMAIL.lowercase(Locale.US)
+    if (isBootstrappedEmail) {
+      trySend(true)
     }
-    val tokenEmail =
-      currentUser.email?.trim().orEmpty().takeIf { it.isNotEmpty() }
-        ?: throw IllegalStateException("Authenticated user email is required.")
-    return tokenEmail.take(254)
+
+    val listener =
+      adminsCollection.document(uid).addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          trySend(isBootstrappedEmail)
+          return@addSnapshotListener
+        }
+        val existsInAdmins = snapshot != null && snapshot.exists()
+        trySend(isBootstrappedEmail || existsInAdmins)
+      }
+    awaitClose { listener.remove() }
   }
 
+  /**
+   * Ensures the signed-in user has a document in `/users/{userId}` and, if they match the
+   * bootstrapped admin email, also initializes `/admins/{userId}` so security rules recognize them.
+   */
   suspend fun ensureUserProfile(
     uid: String,
     email: String,
     displayName: String
-  ): Result<UserProfile> {
-    val docRef = db.collection("users").document(uid)
-    return try {
-      val currentUid = requireUserId()
-      check(currentUid == uid) { "Users may only initialize their own profile." }
-      val safeEmail = requireVerifiedTokenEmail()
-      val isBootstrappedAdmin =
-        safeEmail.equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true) &&
-          auth.currentUser?.isEmailVerified == true
-      val safeName =
-        displayName
-          .ifBlank {
-            if (isBootstrappedAdmin) {
-              "Administrator"
-            } else {
-              safeEmail.substringBefore("@").ifBlank { "TaskFlow User" }
-            }
-          }
-          .take(100)
-
-      val existingSnap = docRef.get().await()
-      if (existingSnap.exists()) {
-        val profile =
-          existingSnap.toObject(
-            UserProfile::class.java,
-            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-          ) ?: UserProfile(id = uid, userId = uid, email = safeEmail, displayName = safeName)
-        if (isBootstrappedAdmin) {
-          ensureAdminRecord(uid, safeEmail)
-        }
-        Result.success(profile)
-      } else {
-        val assignedRole = if (isBootstrappedAdmin) "admin" else "user"
-        val initialApprovalStatus = if (isBootstrappedAdmin) "approved" else "pending"
-        val payload =
-          mapOf(
-            "userId" to uid,
-            "email" to safeEmail,
-            "displayName" to safeName,
-            "role" to assignedRole,
-            "approvalStatus" to initialApprovalStatus,
-            "balanceCents" to 0L,
-            "completedTasksCount" to 0L,
-            "assignedTaskId" to "",
-            "createdAt" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp()
-          )
-        docRef.set(payload).await()
-        if (isBootstrappedAdmin) {
-          ensureAdminRecord(uid, safeEmail)
-        }
-        val createdSnap = docRef.get().await()
-        val createdProfile =
-          createdSnap.toObject(
-            UserProfile::class.java,
-            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-          )
-            ?: UserProfile(
-              id = uid,
-              userId = uid,
-              email = safeEmail,
-              displayName = safeName,
-              role = assignedRole,
-              approvalStatus = initialApprovalStatus,
-              balanceCents = 0L,
-              completedTasksCount = 0L,
-              assignedTaskId = ""
-            )
-        Result.success(createdProfile)
+  ): Result<UserProfile> = runCatching {
+    require(uid.isNotBlank()) { "uid must not be blank" }
+    val safeEmail = email.trim().ifEmpty { "user@taskflow.app" }
+    val safeName =
+      displayName.trim().ifEmpty {
+        safeEmail.substringBefore("@").replaceFirstChar { it.uppercase() }
       }
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.WRITE, docRef.path)
-      Result.failure(e)
-    }
-  }
+    val isBootstrappedAdmin =
+      safeEmail.lowercase(Locale.US) == BOOTSTRAPPED_ADMIN_EMAIL.lowercase(Locale.US)
 
-  private suspend fun ensureAdminRecord(uid: String, email: String) {
-    val adminRef = db.collection("admins").document(uid)
-    try {
-      val snap = adminRef.get().await()
-      if (!snap.exists()) {
-        adminRef
+    if (isBootstrappedAdmin) {
+      val adminDocRef = adminsCollection.document(uid)
+      val adminSnap = adminDocRef.get().await()
+      if (!adminSnap.exists()) {
+        adminDocRef
           .set(
             mapOf(
               "userId" to uid,
-              "email" to email.take(254),
+              "email" to safeEmail,
               "createdAt" to FieldValue.serverTimestamp()
             )
           )
           .await()
       }
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.WRITE, adminRef.path)
     }
-  }
 
-  suspend fun checkIsAdmin(uid: String, email: String?): Boolean {
-    if (
-      email?.equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true) == true &&
-        auth.currentUser?.isEmailVerified == true
-    ) {
-      return true
-    }
-    val adminRef = db.collection("admins").document(uid)
-    return try {
-      val snap = adminRef.get().await()
-      snap.exists()
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.GET, adminRef.path)
-      false
-    }
-  }
-
-  fun observeUserProfile(userId: String): Flow<UserProfile?> {
-    if (userId.isBlank()) return kotlinx.coroutines.flow.flowOf(null)
-    val path = "users/$userId"
-    return db
-      .collection("users")
-      .document(userId)
-      .snapshots()
-      .map { snapshot ->
-        if (snapshot.exists()) {
-          runCatching {
-              snapshot.toObject(
-                UserProfile::class.java,
-                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-              )
-            }
-            .getOrNull()
-        } else {
-          null
-        }
-      }
-      .catch { error ->
-        if (error is Exception) handleFirestoreError(error, OperationType.GET, path)
-        throw error
-      }
-  }
-
-  suspend fun getUserProfile(userId: String): Result<UserProfile?> {
-    val docRef = db.collection("users").document(userId)
-    return try {
-      val snapshot = docRef.get().await()
-      val profile =
-        if (snapshot.exists()) {
-          snapshot.toObject(
-            UserProfile::class.java,
-            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-          )
-        } else {
-          null
-        }
-      Result.success(profile)
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.GET, docRef.path)
-      Result.failure(e)
-    }
-  }
-
-  suspend fun updateDisplayName(userId: String, newDisplayName: String): Result<Unit> {
-    val trimmed = newDisplayName.trim().take(100)
-    require(trimmed.isNotEmpty()) { "Display name cannot be blank" }
-    val docRef = db.collection("users").document(userId)
-    return try {
-      docRef
-        .update(
-          mapOf("displayName" to trimmed, "updatedAt" to FieldValue.serverTimestamp())
-        )
-        .await()
-      Result.success(Unit)
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
-      Result.failure(e)
-    }
-  }
-
-  fun observeUserTasks(userId: String): Flow<List<TaskItem>> {
-    if (userId.isBlank()) return kotlinx.coroutines.flow.flowOf(emptyList())
-    val path = "tasks"
-    return db
-      .collection(path)
-      .snapshots()
-      .map { snapshot ->
-        snapshot.documents
-          .mapNotNull { doc ->
-            runCatching {
-                doc.toObject(
-                  TaskItem::class.java,
-                  DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                )
-              }
-              .getOrNull()
-          }
-          .sortedWith(
-            compareByDescending<TaskItem> { it.assignedUserId == userId }
-              .thenByDescending { it.updatedAt ?: it.createdAt ?: Timestamp(0, 0) }
-          )
-      }
-      .catch { error ->
-        if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
-        throw error
-      }
-  }
-
-  fun observeUserSubmissions(userId: String): Flow<List<SubmissionItem>> {
-    if (userId.isBlank()) return kotlinx.coroutines.flow.flowOf(emptyList())
-    val path = "submissions"
-    return db
-      .collection(path)
-      .whereEqualTo("userId", userId)
-      .snapshots()
-      .map { snapshot ->
-        snapshot.documents
-          .mapNotNull { doc ->
-            runCatching {
-                doc.toObject(
-                  SubmissionItem::class.java,
-                  DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                )
-              }
-              .getOrNull()
-          }
-          .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
-      }
-      .catch { error ->
-        if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
-        throw error
-      }
-  }
-
-  suspend fun createSubmissionRecord(
-    taskId: String,
-    taskTitle: String,
-    rewardCents: Long,
-    userName: String,
-    userEmail: String,
-    proofText: String,
-    proofImageUrl: String = "",
-    proofStoragePath: String = "",
-    imageUri: Uri? = null
-  ): Result<String> {
-    return try {
-      val uid = requireUserId()
-      val taskItem =
-        TaskItem(
-          id = taskId,
-          title = taskTitle,
-          rewardCents = rewardCents,
-          assignedUserId = uid,
-          assignedUserName = userName,
-          assignedUserEmail = userEmail,
-          status = TaskStatus.PENDING
-        )
-      val preUploaded =
-        if (proofImageUrl.isNotBlank() && proofStoragePath.isNotBlank()) {
-          UploadedProofPhoto(
-            downloadUrl = proofImageUrl.trim(),
-            storagePath = proofStoragePath.trim()
-          )
-        } else {
-          null
-        }
-      submitTaskProof(
-          task = taskItem,
-          proofText = proofText,
-          imageUri = imageUri,
-          preUploadedPhoto = preUploaded
-        )
-        .map { taskId }
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      Result.failure(e)
-    }
-  }
-
-  suspend fun getUserTasks(userId: String = requireUserId()): Result<List<TaskItem>> {
-    val path = "tasks"
-    return try {
-      val snapshot = db.collection(path).get().await()
-      val list =
-        snapshot.documents
-          .mapNotNull { doc ->
-            runCatching {
-                doc.toObject(
-                  TaskItem::class.java,
-                  DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                )
-              }
-              .getOrNull()
-          }
-          .sortedWith(
-            compareByDescending<TaskItem> { it.assignedUserId == userId }
-              .thenByDescending { it.updatedAt ?: it.createdAt ?: Timestamp(0, 0) }
-          )
-      Result.success(list)
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.LIST, path)
-      Result.failure(e)
-    }
-  }
-
-  suspend fun getTaskById(taskId: String): Result<TaskItem?> {
-    val docRef = db.collection("tasks").document(taskId)
-    return try {
-      val snapshot = docRef.get().await()
-      val item =
-        if (snapshot.exists()) {
-          snapshot.toObject(
-            TaskItem::class.java,
-            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-          )
-        } else {
-          null
-        }
-      Result.success(item)
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.GET, docRef.path)
-      Result.failure(e)
-    }
-  }
-
-  suspend fun submitTaskProof(
-    task: TaskItem,
-    proofText: String,
-    imageUri: Uri? = null,
-    onUploadProgress: (Int) -> Unit = {},
-    preUploadedPhoto: UploadedProofPhoto? = null
-  ): Result<Unit> {
-    val taskId = task.id.trim()
-    val taskRef = db.collection("tasks").document(taskId.ifEmpty { "invalid_task" })
-    val subRef = db.collection("submissions").document(taskId.ifEmpty { "invalid_task" })
-
-    return try {
-      require(taskId.isNotEmpty()) { "Task ID cannot be blank." }
-      val cleanProof = proofText.trim().take(4000)
-      require(cleanProof.isNotEmpty()) {
-        "Written text proof is mandatory. Please describe the steps you completed."
-      }
-      require(imageUri != null || preUploadedPhoto != null) {
-        "Photo proof is mandatory. Please select at least one screenshot or photo from your Gallery."
-      }
-
-      val uid = requireUserId()
-      val verifiedEmail = requireVerifiedTokenEmail()
-      val userRef = db.collection("users").document(uid)
-
-      val userSnap = userRef.get().await()
-      check(userSnap.exists()) { "User profile must exist before submitting task proof." }
-      val approvalStatus = userSnap.getString("approvalStatus").orEmpty()
-      check(approvalStatus == "approved") {
-        "Your account must be approved by an administrator before submitting task proof."
-      }
-
-      val taskSnap = taskRef.get().await()
-      check(taskSnap.exists()) { "Assigned task $taskId does not exist." }
-      val assignedUserId = taskSnap.getString("assignedUserId").orEmpty()
-      check(assignedUserId == uid) { "You can only submit proof for a task assigned to you." }
-      val currentTaskStatus = taskSnap.getString("status").orEmpty()
-      check(currentTaskStatus == TaskStatus.PENDING) {
-        "Task $taskId is not in 'pending' status (current: $currentTaskStatus)."
-      }
-
-      val subSnap = subRef.get().await()
-      check(!subSnap.exists()) { "A submission already exists for task $taskId." }
-
-      val uploadedPhoto =
-        preUploadedPhoto
-          ?: photoUploader.uploadProofPhoto(
-            userId = uid,
-            taskId = taskId,
-            imageUri = checkNotNull(imageUri),
-            onProgress = onUploadProgress
-          )
-
-      val cleanImageUrl = uploadedPhoto.downloadUrl.trim().take(2000)
-      val cleanStoragePath = uploadedPhoto.storagePath.trim().take(500)
-      check(cleanImageUrl.isNotEmpty() && cleanStoragePath.isNotEmpty()) {
-        "Failed to obtain Firebase Storage reference for the uploaded proof photo."
-      }
-
-      val authoritativeTitle =
-        taskSnap.getString("title")?.trim()?.takeIf { it.isNotEmpty() }?.take(120)
-          ?: task.title.trim().ifBlank { "Task" }.take(120)
-      val authoritativeReward =
-        (taskSnap.getLong("rewardCents") ?: task.rewardCents).coerceIn(1L, 10000000L)
-      val authoritativeUserName =
-        taskSnap.getString("assignedUserName")?.trim()?.takeIf { it.isNotEmpty() }?.take(100)
-          ?: task.assignedUserName.trim().ifBlank { "TaskFlow User" }.take(100)
-
-      val batch = db.batch()
-      batch.update(
-        taskRef,
+    val userDocRef = usersCollection.document(uid)
+    val snapshot = userDocRef.get().await()
+    if (!snapshot.exists()) {
+      val initialRole = if (isBootstrappedAdmin) "admin" else "user"
+      val initialApproval = if (isBootstrappedAdmin) "approved" else "pending"
+      val data =
         mapOf(
-          "status" to TaskStatus.SUBMITTED,
-          "proofText" to cleanProof,
-          "proofImageUrl" to cleanImageUrl,
-          "proofStoragePath" to cleanStoragePath,
-          "updatedAt" to FieldValue.serverTimestamp()
-        )
-      )
-      batch.set(
-        subRef,
-        mapOf(
-          "taskId" to taskId,
-          "taskTitle" to authoritativeTitle,
-          "rewardCents" to authoritativeReward,
           "userId" to uid,
-          "userName" to authoritativeUserName,
-          "userEmail" to verifiedEmail,
-          "proofText" to cleanProof,
-          "proofImageUrl" to cleanImageUrl,
-          "proofStoragePath" to cleanStoragePath,
-          "status" to TaskStatus.SUBMITTED,
-          "adminFeedback" to "",
+          "email" to safeEmail,
+          "displayName" to safeName,
+          "role" to initialRole,
+          "approvalStatus" to initialApproval,
+          "balanceCents" to 0L,
+          "completedTasksCount" to 0L,
+          "assignedTaskId" to "",
           "createdAt" to FieldValue.serverTimestamp(),
           "updatedAt" to FieldValue.serverTimestamp()
         )
-      )
-      batch.commit().await()
-      Result.success(Unit)
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.WRITE, subRef.path)
-      Result.failure(e)
+      userDocRef.set(data).await()
+    } else if (isBootstrappedAdmin) {
+      val currentRole = snapshot.getString("role") ?: "user"
+      val currentApproval = snapshot.getString("approvalStatus") ?: "pending"
+      if (currentRole != "admin" || currentApproval != "approved") {
+        userDocRef
+          .update(
+            mapOf(
+              "role" to "admin",
+              "approvalStatus" to "approved",
+              "updatedAt" to FieldValue.serverTimestamp()
+            )
+          )
+          .await()
+      }
     }
+
+    val updatedSnap = userDocRef.get().await()
+    updatedSnap.toObject(UserProfile::class.java)
+      ?: error("Failed to deserialize UserProfile for $uid")
   }
 
-  // --- ADMIN OPERATIONS ---
+  /**
+   * Directly fetches a single user profile by UID.
+   */
+  suspend fun getUserProfile(uid: String): Result<UserProfile?> = runCatching {
+    require(uid.isNotBlank()) { "uid must not be blank" }
+    val snap = usersCollection.document(uid).get().await()
+    snap.toObject(UserProfile::class.java)
+  }
 
-  fun observeAdminTasks(adminUid: String, isAdminAuthorized: Boolean): Flow<List<TaskItem>> {
-    if (!isAdminAuthorized && adminUid.isBlank()) return kotlinx.coroutines.flow.flowOf(emptyList())
-    val path = "tasks"
-    val query =
-      if (isAdminAuthorized) {
-        db.collection(path)
-      } else {
-        db.collection(path).whereEqualTo("assignedUserId", adminUid)
+  /**
+   * Observes the current user's profile in real time.
+   */
+  fun observeUserProfile(uid: String): Flow<UserProfile?> = callbackFlow {
+    require(uid.isNotBlank()) { "uid must not be blank" }
+    val listener =
+      usersCollection.document(uid).addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          close(error)
+          return@addSnapshotListener
+        }
+        trySend(snapshot?.toObject(UserProfile::class.java))
       }
-    return query
-      .snapshots()
-      .map { snapshot ->
-        snapshot.documents
-          .mapNotNull { doc ->
-            runCatching {
-                doc.toObject(
-                  TaskItem::class.java,
-                  DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                )
-              }
-              .getOrNull()
+    awaitClose { listener.remove() }
+  }
+
+  /**
+   * Updates only the current user's displayName.
+   */
+  suspend fun updateUserDisplayName(uid: String, newDisplayName: String): Result<Unit> =
+    runCatching {
+      require(uid.isNotBlank()) { "uid must not be blank" }
+      val cleaned = newDisplayName.trim()
+      require(cleaned.isNotEmpty() && cleaned.length <= 100) {
+        "Display name must be between 1 and 100 characters."
+      }
+      usersCollection
+        .document(uid)
+        .update(
+          mapOf(
+            "displayName" to cleaned,
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+        .await()
+    }
+
+  /**
+   * Observes all tasks in `/tasks` for any authenticated user.
+   */
+  fun observeUserTasks(uid: String): Flow<List<TaskItem>> = callbackFlow {
+    require(uid.isNotBlank()) { "uid must not be blank" }
+    val currentAuthUser = authProvider().currentUser
+    if (currentAuthUser == null) {
+      close(
+        FirebaseFirestoreException(
+          "Sign-in required to observe tasks.",
+          FirebaseFirestoreException.Code.PERMISSION_DENIED
+        )
+      )
+      return@callbackFlow
+    }
+    val listener =
+      tasksCollection.addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          close(error)
+          return@addSnapshotListener
+        }
+        val items =
+          snapshot
+            ?.documents
+            ?.mapNotNull { it.toObject(TaskItem::class.java) }
+            ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+            ?: emptyList()
+        trySend(items)
+      }
+    awaitClose { listener.remove() }
+  }
+
+  /**
+   * One-shot fetch of all visible tasks for an authenticated user.
+   */
+  suspend fun getUserTasks(uid: String): Result<List<TaskItem>> = runCatching {
+    require(uid.isNotBlank()) { "uid must not be blank" }
+    val snapshot = tasksCollection.get().await()
+    snapshot.documents
+      .mapNotNull { it.toObject(TaskItem::class.java) }
+      .sortedByDescending { it.createdAt?.seconds ?: 0L }
+  }
+
+  /**
+   * Directly fetches a single task by ID.
+   */
+  suspend fun getTaskById(taskId: String): Result<TaskItem?> = runCatching {
+    require(taskId.isNotBlank()) { "taskId must not be blank" }
+    val snap = tasksCollection.document(taskId).get().await()
+    snap.toObject(TaskItem::class.java)
+  }
+
+  /**
+   * Directly fetches a single submission by ID.
+   */
+  suspend fun getSubmissionById(submissionId: String): Result<SubmissionItem?> = runCatching {
+    require(submissionId.isNotBlank()) { "submissionId must not be blank" }
+    val snap = submissionsCollection.document(submissionId).get().await()
+    snap.toObject(SubmissionItem::class.java)
+  }
+
+  /**
+   * Observes all tasks in `/tasks` for an authorized admin.
+   */
+  fun observeAdminTasks(adminUid: String, isAdminAuthorized: Boolean): Flow<List<TaskItem>> =
+    callbackFlow {
+      require(adminUid.isNotBlank()) { "adminUid must not be blank" }
+      if (!isAdminAuthorized) {
+        trySend(emptyList())
+        awaitClose {}
+        return@callbackFlow
+      }
+      val listener =
+        tasksCollection.addSnapshotListener { snapshot, error ->
+          if (error != null) {
+            close(error)
+            return@addSnapshotListener
           }
-          .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+          val items =
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toObject(TaskItem::class.java) }
+              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+              ?: emptyList()
+          trySend(items)
+        }
+      awaitClose { listener.remove() }
+    }
+
+  /**
+   * Observes all submissions in `/submissions` in real time for an authorized admin.
+   */
+  fun observeAdminSubmissions(
+    adminUid: String,
+    isAdminAuthorized: Boolean
+  ): Flow<List<SubmissionItem>> = callbackFlow {
+    require(adminUid.isNotBlank()) { "adminUid must not be blank" }
+    if (!isAdminAuthorized) {
+      trySend(emptyList())
+      awaitClose {}
+      return@callbackFlow
+    }
+    val listener =
+      submissionsCollection.addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          close(error)
+          return@addSnapshotListener
+        }
+        val items =
+          snapshot
+            ?.documents
+            ?.mapNotNull { it.toObject(SubmissionItem::class.java) }
+            ?.sortedByDescending {
+              it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L
+            }
+            ?: emptyList()
+        trySend(items)
       }
-      .catch { error ->
-        if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
-        throw error
-      }
+    awaitClose { listener.remove() }
   }
 
+  /**
+   * One-shot fetch of all submissions for an authorized admin.
+   */
+  suspend fun getAdminSubmissions(): Result<List<SubmissionItem>> = runCatching {
+    val snapshot = submissionsCollection.get().await()
+    snapshot.documents
+      .mapNotNull { it.toObject(SubmissionItem::class.java) }
+      .sortedByDescending { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
+  }
+
+  /**
+   * Observes all registered user profiles in `/users` for an authorized admin.
+   */
   fun observeRegisteredUsers(
     adminUid: String,
     isAdminAuthorized: Boolean
-  ): Flow<List<UserProfile>> {
-    if (!isAdminAuthorized && adminUid.isBlank()) return kotlinx.coroutines.flow.flowOf(emptyList())
-    val path = "users"
-    val query =
-      if (isAdminAuthorized) {
-        db.collection(path)
-      } else {
-        db.collection(path).whereEqualTo("userId", adminUid)
+  ): Flow<List<UserProfile>> = callbackFlow {
+    require(adminUid.isNotBlank()) { "adminUid must not be blank" }
+    if (!isAdminAuthorized) {
+      trySend(emptyList())
+      awaitClose {}
+      return@callbackFlow
+    }
+    val listener =
+      usersCollection.addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          close(error)
+          return@addSnapshotListener
+        }
+        val users =
+          snapshot
+            ?.documents
+            ?.mapNotNull { it.toObject(UserProfile::class.java) }
+            ?.sortedBy { it.displayName.lowercase(Locale.US) }
+            ?: emptyList()
+        trySend(users)
       }
-    return query
-      .snapshots()
-      .map { snapshot ->
-        snapshot.documents
-          .mapNotNull { doc ->
-            runCatching {
-                doc.toObject(
-                  UserProfile::class.java,
-                  DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                )
-              }
-              .getOrNull()
-          }
-          .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
-      }
-      .catch { error ->
-        if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
-        throw error
-      }
+    awaitClose { listener.remove() }
   }
 
+  /**
+   * Creates a new task in `/tasks` and updates the assigned user's `assignedTaskId` atomically.
+   */
   suspend fun createTask(
     title: String,
     description: String,
@@ -640,61 +495,89 @@ class TaskFlowRepository(
     assignedUserName: String,
     assignedUserEmail: String,
     instructions: String = "",
-    taskLink: String = ""
-  ): Result<String> {
-    val cleanAssignedUserId = assignedUserId.trim()
-    val cleanLink = taskLink.trim().take(1000)
-    val tasksRef = db.collection("tasks")
-    val docRef = tasksRef.document()
-    return try {
-      require(cleanAssignedUserId.isNotEmpty()) { "Assigned user ID cannot be blank." }
-      if (cleanLink.isNotEmpty()) {
-        require(isValidTaskUrl(cleanLink)) {
-          "Task Link must be a valid HTTPS URL (e.g., https://play.google.com/...)."
-        }
+    taskLink: String = "",
+    appName: String = "",
+    appIconUrl: String = "",
+    requiredProof: String = ""
+  ): Result<String> = runCatching {
+    val adminUid =
+      authProvider().currentUser?.uid ?: error("Must be signed in as Admin to create a task.")
+    val cleanedTitle = title.trim()
+    val cleanedAppName = appName.trim()
+    val cleanedAppIconUrl = appIconUrl.trim()
+    val cleanedDesc = description.trim()
+    val cleanedInstructions = instructions.trim().ifBlank { cleanedDesc }
+    val cleanedRequiredProof =
+      requiredProof.trim().ifBlank {
+        "Provide written confirmation notes and a clear screenshot showing task completion."
       }
-      val adminUid = requireUserId()
-      val userRef = db.collection("users").document(cleanAssignedUserId)
-      val userSnap = userRef.get().await()
-      check(userSnap.exists()) { "Assigned user profile $cleanAssignedUserId does not exist." }
-
-      val payload =
-        mapOf(
-          "title" to title.trim().take(120),
-          "description" to description.trim().take(2000),
-          "instructions" to instructions.trim().take(4000),
-          "taskLink" to cleanLink,
-          "category" to category.trim().ifBlank { "General" }.take(60),
-          "rewardCents" to rewardCents.coerceIn(1L, 10000000L),
-          "assignedUserId" to cleanAssignedUserId,
-          "assignedUserName" to assignedUserName.trim().ifBlank { "Assigned User" }.take(100),
-          "assignedUserEmail" to assignedUserEmail.trim().ifBlank { "user@taskflow.app" }.take(254),
-          "status" to TaskStatus.PENDING,
-          "proofText" to "",
-          "proofImageUrl" to "",
-          "proofStoragePath" to "",
-          "adminFeedback" to "",
-          "createdBy" to adminUid,
-          "createdAt" to FieldValue.serverTimestamp(),
-          "updatedAt" to FieldValue.serverTimestamp()
-        )
-
-      val batch = db.batch()
-      batch.set(docRef, payload)
-      batch.update(
-        userRef,
-        mapOf("assignedTaskId" to docRef.id, "updatedAt" to FieldValue.serverTimestamp())
-      )
-      batch.commit().await()
-      Result.success(docRef.id)
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.CREATE, docRef.path)
-      Result.failure(e)
+    val cleanedLink = taskLink.trim()
+    val cleanedCat = category.trim().ifEmpty { "App Install" }
+    require(cleanedTitle.isNotEmpty() && cleanedTitle.length <= 120) {
+      "Task title must be 1–120 characters."
     }
+    require(cleanedAppName.length <= 120) {
+      "App or website name must be up to 120 characters."
+    }
+    require(isValidImageUrlOrDataUri(cleanedAppIconUrl)) {
+      "App icon must be a valid HTTPS image URL or selected Gallery image."
+    }
+    require(cleanedDesc.isNotEmpty() && cleanedDesc.length <= 2000) {
+      "Task description must be 1–2000 characters."
+    }
+    require(cleanedInstructions.length <= 4000) {
+      "Step-by-step instructions must be up to 4000 characters."
+    }
+    require(cleanedRequiredProof.length <= 2000) {
+      "Required proof description must be up to 2000 characters."
+    }
+    require(cleanedLink.isEmpty() || isValidTaskUrl(cleanedLink)) {
+      "Task link must be a valid HTTPS URL (e.g., https://play.google.com/...)."
+    }
+    require(rewardCents in 1..10_000_000) { "Reward must be greater than ₹0.00." }
+    require(assignedUserId.isNotBlank()) { "An assigned user must be selected." }
+
+    val docRef = tasksCollection.document()
+    val payload =
+      mapOf(
+        "title" to cleanedTitle,
+        "appName" to cleanedAppName,
+        "appIconUrl" to cleanedAppIconUrl,
+        "description" to cleanedDesc,
+        "instructions" to cleanedInstructions,
+        "requiredProof" to cleanedRequiredProof,
+        "taskLink" to cleanedLink,
+        "category" to cleanedCat,
+        "rewardCents" to rewardCents,
+        "assignedUserId" to assignedUserId,
+        "assignedUserName" to assignedUserName.trim().ifEmpty { "Assigned User" },
+        "assignedUserEmail" to assignedUserEmail.trim().ifEmpty { "user@taskflow.app" },
+        "status" to TaskStatus.PENDING,
+        "proofText" to "",
+        "proofImageUrl" to "",
+        "proofStoragePath" to "",
+        "adminFeedback" to "",
+        "createdBy" to adminUid,
+        "createdAt" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp()
+      )
+
+    val batch = firestore.batch()
+    batch.set(docRef, payload)
+    batch.update(
+      usersCollection.document(assignedUserId),
+      mapOf(
+        "assignedTaskId" to docRef.id,
+        "updatedAt" to FieldValue.serverTimestamp()
+      )
+    )
+    batch.commit().await()
+    docRef.id
   }
 
+  /**
+   * Updates an existing pending task's details or assigned user.
+   */
   suspend fun updateTaskDetails(
     taskId: String,
     title: String,
@@ -705,215 +588,489 @@ class TaskFlowRepository(
     assignedUserName: String,
     assignedUserEmail: String,
     instructions: String = "",
-    taskLink: String = ""
-  ): Result<Unit> {
-    val cleanTaskId = taskId.trim()
-    val cleanAssignedUserId = assignedUserId.trim()
-    val cleanLink = taskLink.trim().take(1000)
-    val docRef = db.collection("tasks").document(cleanTaskId.ifBlank { "invalid" })
-    return try {
-      require(cleanTaskId.isNotEmpty()) { "Task ID cannot be blank." }
-      require(cleanAssignedUserId.isNotEmpty()) { "Assigned user ID cannot be blank." }
-      if (cleanLink.isNotEmpty()) {
-        require(isValidTaskUrl(cleanLink)) {
-          "Task Link must be a valid HTTPS URL (e.g., https://play.google.com/...)."
-        }
+    taskLink: String = "",
+    appName: String = "",
+    appIconUrl: String = "",
+    requiredProof: String = ""
+  ): Result<Unit> = runCatching {
+    require(taskId.isNotBlank()) { "taskId must not be blank" }
+    val cleanedTitle = title.trim()
+    val cleanedAppName = appName.trim()
+    val cleanedAppIconUrl = appIconUrl.trim()
+    val cleanedDesc = description.trim()
+    val cleanedInstructions = instructions.trim().ifBlank { cleanedDesc }
+    val cleanedRequiredProof =
+      requiredProof.trim().ifBlank {
+        "Provide written confirmation notes and a clear screenshot showing task completion."
       }
-      val taskSnap = docRef.get().await()
-      check(taskSnap.exists()) { "Task $cleanTaskId does not exist." }
-      val currentStatus = taskSnap.getString("status").orEmpty()
-      check(currentStatus == TaskStatus.PENDING) {
-        "Only pending tasks can be edited (current status: $currentStatus)."
-      }
-      val previousAssignedUserId = taskSnap.getString("assignedUserId").orEmpty().trim()
-      val userRef = db.collection("users").document(cleanAssignedUserId)
-      val userSnap = userRef.get().await()
-      check(userSnap.exists()) { "Assigned user profile $cleanAssignedUserId does not exist." }
+    val cleanedLink = taskLink.trim()
+    val cleanedCat = category.trim().ifEmpty { "App Install" }
+    require(cleanedTitle.isNotEmpty() && cleanedTitle.length <= 120) {
+      "Task title must be 1–120 characters."
+    }
+    require(cleanedAppName.length <= 120) {
+      "App or website name must be up to 120 characters."
+    }
+    require(isValidImageUrlOrDataUri(cleanedAppIconUrl)) {
+      "App icon must be a valid HTTPS image URL or selected Gallery image."
+    }
+    require(cleanedDesc.isNotEmpty() && cleanedDesc.length <= 2000) {
+      "Task description must be 1–2000 characters."
+    }
+    require(cleanedInstructions.length <= 4000) {
+      "Step-by-step instructions must be up to 4000 characters."
+    }
+    require(cleanedRequiredProof.length <= 2000) {
+      "Required proof description must be up to 2000 characters."
+    }
+    require(cleanedLink.isEmpty() || isValidTaskUrl(cleanedLink)) {
+      "Task link must be a valid HTTPS URL (e.g., https://play.google.com/...)."
+    }
+    require(rewardCents in 1..10_000_000) { "Reward must be greater than ₹0.00." }
+    require(assignedUserId.isNotBlank()) { "An assigned user must be selected." }
 
-      val prevUserRef =
-        if (previousAssignedUserId.isNotEmpty() && previousAssignedUserId != cleanAssignedUserId) {
-          db.collection("users").document(previousAssignedUserId)
-        } else {
-          null
-        }
-      val prevUserSnap = prevUserRef?.get()?.await()
+    val taskRef = tasksCollection.document(taskId)
+    val existingTaskSnap = taskRef.get().await()
+    check(existingTaskSnap.exists()) { "Task $taskId does not exist." }
+    val previousAssigneeId = existingTaskSnap.getString("assignedUserId") ?: ""
 
-      val batch = db.batch()
-      batch.update(
-        docRef,
-        mapOf(
-          "title" to title.trim().take(120),
-          "description" to description.trim().take(2000),
-          "instructions" to instructions.trim().take(4000),
-          "taskLink" to cleanLink,
-          "category" to category.trim().ifBlank { "General" }.take(60),
-          "rewardCents" to rewardCents.coerceIn(1L, 10000000L),
-          "assignedUserId" to cleanAssignedUserId,
-          "assignedUserName" to assignedUserName.trim().ifBlank { "Assigned User" }.take(100),
-          "assignedUserEmail" to
-            assignedUserEmail.trim().ifBlank { "user@taskflow.app" }.take(254),
-          "updatedAt" to FieldValue.serverTimestamp()
-        )
+    val batch = firestore.batch()
+    batch.update(
+      taskRef,
+      mapOf(
+        "title" to cleanedTitle,
+        "appName" to cleanedAppName,
+        "appIconUrl" to cleanedAppIconUrl,
+        "description" to cleanedDesc,
+        "instructions" to cleanedInstructions,
+        "requiredProof" to cleanedRequiredProof,
+        "taskLink" to cleanedLink,
+        "category" to cleanedCat,
+        "rewardCents" to rewardCents,
+        "assignedUserId" to assignedUserId,
+        "assignedUserName" to assignedUserName.trim().ifEmpty { "Assigned User" },
+        "assignedUserEmail" to assignedUserEmail.trim().ifEmpty { "user@taskflow.app" },
+        "updatedAt" to FieldValue.serverTimestamp()
       )
-      batch.update(
-        userRef,
-        mapOf("assignedTaskId" to cleanTaskId, "updatedAt" to FieldValue.serverTimestamp())
+    )
+    batch.update(
+      usersCollection.document(assignedUserId),
+      mapOf(
+        "assignedTaskId" to taskId,
+        "updatedAt" to FieldValue.serverTimestamp()
       )
-      if (
-        prevUserRef != null &&
-          prevUserSnap != null &&
-          prevUserSnap.exists() &&
-          prevUserSnap.getString("assignedTaskId") == cleanTaskId
-      ) {
+    )
+
+    if (previousAssigneeId.isNotBlank() && previousAssigneeId != assignedUserId) {
+      val prevUserRef = usersCollection.document(previousAssigneeId)
+      val prevUserSnap = prevUserRef.get().await()
+      if (prevUserSnap.exists() && prevUserSnap.getString("assignedTaskId") == taskId) {
         batch.update(
           prevUserRef,
-          mapOf("assignedTaskId" to "", "updatedAt" to FieldValue.serverTimestamp())
-        )
-      }
-      batch.commit().await()
-      Result.success(Unit)
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
-      Result.failure(e)
-    }
-  }
-
-  suspend fun deleteTask(taskId: String): Result<Unit> {
-    val cleanTaskId = taskId.trim()
-    require(cleanTaskId.isNotEmpty()) { "Task ID cannot be blank." }
-    val docRef = db.collection("tasks").document(cleanTaskId)
-    return try {
-      val taskSnap = docRef.get().await()
-      check(taskSnap.exists()) { "Task $cleanTaskId does not exist." }
-      val currentStatus = taskSnap.getString("status").orEmpty()
-      check(currentStatus == TaskStatus.PENDING) {
-        "Only pending tasks can be deleted (current status: $currentStatus)."
-      }
-      val assignedUserId = taskSnap.getString("assignedUserId").orEmpty().trim()
-      val userRef =
-        if (assignedUserId.isNotEmpty()) db.collection("users").document(assignedUserId) else null
-      val userSnap = userRef?.get()?.await()
-
-      val batch = db.batch()
-      batch.delete(docRef)
-      if (
-        userRef != null &&
-          userSnap != null &&
-          userSnap.exists() &&
-          userSnap.getString("assignedTaskId") == cleanTaskId
-      ) {
-        batch.update(
-          userRef,
-          mapOf("assignedTaskId" to "", "updatedAt" to FieldValue.serverTimestamp())
-        )
-      }
-      batch.commit().await()
-      Result.success(Unit)
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.DELETE, docRef.path)
-      Result.failure(e)
-    }
-  }
-
-  suspend fun reviewSubmission(
-    task: TaskItem,
-    approve: Boolean,
-    adminFeedback: String
-  ): Result<Unit> {
-    val taskId = task.id.trim()
-    require(taskId.isNotEmpty()) { "Task ID cannot be blank" }
-    val taskRef = db.collection("tasks").document(taskId)
-    val subRef = db.collection("submissions").document(taskId)
-    val cleanFeedback = adminFeedback.trim().take(1000)
-    val newStatus = if (approve) TaskStatus.APPROVED else TaskStatus.REJECTED
-
-    return try {
-      val taskSnap = taskRef.get().await()
-      check(taskSnap.exists()) { "Task $taskId does not exist." }
-      val currentTaskStatus = taskSnap.getString("status").orEmpty()
-      check(currentTaskStatus == TaskStatus.SUBMITTED) {
-        "Task $taskId must be in 'submitted' status to review (current: $currentTaskStatus)."
-      }
-
-      val subSnap = subRef.get().await()
-      check(subSnap.exists()) { "Submission $taskId does not exist." }
-      val currentSubStatus = subSnap.getString("status").orEmpty()
-      check(currentSubStatus == TaskStatus.SUBMITTED) {
-        "Submission $taskId must be in 'submitted' status to review (current: $currentSubStatus)."
-      }
-
-      val assignedUserId = taskSnap.getString("assignedUserId").orEmpty().trim()
-      val submissionUserId = subSnap.getString("userId").orEmpty().trim()
-      check(assignedUserId.isNotEmpty() && assignedUserId == submissionUserId) {
-        "Task assignee and submission user ID mismatch."
-      }
-
-      val taskRewardCents = taskSnap.getLong("rewardCents") ?: 0L
-      val subRewardCents = subSnap.getLong("rewardCents") ?: 0L
-      check(taskRewardCents > 0L && taskRewardCents == subRewardCents) {
-        "Task and submission reward amounts are invalid or mismatched."
-      }
-
-      val userRef = db.collection("users").document(assignedUserId)
-      val userSnap = userRef.get().await()
-      check(userSnap.exists()) { "Assigned user profile $assignedUserId does not exist." }
-
-      val batch = db.batch()
-      batch.update(
-        taskRef,
-        mapOf(
-          "status" to newStatus,
-          "adminFeedback" to cleanFeedback,
-          "updatedAt" to FieldValue.serverTimestamp()
-        )
-      )
-      batch.update(
-        subRef,
-        mapOf(
-          "status" to newStatus,
-          "adminFeedback" to cleanFeedback,
-          "updatedAt" to FieldValue.serverTimestamp()
-        )
-      )
-      if (approve) {
-        batch.update(
-          userRef,
           mapOf(
-            "balanceCents" to FieldValue.increment(taskRewardCents),
-            "completedTasksCount" to FieldValue.increment(1L),
-            "assignedTaskId" to taskId,
+            "assignedTaskId" to "",
             "updatedAt" to FieldValue.serverTimestamp()
           )
         )
       }
-      batch.commit().await()
-      Result.success(Unit)
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.UPDATE, taskRef.path)
-      Result.failure(e)
     }
+
+    batch.commit().await()
   }
 
-  suspend fun updateUserApprovalStatus(userId: String, approvalStatus: String): Result<Unit> {
-    val docRef = db.collection("users").document(userId)
-    return try {
-      docRef
+  /**
+   * Deletes a pending task (Admin only) and clears the assignee's `assignedTaskId` if it points to this task.
+   */
+  suspend fun deleteTask(taskId: String): Result<Unit> = runCatching {
+    require(taskId.isNotBlank()) { "taskId must not be blank" }
+    val taskRef = tasksCollection.document(taskId)
+    val taskSnap = taskRef.get().await()
+    val assignedUserId = taskSnap.getString("assignedUserId") ?: ""
+
+    val batch = firestore.batch()
+    batch.delete(taskRef)
+
+    if (assignedUserId.isNotBlank()) {
+      val userRef = usersCollection.document(assignedUserId)
+      val userSnap = userRef.get().await()
+      if (userSnap.exists() && userSnap.getString("assignedTaskId") == taskId) {
+        batch.update(
+          userRef,
+          mapOf(
+            "assignedTaskId" to "",
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+      }
+    }
+
+    batch.commit().await()
+  }
+
+  /**
+   * Submits MANDATORY written text proof AND MANDATORY Gallery photo/screenshot proof for an open task.
+   *
+   * Any active (non-suspended) authenticated user can submit proof on an available ('pending') task.
+   * Uploads/persists the selected image first, then atomically updates `/tasks/{taskId}` to `submitted`
+   * (associating the submitting user's UID, name, and email) and creates `/submissions/{taskId}`.
+   */
+  suspend fun submitTaskProof(
+    task: TaskItem,
+    userName: String,
+    userEmail: String,
+    proofText: String,
+    imageUri: Uri?,
+    onProgress: (Int) -> Unit = {}
+  ): Result<Unit> = runCatching {
+    val authUser = authProvider().currentUser ?: error("Must be signed in to submit task proof.")
+    val uid = authUser.uid
+    val cleanedProofText = proofText.trim()
+    require(cleanedProofText.isNotEmpty() && cleanedProofText.length <= 4000) {
+      "Written text proof is mandatory (1–4000 characters)."
+    }
+    require(imageUri != null) {
+      "At least one photo or screenshot from your phone Gallery is mandatory."
+    }
+
+    // 1. Ensure user profile exists and is active (not suspended)
+    val userRef = usersCollection.document(uid)
+    val userSnap = userRef.get().await()
+    val resolvedEmail =
+      (userSnap.getString("email") ?: userEmail.trim().ifBlank { authUser.email ?: "" }).trim()
+    val resolvedName =
+      (userSnap.getString("displayName") ?: userName.trim().ifBlank { authUser.displayName ?: "" })
+        .trim()
+        .ifEmpty { "TaskFlow User" }
+
+    if (!userSnap.exists()) {
+      ensureUserProfile(uid, resolvedEmail, resolvedName).getOrThrow()
+    } else {
+      val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
+      check(approvalStatus != "suspended") {
+        "Your account is currently suspended and cannot submit task proof."
+      }
+    }
+
+    // 2. Verify task exists and is still open ('pending')
+    val taskRef = tasksCollection.document(task.id)
+    val latestTaskSnap = taskRef.get().await()
+    check(latestTaskSnap.exists()) { "Task ${task.id} no longer exists." }
+    val currentStatus = latestTaskSnap.getString("status") ?: ""
+    check(currentStatus == TaskStatus.PENDING) {
+      "Task proof can only be submitted while the task is Available (current status: ${TaskStatus.label(currentStatus)})."
+    }
+
+    // 3. Upload / encode mandatory photo proof and verify non-empty reference
+    val uploadedPhoto =
+      photoUploader.uploadProofPhoto(
+        userId = uid,
+        taskId = task.id,
+        imageUri = imageUri,
+        onProgress = onProgress
+      )
+    check(uploadedPhoto.downloadUrl.isNotBlank() && uploadedPhoto.storagePath.isNotBlank()) {
+      "Photo proof upload did not complete. Please try again."
+    }
+
+    val latestTitle = latestTaskSnap.getString("title") ?: task.title
+    val latestAppName = latestTaskSnap.getString("appName") ?: task.appName
+    val latestAppIconUrl = latestTaskSnap.getString("appIconUrl") ?: task.appIconUrl
+    val latestRewardCents = latestTaskSnap.getLong("rewardCents") ?: task.rewardCents
+
+    // 4. Atomically update /tasks/{taskId} and create /submissions/{taskId}
+    val submissionRef = submissionsCollection.document(task.id)
+    val batch = firestore.batch()
+    batch.update(
+      taskRef,
+      mapOf(
+        "assignedUserId" to uid,
+        "assignedUserName" to resolvedName,
+        "assignedUserEmail" to resolvedEmail.ifEmpty { "user@taskflow.app" },
+        "status" to TaskStatus.SUBMITTED,
+        "proofText" to cleanedProofText,
+        "proofImageUrl" to uploadedPhoto.downloadUrl,
+        "proofStoragePath" to uploadedPhoto.storagePath,
+        "updatedAt" to FieldValue.serverTimestamp()
+      )
+    )
+    batch.set(
+      submissionRef,
+      mapOf(
+        "taskId" to task.id,
+        "taskTitle" to latestTitle,
+        "appName" to latestAppName,
+        "appIconUrl" to latestAppIconUrl,
+        "rewardCents" to latestRewardCents,
+        "userId" to uid,
+        "userName" to resolvedName,
+        "userEmail" to resolvedEmail.ifEmpty { "user@taskflow.app" },
+        "proofText" to cleanedProofText,
+        "proofImageUrl" to uploadedPhoto.downloadUrl,
+        "proofStoragePath" to uploadedPhoto.storagePath,
+        "status" to TaskStatus.SUBMITTED,
+        "adminFeedback" to "",
+        "createdAt" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp()
+      )
+    )
+    batch.commit().await()
+  }
+
+  /**
+   * Convenience wrapper for submitting mandatory text + photo proof by task parameters.
+   */
+  suspend fun createSubmissionRecord(
+    taskId: String,
+    taskTitle: String,
+    rewardCents: Long,
+    userName: String,
+    userEmail: String,
+    proofText: String,
+    imageUri: Uri?
+  ): Result<Unit> {
+    val uid = authProvider().currentUser?.uid ?: ""
+    val task =
+      TaskItem(
+        id = taskId,
+        title = taskTitle,
+        rewardCents = rewardCents,
+        assignedUserId = uid
+      )
+    return submitTaskProof(
+      task = task,
+      userName = userName,
+      userEmail = userEmail,
+      proofText = proofText,
+      imageUri = imageUri
+    )
+  }
+
+  /**
+   * Reviews a submitted task (Approve or Reject) atomically.
+   * When approved, credits the submitting user's `balanceCents` and increments `completedTasksCount`
+   * in the same batch as updating `/tasks/{taskId}` and `/submissions/{taskId}`.
+   */
+  suspend fun reviewSubmission(
+    task: TaskItem,
+    approve: Boolean,
+    adminFeedback: String
+  ): Result<Unit> = runCatching {
+    require(task.id.isNotBlank()) { "task.id must not be blank" }
+    val cleanedFeedback =
+      adminFeedback.trim().ifEmpty {
+        if (approve) "Approved by Admin" else "Needs revision"
+      }
+    require(cleanedFeedback.length <= 1000) { "Feedback must be under 1000 characters." }
+
+    val taskRef = tasksCollection.document(task.id)
+    val submissionRef = submissionsCollection.document(task.id)
+
+    val latestTaskSnap = taskRef.get().await()
+    check(latestTaskSnap.exists()) { "Task ${task.id} does not exist." }
+    val currentTaskStatus = latestTaskSnap.getString("status") ?: ""
+    check(currentTaskStatus == TaskStatus.SUBMITTED) {
+      "Task ${task.id} must be in 'Pending Review' status to review (current: $currentTaskStatus)."
+    }
+
+    val latestSubSnap = submissionRef.get().await()
+    check(latestSubSnap.exists()) {
+      "Submission record for task ${task.id} does not exist."
+    }
+    val currentSubStatus = latestSubSnap.getString("status") ?: ""
+    check(currentSubStatus == TaskStatus.SUBMITTED) {
+      "Submission ${task.id} has already been reviewed (status: $currentSubStatus)."
+    }
+
+    val submittingUserId =
+      (latestSubSnap.getString("userId") ?: latestTaskSnap.getString("assignedUserId") ?: task.assignedUserId)
+        .trim()
+    val rewardCents = latestTaskSnap.getLong("rewardCents") ?: task.rewardCents
+    val newStatus = if (approve) TaskStatus.APPROVED else TaskStatus.REJECTED
+
+    val batch = firestore.batch()
+    batch.update(
+      taskRef,
+      mapOf(
+        "status" to newStatus,
+        "adminFeedback" to cleanedFeedback,
+        "updatedAt" to FieldValue.serverTimestamp()
+      )
+    )
+    batch.update(
+      submissionRef,
+      mapOf(
+        "status" to newStatus,
+        "adminFeedback" to cleanedFeedback,
+        "updatedAt" to FieldValue.serverTimestamp()
+      )
+    )
+
+    if (approve && submittingUserId.isNotBlank()) {
+      val userRef = usersCollection.document(submittingUserId)
+      batch.update(
+        userRef,
+        mapOf(
+          "balanceCents" to FieldValue.increment(rewardCents),
+          "completedTasksCount" to FieldValue.increment(1L),
+          "assignedTaskId" to task.id,
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
+      )
+    }
+
+    batch.commit().await()
+  }
+
+  /**
+   * Admin updates a user's `approvalStatus` (`approved`, `pending`, `suspended`).
+   */
+  suspend fun updateUserApprovalStatus(userId: String, approvalStatus: String): Result<Unit> =
+    runCatching {
+      require(userId.isNotBlank()) { "userId must not be blank" }
+      require(approvalStatus in listOf("approved", "pending", "suspended")) {
+        "Invalid approvalStatus: $approvalStatus"
+      }
+      usersCollection
+        .document(userId)
         .update(
-          mapOf("approvalStatus" to approvalStatus, "updatedAt" to FieldValue.serverTimestamp())
+          mapOf(
+            "approvalStatus" to approvalStatus,
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
         )
         .await()
-      Result.success(Unit)
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
-      Result.failure(e)
     }
+
+  /**
+   * Submits a safe demo-only withdrawal request to `/withdrawal_requests/{requestId}`.
+   *
+   * Security & Privacy Guarantees:
+   * - Never collects or stores bank account numbers, IFSC codes, bank names, or UPI IDs in Firestore.
+   * - Validates minimum withdrawal amount of ₹200.00 (20,000 paise).
+   * - Validates that the requested amount does not exceed the user's available wallet balance.
+   * - Never deducts the user's wallet balance (`balanceCents` remains unchanged).
+   */
+  suspend fun submitDemoWithdrawalRequest(
+    uid: String,
+    userName: String,
+    amountCents: Long,
+    method: String
+  ): Result<String> = runCatching {
+    require(uid.isNotBlank()) { "Must be signed in to submit a withdrawal request." }
+    val cleanedMethod = method.trim()
+    require(cleanedMethod in WithdrawalMethod.ALL) {
+      "Please select a valid withdrawal method (Bank Account or UPI ID)."
+    }
+    require(amountCents >= MIN_WITHDRAWAL_CENTS) {
+      "Minimum withdrawal amount is ₹200.00."
+    }
+    require(amountCents <= 10_000_000L) {
+      "Maximum single demo withdrawal request is ₹1,00,000.00."
+    }
+
+    val userSnap = usersCollection.document(uid).get().await()
+    check(userSnap.exists()) { "User profile not found." }
+    val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
+    check(approvalStatus != "suspended") {
+      "Suspended accounts cannot submit withdrawal requests."
+    }
+    val availableBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+    require(amountCents <= availableBalanceCents) {
+      "Entered amount (${formatRewardInr(amountCents)}) exceeds your available balance of ${formatRewardInr(availableBalanceCents)}."
+    }
+
+    val resolvedUserName =
+      (userSnap.getString("displayName") ?: userName).trim().ifEmpty { "TaskFlow User" }
+
+    val docRef = withdrawalRequestsCollection.document()
+    val payload =
+      mapOf(
+        "requestId" to docRef.id,
+        "userId" to uid,
+        "userName" to resolvedUserName,
+        "amountCents" to amountCents,
+        "method" to cleanedMethod,
+        "status" to "pending_demo",
+        "isDemo" to true,
+        "createdAt" to FieldValue.serverTimestamp()
+      )
+    docRef.set(payload).await()
+    docRef.id
+  }
+
+  /**
+   * Observes the signed-in user's own demo withdrawal requests in real time.
+   */
+  fun observeUserWithdrawalRequests(uid: String): Flow<List<DemoWithdrawalRequest>> = callbackFlow {
+    require(uid.isNotBlank()) { "uid must not be blank" }
+    val listener =
+      withdrawalRequestsCollection
+        .whereEqualTo("userId", uid)
+        .addSnapshotListener { snapshot, error ->
+          if (error != null) {
+            close(error)
+            return@addSnapshotListener
+          }
+          val items =
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toObject(DemoWithdrawalRequest::class.java) }
+              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+              ?: emptyList()
+          trySend(items)
+        }
+    awaitClose { listener.remove() }
+  }
+
+  /**
+   * One-shot fetch of a user's own demo withdrawal requests.
+   */
+  suspend fun getUserWithdrawalRequests(uid: String): Result<List<DemoWithdrawalRequest>> =
+    runCatching {
+      require(uid.isNotBlank()) { "uid must not be blank" }
+      val snap = withdrawalRequestsCollection.whereEqualTo("userId", uid).get().await()
+      snap.documents
+        .mapNotNull { it.toObject(DemoWithdrawalRequest::class.java) }
+        .sortedByDescending { it.createdAt?.seconds ?: 0L }
+    }
+
+  /**
+   * Observes all demo withdrawal requests in `/withdrawal_requests` for an authorized admin.
+   */
+  fun observeAdminWithdrawalRequests(
+    adminUid: String,
+    isAdminAuthorized: Boolean
+  ): Flow<List<DemoWithdrawalRequest>> = callbackFlow {
+    require(adminUid.isNotBlank()) { "adminUid must not be blank" }
+    if (!isAdminAuthorized) {
+      trySend(emptyList())
+      awaitClose {}
+      return@callbackFlow
+    }
+    val listener =
+      withdrawalRequestsCollection.addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          close(error)
+          return@addSnapshotListener
+        }
+        val items =
+          snapshot
+            ?.documents
+            ?.mapNotNull { it.toObject(DemoWithdrawalRequest::class.java) }
+            ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+            ?: emptyList()
+        trySend(items)
+      }
+    awaitClose { listener.remove() }
+  }
+
+  /**
+   * One-shot fetch of all demo withdrawal requests for an authorized admin.
+   */
+  suspend fun getAdminWithdrawalRequests(): Result<List<DemoWithdrawalRequest>> = runCatching {
+    val snap = withdrawalRequestsCollection.get().await()
+    snap.documents
+      .mapNotNull { it.toObject(DemoWithdrawalRequest::class.java) }
+      .sortedByDescending { it.createdAt?.seconds ?: 0L }
   }
 }

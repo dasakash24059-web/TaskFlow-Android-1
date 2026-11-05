@@ -8,7 +8,7 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Explicit Denial for Withdrawals / Payouts (Completely disabled)
+    // Explicit Denial for Actual Withdrawals / Real Payouts (Completely disabled)
     match /withdrawals/{withdrawalId} {
       allow read, write: if false;
     }
@@ -69,15 +69,11 @@ service cloud.firestore {
     }
 
     // Root Bootstrap Owner Check (Verified token email ONLY)
-    // Only the bootstrap owner can create, update, or delete /admins records.
     function isVerifiedAdminEmail() {
       return hasVerifiedTokenEmail('dasakash24059@gmail.com');
     }
 
-    // Trusted Admin Check:
-    // Evaluates against server-controlled custom claims, verified bootstrap owner email,
-    // or the bootstrap-owner-controlled /admins/{uid} registry.
-    // NEVER trusts client-editable /users/{uid}.role.
+    // Trusted Admin Check
     function isAdmin() {
       return isSignedIn() && (
         (('admin' in request.auth.token) && request.auth.token.admin == true) ||
@@ -86,23 +82,14 @@ service cloud.firestore {
       );
     }
 
-    // Checks that a user profile exists and has been approved by an admin
+    // Checks that a user profile exists and is active (not suspended)
     function isApprovedUser(uid) {
+      let user = getUserData(uid);
       return exists(/databases/$(database)/documents/users/$(uid)) &&
-             getUserData(uid).approvalStatus == 'approved';
+             (user.approvalStatus == 'approved' || user.approvalStatus == 'pending');
     }
 
     // Atomic Batch Validator for Task Approval & Reward Credit:
-    // Verifies via get() and getAfter() that within the exact same atomic batch:
-    // - Both /tasks/{taskId} and /submissions/{taskId} exist before and after the batch
-    // - Pre-batch and post-batch task.assignedUserId both equal userId
-    // - Pre-batch and post-batch submission.userId both equal userId
-    // - Pre-batch and post-batch submission.taskId both equal taskId
-    // - Pre-batch task status and pre-batch submission status are both 'submitted'
-    // - Post-batch task status and post-batch submission status are both 'approved'
-    // - Task and submission rewardCents match and remain unaltered in the batch
-    // - User balanceCents increases by exactly task.rewardCents
-    // - User completedTasksCount increases by exactly 1
     function isAtomicTaskApprovalForUser(taskId, userId, beforeBalance, afterBalance, beforeCount, afterCount) {
       let taskBefore = getTaskData(taskId);
       let taskAfter = getTaskAfterData(taskId);
@@ -132,11 +119,6 @@ service cloud.firestore {
     }
 
     // Validates that an admin update to /users/{userId}.assignedTaskId is atomically consistent
-    // with /tasks/{assignedTaskId}.assignedUserId:
-    // - If clearing a previously non-empty assignedTaskId, the previous task must either no longer
-    //   exist after the batch or be assigned to a different user after the batch.
-    // - If setting a non-empty assignedTaskId, that task must exist after the batch and have
-    //   assignedUserId == userId.
     function isConsistentUserTaskAssignment(userId) {
       let prevTaskId = existing().assignedTaskId;
       let nextTaskId = incoming().assignedTaskId;
@@ -174,8 +156,11 @@ service cloud.firestore {
 
     function isValidTask(data) {
       return data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             (!('appName' in data) || (data.appName is string && data.appName.size() <= 120)) &&
+             (!('appIconUrl' in data) || (data.appIconUrl is string && data.appIconUrl.size() <= 350000)) &&
              data.description is string && data.description.size() >= 1 && data.description.size() <= 2000 &&
              (!('instructions' in data) || (data.instructions is string && data.instructions.size() <= 4000)) &&
+             (!('requiredProof' in data) || (data.requiredProof is string && data.requiredProof.size() <= 2000)) &&
              (!('taskLink' in data) || (data.taskLink is string && data.taskLink.size() <= 1000 && (data.taskLink == '' || data.taskLink.matches('^https://.+')))) &&
              data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
              data.rewardCents is int && data.rewardCents >= 1 && data.rewardCents <= 10000000 &&
@@ -184,7 +169,7 @@ service cloud.firestore {
              data.assignedUserEmail is string && data.assignedUserEmail.size() >= 3 && data.assignedUserEmail.size() <= 254 &&
              data.status is string && (data.status == 'pending' || data.status == 'submitted' || data.status == 'approved' || data.status == 'rejected') &&
              data.proofText is string && data.proofText.size() <= 4000 &&
-             (!('proofImageUrl' in data) || (data.proofImageUrl is string && data.proofImageUrl.size() <= 2000)) &&
+             (!('proofImageUrl' in data) || (data.proofImageUrl is string && data.proofImageUrl.size() <= 350000)) &&
              (!('proofStoragePath' in data) || (data.proofStoragePath is string && data.proofStoragePath.size() <= 500)) &&
              data.adminFeedback is string && data.adminFeedback.size() <= 1000 &&
              data.createdBy is string && isValidId(data.createdBy) &&
@@ -195,17 +180,33 @@ service cloud.firestore {
     function isValidSubmission(data) {
       return data.taskId is string && isValidId(data.taskId) &&
              data.taskTitle is string && data.taskTitle.size() >= 1 && data.taskTitle.size() <= 120 &&
+             (!('appName' in data) || (data.appName is string && data.appName.size() <= 120)) &&
+             (!('appIconUrl' in data) || (data.appIconUrl is string && data.appIconUrl.size() <= 350000)) &&
              data.rewardCents is int && data.rewardCents >= 1 && data.rewardCents <= 10000000 &&
              data.userId is string && isValidId(data.userId) &&
              data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 100 &&
              data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 254 &&
              data.proofText is string && data.proofText.size() >= 1 && data.proofText.size() <= 4000 &&
-             data.proofImageUrl is string && data.proofImageUrl.size() >= 1 && data.proofImageUrl.size() <= 2000 &&
+             data.proofImageUrl is string && data.proofImageUrl.size() >= 1 && data.proofImageUrl.size() <= 350000 &&
              data.proofStoragePath is string && data.proofStoragePath.size() >= 1 && data.proofStoragePath.size() <= 500 &&
              data.status is string && (data.status == 'submitted' || data.status == 'approved' || data.status == 'rejected') &&
              data.adminFeedback is string && data.adminFeedback.size() <= 1000 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidDemoWithdrawalRequest(data) {
+      let userProfile = getUserData(request.auth.uid);
+      return data.requestId is string && isValidId(data.requestId) &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 100 &&
+             data.amountCents is int && data.amountCents >= 20000 && data.amountCents <= 1000000000 &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             data.amountCents <= userProfile.balanceCents &&
+             data.method is string && (data.method == 'Bank Account' || data.method == 'UPI ID') &&
+             data.status == 'pending_demo' &&
+             data.isDemo == true &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
     function isValidAdminRecord(data) {
@@ -226,9 +227,9 @@ service cloud.firestore {
     }
 
     function isValidTaskProofSubmissionTransition(taskId) {
-      return request.auth.uid == existing().assignedUserId &&
-             existing().status == 'pending' &&
+      return existing().status == 'pending' &&
              incoming().status == 'submitted' &&
+             incoming().assignedUserId == request.auth.uid &&
              incoming().proofText.size() >= 1 &&
              ('proofImageUrl' in incoming()) &&
              incoming().proofImageUrl is string &&
@@ -237,6 +238,7 @@ service cloud.firestore {
              incoming().proofStoragePath is string &&
              incoming().proofStoragePath.size() >= 1 &&
              incoming().diff(existing()).affectedKeys().hasOnly([
+               'assignedUserId', 'assignedUserName', 'assignedUserEmail',
                'status', 'proofText', 'proofImageUrl', 'proofStoragePath', 'updatedAt'
              ]) &&
              isApprovedUser(request.auth.uid) &&
@@ -253,7 +255,8 @@ service cloud.firestore {
              incoming().proofText == '' &&
              incoming().adminFeedback == '' &&
              incoming().diff(existing()).affectedKeys().hasOnly([
-               'title', 'description', 'instructions', 'taskLink', 'category', 'rewardCents',
+               'title', 'appName', 'appIconUrl', 'description', 'instructions',
+               'requiredProof', 'taskLink', 'category', 'rewardCents',
                'assignedUserId', 'assignedUserName', 'assignedUserEmail', 'updatedAt'
              ]) &&
              exists(/databases/$(database)/documents/users/$(newAssignee)) &&
@@ -309,6 +312,30 @@ service cloud.firestore {
              isMatchingRejectionState(taskId, assignedUid);
     }
 
+    function isConsistentSubmissionCreate(submissionId) {
+      let taskBefore = getTaskData(submissionId);
+      let taskAfter = getTaskAfterData(submissionId);
+      return exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
+             taskBefore.status == 'pending' &&
+             taskAfter.assignedUserId == request.auth.uid &&
+             incoming().rewardCents == taskBefore.rewardCents &&
+             incoming().taskTitle == taskBefore.title &&
+             taskAfter.status == 'submitted' &&
+             taskAfter.proofText == incoming().proofText &&
+             taskAfter.proofImageUrl == incoming().proofImageUrl &&
+             taskAfter.proofStoragePath == incoming().proofStoragePath;
+    }
+
+    function isConsistentSubmissionUpdate(submissionId) {
+      let taskBefore = getTaskData(submissionId);
+      let taskAfter = getTaskAfterData(submissionId);
+      return exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
+             taskBefore.status == 'submitted' &&
+             taskAfter.status == incoming().status &&
+             taskAfter.adminFeedback == incoming().adminFeedback &&
+             taskAfter.assignedUserId == existing().userId;
+    }
+
     // 4. Collection Rules: /users/{userId}
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
@@ -329,8 +356,6 @@ service cloud.firestore {
                        isValidUserProfile(incoming()) &&
                        incoming().userId == userId &&
                        (
-                         // Path 1: Standard user self-registration
-                         // Must use verified Auth token email, start as 'user' with 'pending' approval and 0 balance
                          (
                            request.auth.uid == userId &&
                            hasVerifiedTokenEmail(incoming().email) &&
@@ -340,7 +365,6 @@ service cloud.firestore {
                            incoming().completedTasksCount == 0 &&
                            (!('assignedTaskId' in incoming()) || incoming().assignedTaskId == null || incoming().assignedTaskId == '')
                          ) ||
-                         // Path 2: Verified admin creating a user profile, or bootstrap owner initializing their own admin profile
                          (
                            isAdmin() &&
                            incoming().balanceCents == 0 &&
@@ -356,7 +380,6 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
                        isValidUserProfile(incoming()) &&
                        (
-                         // Path 1: Standard user updating ONLY their own displayName
                          (
                            request.auth.uid == userId &&
                            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
@@ -364,9 +387,6 @@ service cloud.firestore {
                          (
                            isAdmin() &&
                            (
-                             // Path 2: Admin updating user approvalStatus, assignedTaskId, or displayName
-                             // Cannot alter balanceCents or completedTasksCount here.
-                             // Only the bootstrap owner can change a user's role field.
                              (
                                (incoming().role == existing().role || isVerifiedAdminEmail()) &&
                                incoming().diff(existing()).affectedKeys().hasOnly([
@@ -374,8 +394,6 @@ service cloud.firestore {
                                ]) &&
                                isConsistentUserTaskAssignment(userId)
                              ) ||
-                             // Path 3: Atomic reward credit by an Admin ONLY as part of the exact same batch
-                             // that approves both the corresponding /tasks/{taskId} and /submissions/{taskId}.
                              (
                                incoming().diff(existing()).affectedKeys().hasAll(['balanceCents', 'completedTasksCount']) &&
                                incoming().diff(existing()).affectedKeys().hasOnly([
@@ -404,7 +422,6 @@ service cloud.firestore {
 
       allow list: if isSignedIn();
 
-      // CREATE: Only admins can create tasks; must start in 'pending' state and atomically update assignee's assignedTaskId
       allow create: if isSignedIn() &&
                        isValidId(taskId) &&
                        incoming().keys().hasAll([
@@ -414,7 +431,8 @@ service cloud.firestore {
                          'createdAt', 'updatedAt'
                        ]) &&
                        incoming().keys().hasOnly([
-                         'title', 'description', 'instructions', 'taskLink', 'category', 'rewardCents',
+                         'title', 'appName', 'appIconUrl', 'description', 'instructions',
+                         'requiredProof', 'taskLink', 'category', 'rewardCents',
                          'assignedUserId', 'assignedUserName', 'assignedUserEmail',
                          'status', 'proofText', 'proofImageUrl', 'proofStoragePath',
                          'adminFeedback', 'createdBy', 'createdAt', 'updatedAt'
@@ -430,28 +448,16 @@ service cloud.firestore {
                        exists(/databases/$(database)/documents/users/$(incoming().assignedUserId)) &&
                        getUserAfterData(incoming().assignedUserId).assignedTaskId == taskId;
 
-      // UPDATE: Strict State Machine & Atomic Cross-Document Consistency
       allow update: if isSignedIn() &&
                        isValidId(taskId) &&
                        isValidTask(incoming()) &&
                        (
-                         // Transition 1: Assigned & approved user submits text + photo proof ('pending' -> 'submitted')
-                         isValidTaskProofSubmissionTransition(taskId) ||
-                         // Transition 2-4: Admin operations
-                         (
-                           isAdmin() &&
-                           (
-                             // Transition 2: Admin edits or reassigns task ONLY while task is still 'pending'
-                             isValidTaskEditOrReassignTransition(taskId) ||
-                             // Transition 3: Admin approves a 'submitted' task ('submitted' -> 'approved')
-                             isValidTaskApprovalTransition(taskId) ||
-                             // Transition 4: Admin rejects a 'submitted' task ('submitted' -> 'rejected')
-                             isValidTaskRejectionTransition(taskId)
-                           )
-                         )
+                         (incoming().status == 'submitted' && isValidTaskProofSubmissionTransition(taskId)) ||
+                         (isAdmin() && incoming().status == 'pending' && isValidTaskEditOrReassignTransition(taskId)) ||
+                         (isAdmin() && incoming().status == 'approved' && isValidTaskApprovalTransition(taskId)) ||
+                         (isAdmin() && incoming().status == 'rejected' && isValidTaskRejectionTransition(taskId))
                        );
 
-      // DELETE: Admins can only delete tasks that are still 'pending'
       allow delete: if isSignedIn() &&
                        isValidId(taskId) &&
                        isAdmin() &&
@@ -472,7 +478,6 @@ service cloud.firestore {
       allow list: if isSignedIn() &&
                      (resource.data.userId == request.auth.uid || isAdmin());
 
-      // CREATE: Must happen atomically with /tasks/{taskId} transitioning from 'pending' -> 'submitted'
       allow create: if isSignedIn() &&
                        isValidId(submissionId) &&
                        incoming().keys().hasAll([
@@ -483,7 +488,7 @@ service cloud.firestore {
                          'createdAt', 'updatedAt'
                        ]) &&
                        incoming().keys().hasOnly([
-                         'taskId', 'taskTitle', 'rewardCents',
+                         'taskId', 'taskTitle', 'appName', 'appIconUrl', 'rewardCents',
                          'userId', 'userName', 'userEmail',
                          'proofText', 'proofImageUrl', 'proofStoragePath',
                          'status', 'adminFeedback',
@@ -496,19 +501,8 @@ service cloud.firestore {
                        hasVerifiedTokenEmail(incoming().userEmail) &&
                        incoming().status == 'submitted' &&
                        incoming().adminFeedback == '' &&
-                       exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
-                       getTaskData(submissionId).assignedUserId == request.auth.uid &&
-                       getTaskAfterData(submissionId).assignedUserId == request.auth.uid &&
-                       getTaskData(submissionId).status == 'pending' &&
-                       incoming().rewardCents == getTaskData(submissionId).rewardCents &&
-                       incoming().taskTitle == getTaskData(submissionId).title &&
-                       getTaskAfterData(submissionId).status == 'submitted' &&
-                       getTaskAfterData(submissionId).proofText == incoming().proofText &&
-                       getTaskAfterData(submissionId).proofImageUrl == incoming().proofImageUrl &&
-                       getTaskAfterData(submissionId).proofStoragePath == incoming().proofStoragePath;
+                       isConsistentSubmissionCreate(submissionId);
 
-      // UPDATE: Terminal State Machine ('submitted' -> 'approved' | 'rejected' ONLY)
-      // Must happen atomically with the parent /tasks/{submissionId} status transition
       allow update: if isSignedIn() &&
                        isValidId(submissionId) &&
                        isValidSubmission(incoming()) &&
@@ -518,17 +512,41 @@ service cloud.firestore {
                        incoming().diff(existing()).affectedKeys().hasOnly([
                          'status', 'adminFeedback', 'updatedAt'
                        ]) &&
-                       exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
-                       getTaskData(submissionId).status == 'submitted' &&
-                       getTaskAfterData(submissionId).status == incoming().status &&
-                       getTaskAfterData(submissionId).adminFeedback == incoming().adminFeedback &&
-                       getTaskAfterData(submissionId).assignedUserId == existing().userId;
+                       isConsistentSubmissionUpdate(submissionId);
 
       allow delete: if false;
     }
 
+    // 6B. Collection Rules: /withdrawal_requests/{requestId}
+    // Safe demo-only withdrawal requests:
+    // - Strictly forbids storing bank account numbers, IFSC codes, or real UPI IDs
+    // - Enforces minimum ₹200.00 (20000 paise) and <= user's available balanceCents
+    // - Never deducts user's wallet balance
+    match /withdrawal_requests/{requestId} {
+      allow get: if isSignedIn() &&
+                    isValidId(requestId) &&
+                    (resource == null || existing().userId == request.auth.uid || isAdmin());
+
+      allow list: if isSignedIn() &&
+                     (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(requestId) &&
+                       incoming().keys().hasAll([
+                         'requestId', 'userId', 'userName', 'amountCents',
+                         'method', 'status', 'isDemo', 'createdAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'requestId', 'userId', 'userName', 'amountCents',
+                         'method', 'status', 'isDemo', 'createdAt'
+                       ]) &&
+                       incoming().requestId == requestId &&
+                       isValidDemoWithdrawalRequest(incoming());
+
+      allow update, delete: if false;
+    }
+
     // 7. Collection Rules: /admins/{adminId}
-    // Strictly restricted to the verified bootstrap owner email (isVerifiedAdminEmail)
     match /admins/{adminId} {
       allow get: if isSignedIn() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
       allow list: if isAdmin();

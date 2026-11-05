@@ -208,7 +208,7 @@ test("3. Only the verified bootstrap owner can create or delete /admins records"
   );
 });
 
-test("4. Mandatory text + photo proof enforcement, valid atomic submission, valid task approval & exact reward credit, and repeated approval attempts", async () => {
+test("4. Mandatory text + photo proof enforcement (including second user account submitting on Admin-created task), valid atomic approval & exact INR credit, and repeated approval failure", async () => {
   const ts = nowTimestamp();
   const taskId = "task_atomic_1";
   const sampleImageUrl =
@@ -218,11 +218,11 @@ test("4. Mandatory text + photo proof enforcement, valid atomic submission, vali
 
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
-    await db.collection("users").doc(ALICE_UID).set({
-      userId: ALICE_UID,
-      email: ALICE_EMAIL,
-      displayName: "Alice",
-      role: "user",
+    await db.collection("users").doc(ADMIN_UID).set({
+      userId: ADMIN_UID,
+      email: ADMIN_EMAIL,
+      displayName: "Admin",
+      role: "admin",
       approvalStatus: "approved",
       balanceCents: 0,
       completedTasksCount: 0,
@@ -230,16 +230,32 @@ test("4. Mandatory text + photo proof enforcement, valid atomic submission, vali
       createdAt: ts,
       updatedAt: ts,
     });
+    await db.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      email: ALICE_EMAIL,
+      displayName: "Alice",
+      role: "user",
+      approvalStatus: "pending",
+      balanceCents: 0,
+      completedTasksCount: 0,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    // Task initially created by Admin with Admin as initial assignee
     await db.collection("tasks").doc(taskId).set({
       title: "QA Check",
+      appName: "TaskFlow Companion",
+      appIconUrl: "https://example.com/icon.png",
       description: "Verify mobile layout",
       instructions: "1. Open app\n2. Capture screenshot",
+      requiredProof: "Provide written notes and welcome screen screenshot",
       taskLink: "https://play.google.com/store/apps/details?id=com.example.app",
       category: "QA Testing",
       rewardCents: 1500,
-      assignedUserId: ALICE_UID,
-      assignedUserName: "Alice",
-      assignedUserEmail: ALICE_EMAIL,
+      assignedUserId: ADMIN_UID,
+      assignedUserName: "Admin",
+      assignedUserEmail: ADMIN_EMAIL,
       status: "pending",
       proofText: "",
       proofImageUrl: "",
@@ -278,6 +294,9 @@ test("4. Mandatory text + photo proof enforcement, valid atomic submission, vali
   // 4a. Text-only submission (missing photo proofImageUrl / proofStoragePath) -> MUST FAIL
   const textOnlyBatch = aliceDb.batch();
   textOnlyBatch.update(aliceDb.collection("tasks").doc(taskId), {
+    assignedUserId: ALICE_UID,
+    assignedUserName: "Alice",
+    assignedUserEmail: ALICE_EMAIL,
     status: "submitted",
     proofText: "Completed QA check without screenshot.",
     proofImageUrl: "",
@@ -304,6 +323,9 @@ test("4. Mandatory text + photo proof enforcement, valid atomic submission, vali
   // 4b. Photo-only submission (missing written proofText) -> MUST FAIL
   const photoOnlyBatch = aliceDb.batch();
   photoOnlyBatch.update(aliceDb.collection("tasks").doc(taskId), {
+    assignedUserId: ALICE_UID,
+    assignedUserName: "Alice",
+    assignedUserEmail: ALICE_EMAIL,
     status: "submitted",
     proofText: "",
     proofImageUrl: sampleImageUrl,
@@ -327,9 +349,12 @@ test("4. Mandatory text + photo proof enforcement, valid atomic submission, vali
   });
   await assertFails(photoOnlyBatch.commit());
 
-  // 4c. Valid Atomic Task Submission with BOTH written proofText AND uploaded photo -> MUST SUCCEED
+  // 4c. Valid Atomic Task Submission by second user account (Alice) with BOTH written proofText AND uploaded photo -> MUST SUCCEED
   const submitBatch = aliceDb.batch();
   submitBatch.update(aliceDb.collection("tasks").doc(taskId), {
+    assignedUserId: ALICE_UID,
+    assignedUserName: "Alice",
+    assignedUserEmail: ALICE_EMAIL,
     status: "submitted",
     proofText: "Completed QA check across Android screens.",
     proofImageUrl: sampleImageUrl,
@@ -339,6 +364,8 @@ test("4. Mandatory text + photo proof enforcement, valid atomic submission, vali
   submitBatch.set(aliceDb.collection("submissions").doc(taskId), {
     taskId: taskId,
     taskTitle: "QA Check",
+    appName: "TaskFlow Companion",
+    appIconUrl: "https://example.com/icon.png",
     rewardCents: 1500,
     userId: ALICE_UID,
     userName: "Alice",
@@ -352,6 +379,10 @@ test("4. Mandatory text + photo proof enforcement, valid atomic submission, vali
     updatedAt: ts,
   });
   await assertSucceeds(submitBatch.commit());
+
+  // Admin can list and read the submission from /submissions
+  await assertSucceeds(adminDb.collection("submissions").get());
+  await assertSucceeds(adminDb.collection("submissions").doc(taskId).get());
 
   // Admin attempting an unrelated balance increase without approving task & submission in the same batch -> MUST FAIL
   await assertFails(
@@ -633,10 +664,13 @@ test("6. Atomic task creation with HTTPS URL & instructions, task reassignment, 
   const createBatch = adminDb.batch();
   createBatch.set(adminDb.collection("tasks").doc(taskId), {
     title: "Consistent Task",
+    appName: "TaskFlow App",
+    appIconUrl: "https://example.com/icon.png",
     description: "Created atomically with user assignedTaskId",
     instructions: "1. Open Google Play Store\n2. Install & screenshot",
+    requiredProof: "Screenshot of installed app",
     taskLink: "https://play.google.com/store/apps/details?id=com.example.app",
-    category: "General",
+    category: "App Install",
     rewardCents: 1000,
     assignedUserId: ALICE_UID,
     assignedUserName: "Alice",
@@ -727,3 +761,116 @@ test("6. Atomic task creation with HTTPS URL & instructions, task reassignment, 
   });
   await assertSucceeds(deleteBatch.commit());
 });
+
+test("7. Safe Demo Withdrawal Requests (/withdrawal_requests): enforces >= ₹200 minimum, <= balanceCents, rejects banking/UPI PII keys, and allows Admin visibility", async () => {
+  const ts = nowTimestamp();
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await db.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      email: ALICE_EMAIL,
+      displayName: "Alice",
+      role: "user",
+      approvalStatus: "approved",
+      balanceCents: 35000, // ₹350.00 available balance
+      completedTasksCount: 3,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+  });
+
+  const aliceDb = testEnv
+    .authenticatedContext(ALICE_UID, {
+      email: ALICE_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const adminDb = testEnv
+    .authenticatedContext(ADMIN_UID, {
+      email: ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  // 1. Below ₹200 minimum (15000 paise = ₹150.00 < 20000) -> MUST FAIL
+  await assertFails(
+    aliceDb.collection("withdrawal_requests").doc("req_below_min").set({
+      requestId: "req_below_min",
+      userId: ALICE_UID,
+      userName: "Alice",
+      amountCents: 15000,
+      method: "Bank Account",
+      status: "pending_demo",
+      isDemo: true,
+      createdAt: ts,
+    })
+  );
+
+  // 2. Exceeding available wallet balance (50000 paise = ₹500.00 > ₹350.00) -> MUST FAIL
+  await assertFails(
+    aliceDb.collection("withdrawal_requests").doc("req_exceeds_bal").set({
+      requestId: "req_exceeds_bal",
+      userId: ALICE_UID,
+      userName: "Alice",
+      amountCents: 50000,
+      method: "UPI ID",
+      status: "pending_demo",
+      isDemo: true,
+      createdAt: ts,
+    })
+  );
+
+  // 3. Attempting to store real banking or UPI details (accountNumber, ifscCode, upiId) -> MUST FAIL
+  await assertFails(
+    aliceDb.collection("withdrawal_requests").doc("req_with_pii").set({
+      requestId: "req_with_pii",
+      userId: ALICE_UID,
+      userName: "Alice",
+      amountCents: 20000,
+      method: "Bank Account",
+      accountNumber: "123456789012",
+      ifscCode: "SBIN0001234",
+      status: "pending_demo",
+      isDemo: true,
+      createdAt: ts,
+    })
+  );
+
+  // 4. Valid Demo Withdrawal Request (₹250.00 = 25000 paise via Bank Account, zero PII) -> MUST SUCCEED
+  await assertSucceeds(
+    aliceDb.collection("withdrawal_requests").doc("req_valid_bank").set({
+      requestId: "req_valid_bank",
+      userId: ALICE_UID,
+      userName: "Alice",
+      amountCents: 25000,
+      method: "Bank Account",
+      status: "pending_demo",
+      isDemo: true,
+      createdAt: ts,
+    })
+  );
+
+  // 5. Valid Demo Withdrawal Request (₹200.00 = 20000 paise via UPI ID, zero PII) -> MUST SUCCEED
+  await assertSucceeds(
+    aliceDb.collection("withdrawal_requests").doc("req_valid_upi").set({
+      requestId: "req_valid_upi",
+      userId: ALICE_UID,
+      userName: "Alice",
+      amountCents: 20000,
+      method: "UPI ID",
+      status: "pending_demo",
+      isDemo: true,
+      createdAt: ts,
+    })
+  );
+
+  // 6. Admin can read and list all demo withdrawal requests -> MUST SUCCEED
+  await assertSucceeds(adminDb.collection("withdrawal_requests").get());
+  await assertSucceeds(
+    adminDb.collection("withdrawal_requests").doc("req_valid_bank").get()
+  );
+});
+

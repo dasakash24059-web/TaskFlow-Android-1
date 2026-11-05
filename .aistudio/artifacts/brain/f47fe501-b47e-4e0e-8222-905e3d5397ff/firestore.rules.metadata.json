@@ -1,5 +1,5 @@
 {
-  "summary": "Final deployment-ready Cloud Firestore Security Rules for TaskFlow targeting the (default) database of project taskflow-8852d, including strict validation when clearing or setting assignedTaskId.",
-  "updatedAt": "2026-11-03T19:37:26.683024454Z",
+  "summary": "Zero-trust Firestore Security Rules for TaskFlow including safe demo-only withdrawal requests (/withdrawal_requests/{requestId}) that prohibit storing banking/UPI PII, enforce ₹200 minimum and balance limits, and preserve all existing task/submission rules.",
+  "updatedAt": "2026-11-05T15:07:36.679821982Z",
   "userFacing": true
 }

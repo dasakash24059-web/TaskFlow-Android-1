@@ -2,16 +2,22 @@ package com.example.ui.components
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Base64
 import android.widget.Toast
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -26,14 +32,22 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Android
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -42,22 +56,34 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.formatRewardInr
 import com.example.data.model.isValidTaskUrl
+import java.net.URI
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -84,11 +110,220 @@ fun openExternalTaskUrl(context: Context, rawUrl: String): Boolean {
   }
 }
 
+/**
+ * Extracts a clean display name for the target app or website when appName is not explicitly set.
+ */
+fun resolveAppOrWebsiteLabel(task: TaskItem): String {
+  if (task.appName.isNotBlank()) return task.appName.trim()
+  val link = task.taskLink.trim()
+  if (link.isNotEmpty()) {
+    if (link.contains("play.google.com", ignoreCase = true)) {
+      return "Google Play Store App"
+    }
+    val host = runCatching { URI(link).host?.removePrefix("www.") }.getOrNull()
+    if (!host.isNullOrBlank()) return host
+  }
+  return task.category.ifBlank { "Verified Platform Task" }
+}
+
+/**
+ * Clean, modern TaskFlow brand emblem rendered with Jetpack Compose Canvas.
+ */
+@Composable
+fun TaskFlowBrandLogo(
+  modifier: Modifier = Modifier,
+  size: Dp = 44.dp
+) {
+  Box(
+    modifier =
+      modifier
+        .size(size)
+        .clip(RoundedCornerShape(size * 0.28f))
+        .background(
+          Brush.linearGradient(
+            colors =
+              listOf(
+                Color(0xFF059669),
+                Color(0xFF0EA5E9),
+                Color(0xFF2563EB)
+              )
+          )
+        )
+        .border(
+          width = 1.dp,
+          color = Color.White.copy(alpha = 0.28f),
+          shape = RoundedCornerShape(size * 0.28f)
+        ),
+    contentAlignment = Alignment.Center
+  ) {
+    Canvas(modifier = Modifier.fillMaxSize().padding(size * 0.2f)) {
+      val w = this.size.width
+      val h = this.size.height
+
+      // Subtle top-left card layer
+      drawRoundRect(
+        color = Color.White.copy(alpha = 0.22f),
+        topLeft = Offset(w * 0.06f, h * 0.08f),
+        size = Size(w * 0.68f, h * 0.68f),
+        cornerRadius = CornerRadius(w * 0.16f, w * 0.16f)
+      )
+
+      // Checkmark + upward flow path
+      val checkPath =
+        Path().apply {
+          moveTo(w * 0.18f, h * 0.54f)
+          lineTo(w * 0.42f, h * 0.78f)
+          lineTo(w * 0.86f, h * 0.24f)
+        }
+      drawPath(
+        path = checkPath,
+        color = Color.White,
+        style =
+          Stroke(
+            width = w * 0.15f,
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round
+          )
+      )
+    }
+  }
+}
+
+/**
+ * Renders an image from an HTTPS URL, content:// URI, or inline data:image/...;base64,... string.
+ */
+@Composable
+fun ProofImageView(
+  imageSource: String,
+  contentDescription: String?,
+  modifier: Modifier = Modifier,
+  contentScale: ContentScale = ContentScale.Crop
+) {
+  val trimmed = imageSource.trim()
+  val decodedBitmap =
+    remember(trimmed) {
+      if (trimmed.startsWith("data:image/", ignoreCase = true) && trimmed.contains("base64,")) {
+        runCatching {
+          val base64Part = trimmed.substringAfter("base64,")
+          val bytes = Base64.decode(base64Part, Base64.DEFAULT)
+          BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        }.getOrNull()
+      } else {
+        null
+      }
+    }
+
+  if (decodedBitmap != null) {
+    Image(
+      bitmap = decodedBitmap,
+      contentDescription = contentDescription,
+      contentScale = contentScale,
+      modifier = modifier
+    )
+  } else {
+    AsyncImage(
+      model = trimmed,
+      contentDescription = contentDescription,
+      contentScale = contentScale,
+      modifier = modifier
+    )
+  }
+}
+
+/**
+ * Displays the task's App/Website Icon when available, or a polished category icon badge.
+ */
+@Composable
+fun AppIconThumbnail(
+  appIconUrl: String,
+  appName: String,
+  category: String,
+  modifier: Modifier = Modifier,
+  size: Dp = 48.dp
+) {
+  val cornerShape = RoundedCornerShape(size * 0.28f)
+  if (appIconUrl.isNotBlank()) {
+    Box(
+      modifier =
+        modifier
+          .size(size)
+          .clip(cornerShape)
+          .background(MaterialTheme.colorScheme.surfaceVariant)
+          .border(
+            width = 1.dp,
+            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+            shape = cornerShape
+          ),
+      contentAlignment = Alignment.Center
+    ) {
+      ProofImageView(
+        imageSource = appIconUrl,
+        contentDescription = appName.ifBlank { category },
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.fillMaxSize()
+      )
+    }
+  } else {
+    val catLower = category.lowercase(Locale.US)
+    val fallbackIcon =
+      when {
+        catLower.contains("app") || catLower.contains("install") || catLower.contains("mobile") ->
+          Icons.Default.Android
+        catLower.contains("web") || catLower.contains("visit") ->
+          Icons.Default.Language
+        catLower.contains("qa") || catLower.contains("test") ->
+          Icons.Default.BugReport
+        catLower.contains("doc") ->
+          Icons.Default.Description
+        else ->
+          Icons.AutoMirrored.Filled.FactCheck
+      }
+    Box(
+      modifier =
+        modifier
+          .size(size)
+          .clip(cornerShape)
+          .background(
+            Brush.linearGradient(
+              colors =
+                listOf(
+                  MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                  MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f)
+                )
+            )
+          )
+          .border(
+            width = 1.dp,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+            shape = cornerShape
+          ),
+      contentAlignment = Alignment.Center
+    ) {
+      val initial = appName.trim().firstOrNull()?.uppercaseChar()
+      if (initial != null) {
+        Text(
+          text = initial.toString(),
+          style = MaterialTheme.typography.titleLarge,
+          color = MaterialTheme.colorScheme.primary,
+          fontWeight = FontWeight.ExtraBold
+        )
+      } else {
+        Icon(
+          imageVector = fallbackIcon,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(size * 0.5f)
+        )
+      }
+    }
+  }
+}
+
 @Composable
 fun ClickableTaskLinkCard(
   url: String,
   modifier: Modifier = Modifier,
-  label: String = "TASK DESTINATION LINK",
+  label: String = "DOWNLOAD / WEBSITE LINK",
   testTag: String = "clickable_task_link",
   onLinkOpened: ((String) -> Unit)? = null
 ) {
@@ -199,8 +434,8 @@ fun FullSizeImageDialog(
               .background(MaterialTheme.colorScheme.surfaceVariant),
           contentAlignment = Alignment.Center
         ) {
-          AsyncImage(
-            model = imageUrl,
+          ProofImageView(
+            imageSource = imageUrl,
             contentDescription = "Full-size proof screenshot",
             contentScale = ContentScale.Fit,
             modifier =
@@ -216,8 +451,14 @@ fun FullSizeImageDialog(
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
         }
+        val displayUrl =
+          if (imageUrl.startsWith("data:image/")) {
+            "Inline Verified JPEG Screenshot (${imageUrl.length / 1024} KB)"
+          } else {
+            imageUrl
+          }
         Text(
-          text = "Image URL: $imageUrl",
+          text = "Image Source: $displayUrl",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           maxLines = 2,
@@ -302,19 +543,24 @@ fun StatusBadge(status: String, modifier: Modifier = Modifier) {
 fun RewardBadge(rewardCents: Long, modifier: Modifier = Modifier) {
   Surface(
     shape = RoundedCornerShape(10.dp),
-    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f),
+    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
     modifier = modifier
   ) {
     Text(
       text = formatRewardInr(rewardCents),
       style = MaterialTheme.typography.labelMedium,
       color = MaterialTheme.colorScheme.onPrimaryContainer,
-      fontWeight = FontWeight.Bold,
+      fontWeight = FontWeight.ExtraBold,
       modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
     )
   }
 }
 
+/**
+ * Professional Task Card for the User Dashboard & Tracking lists.
+ * Displays: App Icon/Image, Task Title, App/Website Name, Category, INR Reward, Status Badge,
+ * optional clickable URL, and a clear "Start Task" / "View Task" action button.
+ */
 @Composable
 fun TaskItemCard(
   task: TaskItem,
@@ -327,19 +573,57 @@ fun TaskItemCard(
     task.updatedAt?.toDate()?.let {
       SimpleDateFormat("MMM d, h:mm a", Locale.US).format(it)
     } ?: "Just now"
+  val appOrSiteLabel = resolveAppOrWebsiteLabel(task)
 
   Card(
     modifier =
       modifier
         .fillMaxWidth()
-        .clip(RoundedCornerShape(20.dp))
+        .clip(RoundedCornerShape(22.dp))
         .clickable(onClick = onClick)
         .testTag("task_card_${task.id}"),
-    shape = RoundedCornerShape(20.dp),
+    shape = RoundedCornerShape(22.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
   ) {
     Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
+      // Top Row: App Icon + Title + App/Website Name + INR Reward Badge
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+      ) {
+        AppIconThumbnail(
+          appIconUrl = task.appIconUrl,
+          appName = task.appName,
+          category = task.category,
+          size = 52.dp
+        )
+
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = task.title,
+            style = MaterialTheme.typography.titleLarge,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+          )
+          Spacer(modifier = Modifier.height(2.dp))
+          Text(
+            text = appOrSiteLabel,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+          )
+        }
+
+        RewardBadge(rewardCents = task.rewardCents)
+      }
+
+      Spacer(modifier = Modifier.height(12.dp))
+
+      // Category & Status Row
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -353,28 +637,14 @@ fun TaskItemCard(
             text = task.category.uppercase(Locale.US),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSecondaryContainer,
+            fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
           )
         }
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-          RewardBadge(rewardCents = task.rewardCents)
-          StatusBadge(status = task.status)
-        }
+        StatusBadge(status = task.status)
       }
 
-      Spacer(modifier = Modifier.height(12.dp))
-
-      Text(
-        text = task.title,
-        style = MaterialTheme.typography.titleLarge,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis
-      )
-
-      Spacer(modifier = Modifier.height(6.dp))
+      Spacer(modifier = Modifier.height(10.dp))
 
       Text(
         text = task.description,
@@ -388,7 +658,7 @@ fun TaskItemCard(
         Spacer(modifier = Modifier.height(10.dp))
         ClickableTaskLinkCard(
           url = task.taskLink,
-          label = "TASK LINK",
+          label = "DOWNLOAD / WEBSITE LINK",
           testTag = "task_card_link_${task.id}"
         )
       }
@@ -396,7 +666,7 @@ fun TaskItemCard(
       if (showProofPreview && task.proofText.isNotBlank()) {
         Spacer(modifier = Modifier.height(10.dp))
         Surface(
-          shape = RoundedCornerShape(10.dp),
+          shape = RoundedCornerShape(12.dp),
           color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
           modifier = Modifier.fillMaxWidth()
         ) {
@@ -406,9 +676,10 @@ fun TaskItemCard(
               horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
               Text(
-                text = "SUBMITTED PROOF (TEXT + PHOTO)",
+                text = "SUBMITTED PROOF (TEXT + SCREENSHOT)",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
               )
               if (task.proofImageUrl.isNotBlank()) {
                 Icon(
@@ -419,6 +690,7 @@ fun TaskItemCard(
                 )
               }
             }
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
               text = task.proofText,
               style = MaterialTheme.typography.bodyMedium,
@@ -429,7 +701,7 @@ fun TaskItemCard(
         }
       }
 
-      Spacer(modifier = Modifier.height(12.dp))
+      Spacer(modifier = Modifier.height(14.dp))
 
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -439,27 +711,53 @@ fun TaskItemCard(
         Text(
           text =
             if (showAssignee) {
-              "Assigned: ${task.assignedUserName} • $dateStr"
+              "Participant: ${task.assignedUserName} • $dateStr"
             } else {
               "Updated $dateStr"
             },
           style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.weight(1f)
         )
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp)
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        Button(
+          onClick = onClick,
+          shape = RoundedCornerShape(12.dp),
+          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor =
+                if (task.status == TaskStatus.PENDING) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.secondaryContainer
+                },
+              contentColor =
+                if (task.status == TaskStatus.PENDING) {
+                  MaterialTheme.colorScheme.onPrimary
+                } else {
+                  MaterialTheme.colorScheme.onSecondaryContainer
+                }
+            ),
+          modifier = Modifier.testTag("start_or_view_task_button_${task.id}")
         ) {
-          Text(
-            text = if (task.status == TaskStatus.PENDING) "Submit Proof" else "Details",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary
-          )
           Icon(
-            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+            imageVector =
+              if (task.status == TaskStatus.PENDING) {
+                Icons.Default.PlayArrow
+              } else {
+                Icons.AutoMirrored.Filled.ArrowForward
+              },
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(16.dp)
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(
+            text = if (task.status == TaskStatus.PENDING) "Start Task" else "View Task",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold
           )
         }
       }
@@ -514,8 +812,8 @@ fun FirebaseConfigSecurityDialog(
           title = "2. Enforced Zero-Trust Security Rules",
           body =
             "• Users cannot modify their own role, approvalStatus, or balanceCents.\n" +
-              "• Task proof submissions require BOTH written text proof and an uploaded gallery photo/screenshot, and are locked once status leaves 'pending'.\n" +
-              "• Firebase Storage rules restrict proof uploads to the authenticated user and limit read access to the submitting user and verified Admins.\n" +
+              "• Task proof submissions require BOTH written text proof and an uploaded gallery photo/screenshot, and are locked once status leaves 'Available'.\n" +
+              "• Any active authenticated user can complete open tasks and submit proof; Admin approval credits the submitting user's INR wallet once.\n" +
               "• PII isolation prevents non-admin users from reading other users' profiles."
         )
         ConfigSection(

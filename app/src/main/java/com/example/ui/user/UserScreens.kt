@@ -31,6 +31,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Assignment
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AddPhotoAlternate
@@ -38,7 +39,11 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
@@ -74,10 +79,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.R
@@ -86,11 +93,16 @@ import com.example.data.model.TaskStatus
 import com.example.data.model.UserProfile
 import com.example.data.model.formatRewardInr
 import com.example.data.model.formatVisibleUserEmail
+import com.example.ui.components.AppIconThumbnail
 import com.example.ui.components.ClickableTaskLinkCard
 import com.example.ui.components.FullSizeImageDialog
+import com.example.ui.components.ProofImageView
 import com.example.ui.components.RewardBadge
 import com.example.ui.components.StatusBadge
+import com.example.ui.components.TaskFlowBrandLogo
 import com.example.ui.components.TaskItemCard
+import com.example.ui.components.openExternalTaskUrl
+import com.example.ui.components.resolveAppOrWebsiteLabel
 import com.example.ui.viewmodel.UiState
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -108,7 +120,7 @@ fun UserHomeScreen(
   val currentUserId = profile?.userId?.ifBlank { profile.id } ?: ""
   val tasks = (tasksState as? UiState.Success)?.data ?: emptyList()
 
-  // Currently assigned task: prioritize the highlighted assignedTaskId if pending, or most recent pending task
+  // Highlighted task: prioritize the highlighted assignedTaskId if pending, or most recent pending task
   val currentlyAssignedTask =
     remember(tasks, profile?.assignedTaskId) {
       tasks.firstOrNull {
@@ -127,26 +139,31 @@ fun UserHomeScreen(
     contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
     verticalArrangement = Arrangement.spacedBy(18.dp)
   ) {
-    // 1. User Balance & Greeting Hero Banner
+    // 1. Branded TaskFlow Header, Welcome & INR Wallet Balance Hero Card
     item {
       Box(
         modifier =
           Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(26.dp))
             .background(
               Brush.linearGradient(
                 colors =
                   listOf(
-                    Color(0xFF0B132B),
-                    Color(0xFF1C2541),
-                    Color(0xFF064E3B)
+                    Color(0xFF4C1D95),
+                    Color(0xFF6D28D9),
+                    Color(0xFF7C3AED)
                   )
               )
+            )
+            .border(
+              width = 1.dp,
+              color = Color(0xFFC4B5FD).copy(alpha = 0.35f),
+              shape = RoundedCornerShape(26.dp)
             )
       ) {
         Canvas(modifier = Modifier.matchParentSize()) {
           drawCircle(
-            color = Color(0xFF34D399).copy(alpha = 0.14f),
+            color = Color.White.copy(alpha = 0.10f),
             radius = size.height * 0.7f,
             center = Offset(size.width * 0.9f, size.height * 0.15f)
           )
@@ -157,22 +174,38 @@ fun UserHomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
           ) {
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = "WELCOME BACK",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF34D399)
-              )
-              Spacer(modifier = Modifier.height(4.dp))
-              Text(
-                text = profile?.displayName?.ifBlank { "TaskFlow Member" } ?: "TaskFlow Member",
-                style = MaterialTheme.typography.headlineMedium,
-                color = Color.White
-              )
+            Row(
+              modifier = Modifier.weight(1f),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+              TaskFlowBrandLogo(size = 44.dp)
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "TASKFLOW USER PORTAL",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFFEDE9FE),
+                  fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                  text = profile?.displayName?.ifBlank { "TaskFlow Member" } ?: "TaskFlow Member",
+                  style = MaterialTheme.typography.headlineMedium,
+                  color = Color.White,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+              }
             }
             Surface(
               shape = RoundedCornerShape(16.dp),
-              color = Color.White.copy(alpha = 0.1f)
+              color = Color.White.copy(alpha = 0.15f),
+              modifier =
+                Modifier.border(
+                  1.dp,
+                  Color.White.copy(alpha = 0.30f),
+                  RoundedCornerShape(16.dp)
+                )
             ) {
               Row(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -181,15 +214,15 @@ fun UserHomeScreen(
               ) {
                 Icon(
                   imageVector = Icons.Default.AccountBalanceWallet,
-                  contentDescription = "Balance",
-                  tint = Color(0xFF34D399),
+                  contentDescription = "Wallet Balance",
+                  tint = Color.White,
                   modifier = Modifier.size(20.dp)
                 )
                 Column {
                   Text(
-                    text = "EARNED REWARDS",
+                    text = "WALLET (INR)",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF94A3B8)
+                    color = Color(0xFFEDE9FE)
                   )
                   Text(
                     text = formatRewardInr(profile?.balanceCents ?: 0L),
@@ -204,20 +237,20 @@ fun UserHomeScreen(
 
           Spacer(modifier = Modifier.height(18.dp))
 
-          // 4 Status Pills inside Hero
+          // 4 Status Summary Pills inside Hero
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
           ) {
             QuickStatChip(
-              label = "Pending",
+              label = "Available",
               count = pendingCount,
               color = Color(0xFFFBBF24),
               onClick = { onNavigateToTracking(TaskStatus.PENDING) },
               modifier = Modifier.weight(1f)
             )
             QuickStatChip(
-              label = "Submitted",
+              label = "Pending",
               count = submittedCount,
               color = Color(0xFF38BDF8),
               onClick = { onNavigateToTracking(TaskStatus.SUBMITTED) },
@@ -242,7 +275,7 @@ fun UserHomeScreen(
       }
     }
 
-    // 2. Currently Assigned Task Section
+    // 2. Featured / Currently Assigned Task Section
     item {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -306,13 +339,13 @@ fun UserHomeScreen(
           }
         }
 
-        // Additional Assigned Tasks List (if more than 1)
+        // Additional Available & Completed Tasks List
         val otherTasks = tasks.filter { it.id != currentlyAssignedTask?.id }
         if (otherTasks.isNotEmpty()) {
           item {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-              text = "Other Assigned Tasks",
+              text = "All Platform Tasks (${otherTasks.size})",
               style = MaterialTheme.typography.titleMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -369,6 +402,8 @@ private fun HighlightedAssignedTaskCard(
   task: TaskItem,
   onOpenTask: () -> Unit
 ) {
+  val appOrSiteLabel = resolveAppOrWebsiteLabel(task)
+
   Card(
     modifier =
       Modifier.fillMaxWidth()
@@ -394,17 +429,42 @@ private fun HighlightedAssignedTaskCard(
 
       Spacer(modifier = Modifier.height(14.dp))
 
-      Text(
-        text = task.category.uppercase(Locale.US),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.secondary
-      )
-      Spacer(modifier = Modifier.height(4.dp))
-      Text(
-        text = task.title,
-        style = MaterialTheme.typography.headlineMedium
-      )
-      Spacer(modifier = Modifier.height(8.dp))
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+      ) {
+        AppIconThumbnail(
+          appIconUrl = task.appIconUrl,
+          appName = task.appName,
+          category = task.category,
+          size = 56.dp
+        )
+
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = task.category.uppercase(Locale.US),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.secondary,
+            fontWeight = FontWeight.Bold
+          )
+          Spacer(modifier = Modifier.height(2.dp))
+          Text(
+            text = task.title,
+            style = MaterialTheme.typography.headlineMedium
+          )
+          Spacer(modifier = Modifier.height(2.dp))
+          Text(
+            text = appOrSiteLabel,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold
+          )
+        }
+      }
+
+      Spacer(modifier = Modifier.height(10.dp))
+
       Text(
         text = task.description,
         style = MaterialTheme.typography.bodyLarge,
@@ -420,7 +480,7 @@ private fun HighlightedAssignedTaskCard(
         )
       }
 
-      Spacer(modifier = Modifier.height(20.dp))
+      Spacer(modifier = Modifier.height(18.dp))
 
       Button(
         onClick = onOpenTask,
@@ -432,7 +492,7 @@ private fun HighlightedAssignedTaskCard(
       ) {
         Icon(
           imageVector =
-            if (task.status == TaskStatus.PENDING) Icons.AutoMirrored.Filled.Send else Icons.Default.TaskAlt,
+            if (task.status == TaskStatus.PENDING) Icons.Default.PlayArrow else Icons.Default.TaskAlt,
           contentDescription = null,
           modifier = Modifier.size(18.dp)
         )
@@ -440,10 +500,11 @@ private fun HighlightedAssignedTaskCard(
         Text(
           text =
             if (task.status == TaskStatus.PENDING) {
-              "View Details & Submit Proof"
+              "Start Task & Submit Proof"
             } else {
-              "View Submission Status"
-            }
+              "View Task & Submission Status"
+            },
+          fontWeight = FontWeight.Bold
         )
       }
     }
@@ -504,13 +565,25 @@ private fun EmptyAssignedTaskCard(
             modifier = Modifier.size(18.dp)
           )
           Spacer(modifier = Modifier.width(8.dp))
-          Text("Open Admin Dashboard to Create & Assign a Task")
+          Text("Open Admin Dashboard to Create & Publish a Task")
         }
       }
     }
   }
 }
 
+/**
+ * Dedicated Task Details Screen with 9 clearly separated sections:
+ * 1. Task Overview
+ * 2. App or Website Information
+ * 3. App Icon or Image (when available)
+ * 4. Reward Amount (INR ₹)
+ * 5. Download or Website Link
+ * 6. Step-by-Step Instructions
+ * 7. Required Proof Details
+ * 8. Start Task / Open Link Action
+ * 9. Submit Proof Section (Mandatory Written Text + Mandatory Gallery Screenshot)
+ */
 @Composable
 fun UserTaskDetailScreen(
   task: TaskItem,
@@ -520,15 +593,18 @@ fun UserTaskDetailScreen(
   userApprovalStatus: String = "approved",
   currentUserId: String = "",
   uploadProgress: Int? = null,
+  submissionError: String? = null,
   initialSelectedImageUri: Uri? = null
 ) {
   BackHandler(onBack = onBack)
 
-  val isUserApproved = userApprovalStatus == "approved"
+  val context = LocalContext.current
+  val isUserActive = userApprovalStatus != "suspended"
   val isTaskOwnerOrUnspecified = currentUserId.isBlank() || task.assignedUserId == currentUserId
+  val appOrWebsiteName = resolveAppOrWebsiteLabel(task)
 
   var proofInput by rememberSaveable(task.id) {
-    mutableStateOf(if (isTaskOwnerOrUnspecified) task.proofText else "")
+    mutableStateOf(if (isTaskOwnerOrUnspecified && task.status != TaskStatus.PENDING) task.proofText else "")
   }
   var selectedImageUriString by rememberSaveable(task.id) {
     mutableStateOf(initialSelectedImageUri?.toString())
@@ -548,7 +624,7 @@ fun UserTaskDetailScreen(
   val createdDateStr =
     task.createdAt?.toDate()?.let {
       SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
-    } ?: "Recently assigned"
+    } ?: "Recently published"
 
   if (showFullSizeSubmittedImage && task.proofImageUrl.isNotBlank()) {
     FullSizeImageDialog(
@@ -566,7 +642,7 @@ fun UserTaskDetailScreen(
         .padding(horizontal = 18.dp, vertical = 14.dp),
     verticalArrangement = Arrangement.spacedBy(16.dp)
   ) {
-    // Back Row
+    // Top Back Navigation Bar
     Row(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -580,13 +656,20 @@ fun UserTaskDetailScreen(
           contentDescription = "Back to tasks"
         )
       }
-      Text(
-        text = "Task Details & Proof",
-        style = MaterialTheme.typography.titleLarge
-      )
+      Column {
+        Text(
+          text = "Task Details & Proof Submission",
+          style = MaterialTheme.typography.titleLarge
+        )
+        Text(
+          text = "Complete every step below and submit written + screenshot proof",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      }
     }
 
-    // Header Card: Title, Category, Reward Amount (INR ₹), Description, Step-by-step Instructions, Clickable Link
+    // Hero Card: Sections 2 (App/Website Info), 3 (App Icon/Image), and 4 (Reward Amount INR ₹)
     Card(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(24.dp),
@@ -600,33 +683,81 @@ fun UserTaskDetailScreen(
           verticalAlignment = Alignment.CenterVertically
         ) {
           StatusBadge(status = task.status)
-          RewardBadge(rewardCents = task.rewardCents)
+          // Section 4: Reward Amount (INR ₹)
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier.testTag("task_detail_reward_section")
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              Text(
+                text = "REWARD:",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+              )
+              Text(
+                text = formatRewardInr(task.rewardCents),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                fontWeight = FontWeight.ExtraBold
+              )
+            }
+          }
         }
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        Text(
-          text = task.category.uppercase(Locale.US),
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.secondary,
-          modifier = Modifier.testTag("task_detail_category")
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-          text = task.title,
-          style = MaterialTheme.typography.headlineMedium,
-          modifier = Modifier.testTag("task_detail_title")
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-          text = "Assigned to ${task.assignedUserName} • $createdDateStr",
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Task Description
+        // Sections 2 & 3: App Icon/Image + App/Website Information & Task Title
+        Row(
+          modifier = Modifier.fillMaxWidth().testTag("task_detail_app_info_section"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+          AppIconThumbnail(
+            appIconUrl = task.appIconUrl,
+            appName = task.appName,
+            category = task.category,
+            size = 64.dp,
+            modifier = Modifier.testTag("task_detail_app_icon")
+          )
+
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = task.category.uppercase(Locale.US),
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.secondary,
+              fontWeight = FontWeight.Bold,
+              modifier = Modifier.testTag("task_detail_category")
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = task.title,
+              style = MaterialTheme.typography.headlineMedium,
+              modifier = Modifier.testTag("task_detail_title")
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = "App / Website: $appOrWebsiteName",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.primary,
+              fontWeight = FontWeight.SemiBold,
+              modifier = Modifier.testTag("task_detail_app_name")
+            )
+            Text(
+              text = "Published $createdDateStr",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // Section 1: Task Overview
         Surface(
           shape = RoundedCornerShape(16.dp),
           color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
@@ -634,7 +765,7 @@ fun UserTaskDetailScreen(
         ) {
           Column(modifier = Modifier.padding(16.dp)) {
             Text(
-              text = "TASK DESCRIPTION",
+              text = "1. TASK OVERVIEW",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.primary,
               fontWeight = FontWeight.Bold
@@ -650,7 +781,7 @@ fun UserTaskDetailScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Step-by-Step Instructions
+        // Section 6: Step-by-Step Instructions
         Surface(
           shape = RoundedCornerShape(16.dp),
           color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
@@ -658,33 +789,106 @@ fun UserTaskDetailScreen(
         ) {
           Column(modifier = Modifier.padding(16.dp)) {
             Text(
-              text = "STEP-BY-STEP INSTRUCTIONS",
+              text = "2. STEP-BY-STEP INSTRUCTIONS",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.primary,
               fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(8.dp))
+            val rawInstructions = task.instructions.ifBlank { task.description }
             Text(
-              text = task.instructions.ifBlank { task.description },
+              text = rawInstructions,
               style = MaterialTheme.typography.bodyLarge,
               modifier = Modifier.testTag("task_detail_instructions")
             )
           }
         }
 
-        // Clickable Task Link
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Section 7: Required Proof Details
+        val requiredProofText =
+          task.requiredProof.ifBlank {
+            "Submit (1) written confirmation notes describing your completion and (2) a clear Gallery screenshot showing the completed task screen."
+          }
+        Surface(
+          shape = RoundedCornerShape(16.dp),
+          color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f),
+          modifier =
+            Modifier.fillMaxWidth()
+              .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f),
+                shape = RoundedCornerShape(16.dp)
+              )
+              .testTag("task_detail_required_proof_section")
+        ) {
+          Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.FactCheck,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.size(16.dp)
+              )
+              Text(
+                text = "3. REQUIRED PROOF DETAILS",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.secondary,
+                fontWeight = FontWeight.Bold
+              )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+              text = requiredProofText,
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.testTag("task_detail_required_proof_text")
+            )
+          }
+        }
+
+        // Sections 5 & 8: Download or Website Link + Start Task / Open Link Action
         if (task.taskLink.isNotBlank()) {
           Spacer(modifier = Modifier.height(14.dp))
           ClickableTaskLinkCard(
             url = task.taskLink,
-            label = "CLICKABLE TASK LINK (TAP TO OPEN)",
+            label = "4. DOWNLOAD OR WEBSITE LINK (TAP TO OPEN)",
             testTag = "task_detail_clickable_link"
           )
+          Spacer(modifier = Modifier.height(10.dp))
+          Button(
+            onClick = { openExternalTaskUrl(context, task.taskLink) },
+            shape = RoundedCornerShape(14.dp),
+            colors =
+              ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.secondary,
+                contentColor = MaterialTheme.colorScheme.onSecondary
+              ),
+            modifier =
+              Modifier.fillMaxWidth()
+                .height(48.dp)
+                .testTag("start_task_open_link_button")
+          ) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+              text = "Start Task / Open Destination Link",
+              fontWeight = FontWeight.Bold
+            )
+          }
         }
       }
     }
 
-    // Admin Review Feedback Card (if present)
+    // Admin Review Feedback Card (if task was reviewed)
     if (task.adminFeedback.isNotBlank() || task.status == TaskStatus.APPROVED || task.status == TaskStatus.REJECTED) {
       Card(
         modifier = Modifier.fillMaxWidth(),
@@ -713,7 +917,8 @@ fun UserTaskDetailScreen(
                 MaterialTheme.colorScheme.primary
               } else {
                 MaterialTheme.colorScheme.error
-              }
+              },
+            fontWeight = FontWeight.Bold
           )
           if (task.adminFeedback.isNotBlank()) {
             Spacer(modifier = Modifier.height(6.dp))
@@ -726,13 +931,13 @@ fun UserTaskDetailScreen(
       }
     }
 
-    // Mandatory Text + Photo Proof Submission Section
+    // Section 9: Mandatory Text + Photo Proof Submission Section
     val hasValidTextProof = proofInput.trim().isNotEmpty()
     val hasSelectedPhoto = selectedImageUri != null
     val canSubmitProof =
       task.status == TaskStatus.PENDING &&
         !isBusy &&
-        isUserApproved &&
+        isUserActive &&
         hasValidTextProof &&
         hasSelectedPhoto
 
@@ -752,15 +957,15 @@ fun UserTaskDetailScreen(
           text =
             when {
               task.status != TaskStatus.PENDING ->
-                "This task is currently ${TaskStatus.label(task.status)}. Submitted text and photo proof are locked against further edits."
-              !isUserApproved ->
-                "Your account status is currently '${userApprovalStatus.uppercase(Locale.US)}'. An administrator must approve your user profile before you can submit task proof."
+                "This task is currently ${TaskStatus.label(task.status)}. Submitted text and screenshot proof are locked for Admin verification."
+              !isUserActive ->
+                "Your account is currently suspended and cannot submit task proof."
               else ->
                 "Mandatory Requirement: You MUST provide BOTH (1) Written text proof AND (2) At least one photo or screenshot selected from your phone Gallery."
             },
           style = MaterialTheme.typography.bodyMedium,
           color =
-            if (task.status == TaskStatus.PENDING && !isUserApproved) {
+            if (task.status == TaskStatus.PENDING && !isUserActive) {
               MaterialTheme.colorScheme.error
             } else {
               MaterialTheme.colorScheme.onSurfaceVariant
@@ -789,7 +994,7 @@ fun UserTaskDetailScreen(
         OutlinedTextField(
           value = displayedProofText,
           onValueChange = { if (task.status == TaskStatus.PENDING) proofInput = it },
-          enabled = task.status == TaskStatus.PENDING && isUserApproved && !isBusy,
+          enabled = task.status == TaskStatus.PENDING && isUserActive && !isBusy,
           label = { Text("Completion Proof Text") },
           placeholder = { Text(stringResource(R.string.submit_proof_hint)) },
           minLines = 4,
@@ -826,7 +1031,7 @@ fun UserTaskDetailScreen(
                   PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                 )
               },
-              enabled = isUserApproved && !isBusy,
+              enabled = isUserActive && !isBusy,
               shape = RoundedCornerShape(14.dp),
               modifier =
                 Modifier.fillMaxWidth()
@@ -963,10 +1168,37 @@ fun UserTaskDetailScreen(
                 modifier = Modifier.fillMaxWidth()
               )
               Text(
-                text = "Uploading screenshot to Firebase Storage… ${uploadProgress.coerceIn(0, 100)}%",
+                text = "Uploading & saving proof submission… ${uploadProgress.coerceIn(0, 100)}%",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary
               )
+            }
+          }
+
+          if (!submissionError.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(14.dp))
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = MaterialTheme.colorScheme.errorContainer,
+              modifier = Modifier.fillMaxWidth().testTag("submission_error_card")
+            ) {
+              Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Default.ErrorOutline,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.onErrorContainer,
+                  modifier = Modifier.size(18.dp)
+                )
+                Text(
+                  text = submissionError,
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = MaterialTheme.colorScheme.onErrorContainer
+                )
+              }
             }
           }
 
@@ -1015,8 +1247,8 @@ fun UserTaskDetailScreen(
                       .clickable { showFullSizeSubmittedImage = true },
                   contentAlignment = Alignment.Center
                 ) {
-                  AsyncImage(
-                    model = task.proofImageUrl,
+                  ProofImageView(
+                    imageSource = task.proofImageUrl,
                     contentDescription = "Submitted proof screenshot",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
@@ -1106,20 +1338,20 @@ fun UserTrackingScreen(
   val filters =
     listOf(
       "all" to "All (${tasks.size})",
-      TaskStatus.PENDING to "Pending (${tasks.count { it.status == TaskStatus.PENDING }})",
-      TaskStatus.SUBMITTED to "Submitted (${tasks.count { it.status == TaskStatus.SUBMITTED }})",
+      TaskStatus.PENDING to "Available (${tasks.count { it.status == TaskStatus.PENDING }})",
+      TaskStatus.SUBMITTED to "Pending Review (${tasks.count { it.status == TaskStatus.SUBMITTED }})",
       TaskStatus.APPROVED to "Approved (${tasks.count { it.status == TaskStatus.APPROVED }})",
       TaskStatus.REJECTED to "Rejected (${tasks.count { it.status == TaskStatus.REJECTED }})"
     )
 
   Column(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp)) {
     Text(
-      text = "Task Status Tracking",
+      text = "Task Status & Submissions",
       style = MaterialTheme.typography.headlineMedium
     )
     Spacer(modifier = Modifier.height(4.dp))
     Text(
-      text = "Real-time Firestore pipeline across Pending, Submitted, Approved, and Rejected tasks.",
+      text = "Real-time Firestore pipeline across Available, Pending Review, Approved, and Rejected tasks.",
       style = MaterialTheme.typography.bodyMedium,
       color = MaterialTheme.colorScheme.onSurfaceVariant
     )
@@ -1188,282 +1420,6 @@ fun UserTrackingScreen(
           )
         }
       }
-    }
-  }
-}
-
-@Composable
-fun UserProfileScreen(
-  profileState: UiState<UserProfile?>,
-  tasksState: UiState<List<TaskItem>>,
-  userEmail: String,
-  userUid: String,
-  onUpdateDisplayName: (String) -> Unit,
-  onOpenSecurityInfo: () -> Unit,
-  onSelectTask: (String) -> Unit,
-  onSignOut: () -> Unit
-) {
-  val profile = (profileState as? UiState.Success)?.data
-  val tasks = (tasksState as? UiState.Success)?.data ?: emptyList()
-  var showEditNameDialog by remember { mutableStateOf(false) }
-  var editedName by remember(profile?.displayName) {
-    mutableStateOf(profile?.displayName ?: "")
-  }
-
-  if (showEditNameDialog) {
-    AlertDialog(
-      onDismissRequest = { showEditNameDialog = false },
-      title = { Text("Update Display Name") },
-      text = {
-        OutlinedTextField(
-          value = editedName,
-          onValueChange = { editedName = it },
-          label = { Text("Display Name") },
-          singleLine = true,
-          modifier = Modifier.fillMaxWidth().testTag("edit_display_name_input")
-        )
-      },
-      confirmButton = {
-        TextButton(
-          onClick = {
-            onUpdateDisplayName(editedName)
-            showEditNameDialog = false
-          },
-          modifier = Modifier.testTag("save_display_name_button")
-        ) {
-          Text("Save")
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { showEditNameDialog = false }) {
-          Text("Cancel")
-        }
-      }
-    )
-  }
-
-  LazyColumn(
-    modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
-    verticalArrangement = Arrangement.spacedBy(16.dp)
-  ) {
-    // Profile Header Card
-    item {
-      Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-      ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(22.dp)) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-          ) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(14.dp),
-              modifier = Modifier.weight(1f)
-            ) {
-              Box(
-                modifier =
-                  Modifier.size(56.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-              ) {
-                Text(
-                  text =
-                    (profile?.displayName?.firstOrNull() ?: userEmail.firstOrNull() ?: 'U')
-                      .uppercaseChar()
-                      .toString(),
-                  style = MaterialTheme.typography.headlineMedium,
-                  color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-              }
-              Column {
-                Text(
-                  text = profile?.displayName?.ifBlank { "TaskFlow User" } ?: "TaskFlow User",
-                  style = MaterialTheme.typography.titleLarge
-                )
-                Text(
-                  text =
-                    formatVisibleUserEmail(
-                      email = profile?.email?.ifBlank { userEmail } ?: userEmail,
-                      role = profile?.role
-                    ),
-                  style = MaterialTheme.typography.bodyMedium,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-              }
-            }
-            IconButton(
-              onClick = {
-                editedName = profile?.displayName ?: ""
-                showEditNameDialog = true
-              },
-              modifier = Modifier.testTag("edit_profile_name_button")
-            ) {
-              Icon(
-                imageVector = Icons.Default.Edit,
-                contentDescription = "Edit Display Name"
-              )
-            }
-          }
-
-          Spacer(modifier = Modifier.height(18.dp))
-
-          // Role, Approval Status, Balance Row
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-          ) {
-            ProfileMetricBox(
-              label = "EARNED BALANCE",
-              value = formatRewardInr(profile?.balanceCents ?: 0L),
-              modifier = Modifier.weight(1f)
-            )
-            ProfileMetricBox(
-              label = "COMPLETED",
-              value = "${profile?.completedTasksCount ?: 0L} Tasks",
-              modifier = Modifier.weight(1f)
-            )
-            ProfileMetricBox(
-              label = "ROLE / STATUS",
-              value =
-                "${(profile?.role ?: "user").uppercase(Locale.US)} • ${(profile?.approvalStatus ?: "pending").uppercase(Locale.US)}",
-              modifier = Modifier.weight(1.2f)
-            )
-          }
-
-          Spacer(modifier = Modifier.height(14.dp))
-
-          Text(
-            text = "UID: $userUid",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-          )
-
-          Spacer(modifier = Modifier.height(16.dp))
-
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-          ) {
-            OutlinedButton(
-              onClick = onOpenSecurityInfo,
-              shape = RoundedCornerShape(12.dp),
-              modifier = Modifier.weight(1f).testTag("open_security_info_button")
-            ) {
-              Icon(
-                imageVector = Icons.Default.Shield,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp)
-              )
-              Spacer(modifier = Modifier.width(6.dp))
-              Text("Firebase Config")
-            }
-            OutlinedButton(
-              onClick = onSignOut,
-              shape = RoundedCornerShape(12.dp),
-              colors =
-                ButtonDefaults.outlinedButtonColors(
-                  contentColor = MaterialTheme.colorScheme.error
-                ),
-              modifier = Modifier.weight(1f).testTag("sign_out_button")
-            ) {
-              Text(stringResource(R.string.sign_out))
-            }
-          }
-        }
-      }
-    }
-
-    // Task History Section
-    item {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Text(
-          text = "Task History (${tasks.size})",
-          style = MaterialTheme.typography.titleLarge
-        )
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-          Icon(
-            imageVector = Icons.Default.CheckCircle,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(16.dp)
-          )
-          Text(
-            text = "${tasks.count { it.status == TaskStatus.APPROVED }} Approved",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary
-          )
-        }
-      }
-    }
-
-    if (tasks.isEmpty()) {
-      item {
-        Surface(
-          shape = RoundedCornerShape(20.dp),
-          color = MaterialTheme.colorScheme.surface,
-          modifier = Modifier.fillMaxWidth()
-        ) {
-          Text(
-            text = "No task history yet. Assigned and completed tasks will be recorded here.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(24.dp),
-            textAlign = TextAlign.Center
-          )
-        }
-      }
-    } else {
-      items(tasks, key = { it.id }) { task ->
-        TaskItemCard(
-          task = task,
-          onClick = { onSelectTask(task.id) },
-          showProofPreview = userUid.isNotBlank() && task.assignedUserId == userUid
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun ProfileMetricBox(
-  label: String,
-  value: String,
-  modifier: Modifier = Modifier
-) {
-  Surface(
-    shape = RoundedCornerShape(14.dp),
-    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-    modifier = modifier
-  ) {
-    Column(
-      modifier = Modifier.padding(12.dp),
-      horizontalAlignment = Alignment.Start
-    ) {
-      Text(
-        text = label,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-      )
-      Spacer(modifier = Modifier.height(4.dp))
-      Text(
-        text = value,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.Bold
-      )
     }
   }
 }
