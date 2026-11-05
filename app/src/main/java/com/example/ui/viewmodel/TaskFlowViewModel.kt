@@ -1,11 +1,13 @@
 package com.example.ui.viewmodel
 
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.TaskItem
 import com.example.data.model.UserProfile
+import com.example.data.model.isValidTaskUrl
 import com.example.data.repository.TaskFlowRepository
 import com.example.ui.auth.PortalLoginTarget
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -74,6 +76,9 @@ class TaskFlowViewModel(
 
   private val _isBusy = MutableStateFlow(false)
   val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
+
+  private val _uploadProgress = MutableStateFlow<Int?>(null)
+  val uploadProgress: StateFlow<Int?> = _uploadProgress.asStateFlow()
 
   private val _showSecuritySheet = MutableStateFlow(false)
   val showSecuritySheet: StateFlow<Boolean> = _showSecuritySheet.asStateFlow()
@@ -195,22 +200,47 @@ class TaskFlowViewModel(
     _bannerMessage.value = null
   }
 
-  fun submitProof(task: TaskItem, proofText: String, onSuccess: () -> Unit = {}) {
+  fun submitProof(
+    task: TaskItem,
+    proofText: String,
+    imageUri: Uri?,
+    onSuccess: () -> Unit = {}
+  ) {
+    if (proofText.isBlank() && imageUri == null) {
+      _bannerMessage.value =
+        "Both written text proof and a photo/screenshot from your Gallery are mandatory."
+      return
+    }
     if (proofText.isBlank()) {
-      _bannerMessage.value = "Please enter your text proof before submitting."
+      _bannerMessage.value =
+        "Written text proof is mandatory. Text-only or photo-only submissions are not allowed."
+      return
+    }
+    if (imageUri == null) {
+      _bannerMessage.value =
+        "At least one photo or screenshot from your Gallery is mandatory."
       return
     }
     viewModelScope.launch {
       _isBusy.value = true
-      val result = repository.submitTaskProof(task, proofText)
+      _uploadProgress.value = 0
+      val result =
+        repository.submitTaskProof(
+          task = task,
+          proofText = proofText,
+          imageUri = imageUri,
+          onUploadProgress = { pct -> _uploadProgress.value = pct }
+        )
+      _uploadProgress.value = null
       _isBusy.value = false
       result
         .onSuccess {
-          _bannerMessage.value = "Task proof saved to submissions & status updated to Submitted!"
+          _bannerMessage.value =
+            "Photo uploaded to Firebase Storage & task proof submitted for review!"
           onSuccess()
         }
         .onFailure { e ->
-          _bannerMessage.value = e.localizedMessage ?: "Failed to submit task proof."
+          _bannerMessage.value = e.localizedMessage ?: "Failed to upload and submit task proof."
         }
     }
   }
@@ -236,11 +266,18 @@ class TaskFlowViewModel(
     category: String,
     rewardAmountInr: String,
     assignedUser: UserProfile,
+    instructions: String = "",
+    taskLink: String = "",
     onSuccess: () -> Unit = {}
   ) {
     val rewardCents = parseInrToPaise(rewardAmountInr)
     if (title.isBlank() || description.isBlank() || rewardCents <= 0L) {
       _bannerMessage.value = "Please provide a valid title, description, and positive INR (₹) reward."
+      return
+    }
+    if (taskLink.isBlank() || !isValidTaskUrl(taskLink)) {
+      _bannerMessage.value =
+        "Please enter a valid HTTPS Task Link (e.g., https://play.google.com/...)."
       return
     }
     viewModelScope.launch {
@@ -253,12 +290,14 @@ class TaskFlowViewModel(
           rewardCents = rewardCents,
           assignedUserId = assignedUser.userId.ifBlank { assignedUser.id },
           assignedUserName = assignedUser.displayName,
-          assignedUserEmail = assignedUser.email
+          assignedUserEmail = assignedUser.email,
+          instructions = instructions,
+          taskLink = taskLink
         )
       _isBusy.value = false
       result
         .onSuccess {
-          _bannerMessage.value = "Task assigned to ${assignedUser.displayName}!"
+          _bannerMessage.value = "Task created and assigned to ${assignedUser.displayName}!"
           onSuccess()
         }
         .onFailure { e ->
@@ -274,11 +313,18 @@ class TaskFlowViewModel(
     category: String,
     rewardAmountInr: String,
     assignedUser: UserProfile,
+    instructions: String = "",
+    taskLink: String = "",
     onSuccess: () -> Unit = {}
   ) {
     val rewardCents = parseInrToPaise(rewardAmountInr)
     if (title.isBlank() || description.isBlank() || rewardCents <= 0L) {
       _bannerMessage.value = "Please provide a valid title, description, and positive INR (₹) reward."
+      return
+    }
+    if (taskLink.isBlank() || !isValidTaskUrl(taskLink)) {
+      _bannerMessage.value =
+        "Please enter a valid HTTPS Task Link (e.g., https://play.google.com/...)."
       return
     }
     viewModelScope.launch {
@@ -292,7 +338,9 @@ class TaskFlowViewModel(
           rewardCents = rewardCents,
           assignedUserId = assignedUser.userId.ifBlank { assignedUser.id },
           assignedUserName = assignedUser.displayName,
-          assignedUserEmail = assignedUser.email
+          assignedUserEmail = assignedUser.email,
+          instructions = instructions,
+          taskLink = taskLink
         )
       _isBusy.value = false
       result
@@ -326,7 +374,7 @@ class TaskFlowViewModel(
         .onSuccess {
           _bannerMessage.value =
             if (approve) {
-              "Submission approved & reward credited to ${task.assignedUserName}!"
+              "Submission approved & INR reward credited to ${task.assignedUserName}!"
             } else {
               "Submission rejected."
             }

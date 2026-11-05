@@ -15,8 +15,8 @@
     <string name="currently_assigned_task">Currently Assigned Task</string>
     <string name="no_assigned_task_title">No Active Pending Task</string>
     <string name="no_assigned_task_desc">All caught up! New tasks assigned by an administrator will appear here automatically in real time.</string>
-    <string name="submit_proof_title">Submit Task Proof (Text-Only)</string>
-    <string name="submit_proof_hint">Provide detailed verification notes, links, or completion steps…</string>
+    <string name="submit_proof_title">Submit Task Proof (Text + Photo Required)</string>
+    <string name="submit_proof_hint">Provide detailed written verification notes and completion steps…</string>
     <string name="submit_proof_cta">Submit Proof for Review</string>
     <string name="create_task_cta">New Task</string>
     <string name="approve_submission">Approve &amp; Credit</string>

@@ -251,6 +251,7 @@ private fun AuthenticatedWorkspace(
   val registeredUsersState by viewModel.registeredUsersState.collectAsStateWithLifecycle()
   val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
   val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
+  val uploadProgress by viewModel.uploadProgress.collectAsStateWithLifecycle()
   val showSecuritySheet by viewModel.showSecuritySheet.collectAsStateWithLifecycle()
 
   BackHandler(
@@ -468,10 +469,12 @@ private fun AuthenticatedWorkspace(
               task = selectedTask,
               isBusy = isBusy,
               onBack = { viewModel.selectTask(null) },
-              onSubmitProof = { proof ->
-                viewModel.submitProof(selectedTask, proof)
+              onSubmitProof = { proof, imageUri ->
+                viewModel.submitProof(selectedTask, proof, imageUri)
               },
-              userApprovalStatus = currentApprovalStatus
+              userApprovalStatus = currentApprovalStatus,
+              currentUserId = user.uid,
+              uploadProgress = uploadProgress
             )
           } else {
             when (activeUserTab) {
@@ -495,7 +498,8 @@ private fun AuthenticatedWorkspace(
                   tasksState = userTasksState,
                   selectedFilter = trackingFilter,
                   onSelectFilter = { viewModel.setTrackingStatusFilter(it) },
-                  onSelectTask = { viewModel.selectTask(it) }
+                  onSelectTask = { viewModel.selectTask(it) },
+                  currentUserId = user.uid
                 )
               }
               UserTab.PROFILE -> {
@@ -530,11 +534,28 @@ private fun AuthenticatedWorkspace(
             registeredUsersState = registeredUsersState,
             submissionFilter = submissionFilter,
             onSelectSubmissionFilter = { viewModel.setAdminSubmissionFilter(it) },
-            onCreateTask = { title, desc, cat, rewardStr, assignee ->
-              viewModel.createTask(title, desc, cat, rewardStr, assignee)
+            onCreateTask = { title, desc, cat, rewardStr, assignee, instructions, taskLink ->
+              viewModel.createTask(
+                title = title,
+                description = desc,
+                category = cat,
+                rewardAmountInr = rewardStr,
+                assignedUser = assignee,
+                instructions = instructions,
+                taskLink = taskLink
+              )
             },
-            onUpdateTask = { taskId, title, desc, cat, rewardStr, assignee ->
-              viewModel.updateTask(taskId, title, desc, cat, rewardStr, assignee)
+            onUpdateTask = { taskId, title, desc, cat, rewardStr, assignee, instructions, taskLink ->
+              viewModel.updateTask(
+                taskId = taskId,
+                title = title,
+                description = desc,
+                category = cat,
+                rewardAmountInr = rewardStr,
+                assignedUser = assignee,
+                instructions = instructions,
+                taskLink = taskLink
+              )
             },
             onDeleteTask = { viewModel.deleteTask(it) },
             onReviewSubmission = { task, approve, feedback ->

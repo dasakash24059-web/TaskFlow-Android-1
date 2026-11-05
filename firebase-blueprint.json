@@ -64,7 +64,7 @@
     },
     "Task": {
       "title": "Task",
-      "description": "A task created by an admin and visible to authenticated users, with INR reward details, text proof submission, and review status.",
+      "description": "A task created by an admin and visible to authenticated users, with INR reward details, clickable HTTPS URL, step-by-step instructions, text + photo proof submission, and review status.",
       "type": "object",
       "properties": {
         "title": {
@@ -73,7 +73,15 @@
         },
         "description": {
           "type": "string",
-          "description": "Detailed instructions and acceptance criteria for the task."
+          "description": "Detailed overview and acceptance criteria for the task."
+        },
+        "instructions": {
+          "type": "string",
+          "description": "Step-by-step instructions explaining what the user must do."
+        },
+        "taskLink": {
+          "type": "string",
+          "description": "Validated HTTPS URL (e.g., Google Play Store or website link) for the task."
         },
         "category": {
           "type": "string",
@@ -102,7 +110,15 @@
         },
         "proofText": {
           "type": "string",
-          "description": "Text-only proof submitted by the assigned user."
+          "description": "Written text proof submitted by the assigned user."
+        },
+        "proofImageUrl": {
+          "type": "string",
+          "description": "Firebase Storage HTTPS download URL of the submitted proof screenshot/photo."
+        },
+        "proofStoragePath": {
+          "type": "string",
+          "description": "Firebase Storage object reference path (submissions/{userId}/{taskId}/...)."
         },
         "adminFeedback": {
           "type": "string",
@@ -141,7 +157,7 @@
     },
     "Submission": {
       "title": "Submission",
-      "description": "Text-only task proof submission stored in the submissions collection.",
+      "description": "Mandatory text + photo task proof submission stored in the submissions collection.",
       "type": "object",
       "properties": {
         "taskId": {
@@ -154,7 +170,7 @@
         },
         "rewardCents": {
           "type": "integer",
-          "description": "Reward value in cents associated with the task."
+          "description": "Reward value in INR paise associated with the task."
         },
         "userId": {
           "type": "string",
@@ -170,7 +186,15 @@
         },
         "proofText": {
           "type": "string",
-          "description": "Text-only proof submitted by the user."
+          "description": "Mandatory written text proof submitted by the user."
+        },
+        "proofImageUrl": {
+          "type": "string",
+          "description": "Mandatory Firebase Storage HTTPS download URL for the uploaded photo/screenshot."
+        },
+        "proofStoragePath": {
+          "type": "string",
+          "description": "Mandatory Firebase Storage reference path for the uploaded photo/screenshot."
         },
         "status": {
           "type": "string",
@@ -200,6 +224,8 @@
         "userName",
         "userEmail",
         "proofText",
+        "proofImageUrl",
+        "proofStoragePath",
         "status",
         "adminFeedback",
         "createdAt",

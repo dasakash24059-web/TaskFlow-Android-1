@@ -208,9 +208,13 @@ test("3. Only the verified bootstrap owner can create or delete /admins records"
   );
 });
 
-test("4. Admin unrelated balance increase, valid task submission, valid task approval & exact reward credit, and repeated approval attempts", async () => {
+test("4. Mandatory text + photo proof enforcement, valid atomic submission, valid task approval & exact reward credit, and repeated approval attempts", async () => {
   const ts = nowTimestamp();
   const taskId = "task_atomic_1";
+  const sampleImageUrl =
+    "https://firebasestorage.googleapis.com/v0/b/taskflow-8852d.firebasestorage.app/o/submissions%2Falice_123%2Ftask_atomic_1%2Fproof_1.jpg?alt=media";
+  const sampleStoragePath =
+    "submissions/alice_123/task_atomic_1/proof_1.jpg";
 
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
@@ -229,6 +233,8 @@ test("4. Admin unrelated balance increase, valid task submission, valid task app
     await db.collection("tasks").doc(taskId).set({
       title: "QA Check",
       description: "Verify mobile layout",
+      instructions: "1. Open app\n2. Capture screenshot",
+      taskLink: "https://play.google.com/store/apps/details?id=com.example.app",
       category: "QA Testing",
       rewardCents: 1500,
       assignedUserId: ALICE_UID,
@@ -236,6 +242,8 @@ test("4. Admin unrelated balance increase, valid task submission, valid task app
       assignedUserEmail: ALICE_EMAIL,
       status: "pending",
       proofText: "",
+      proofImageUrl: "",
+      proofStoragePath: "",
       adminFeedback: "",
       createdBy: ADMIN_UID,
       createdAt: ts,
@@ -267,11 +275,65 @@ test("4. Admin unrelated balance increase, valid task submission, valid task app
     })
   );
 
-  // Valid Atomic Task Submission: Alice updates /tasks/{taskId} and creates /submissions/{taskId} -> MUST SUCCEED
+  // 4a. Text-only submission (missing photo proofImageUrl / proofStoragePath) -> MUST FAIL
+  const textOnlyBatch = aliceDb.batch();
+  textOnlyBatch.update(aliceDb.collection("tasks").doc(taskId), {
+    status: "submitted",
+    proofText: "Completed QA check without screenshot.",
+    proofImageUrl: "",
+    proofStoragePath: "",
+    updatedAt: ts,
+  });
+  textOnlyBatch.set(aliceDb.collection("submissions").doc(taskId), {
+    taskId: taskId,
+    taskTitle: "QA Check",
+    rewardCents: 1500,
+    userId: ALICE_UID,
+    userName: "Alice",
+    userEmail: ALICE_EMAIL,
+    proofText: "Completed QA check without screenshot.",
+    proofImageUrl: "",
+    proofStoragePath: "",
+    status: "submitted",
+    adminFeedback: "",
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  await assertFails(textOnlyBatch.commit());
+
+  // 4b. Photo-only submission (missing written proofText) -> MUST FAIL
+  const photoOnlyBatch = aliceDb.batch();
+  photoOnlyBatch.update(aliceDb.collection("tasks").doc(taskId), {
+    status: "submitted",
+    proofText: "",
+    proofImageUrl: sampleImageUrl,
+    proofStoragePath: sampleStoragePath,
+    updatedAt: ts,
+  });
+  photoOnlyBatch.set(aliceDb.collection("submissions").doc(taskId), {
+    taskId: taskId,
+    taskTitle: "QA Check",
+    rewardCents: 1500,
+    userId: ALICE_UID,
+    userName: "Alice",
+    userEmail: ALICE_EMAIL,
+    proofText: "",
+    proofImageUrl: sampleImageUrl,
+    proofStoragePath: sampleStoragePath,
+    status: "submitted",
+    adminFeedback: "",
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  await assertFails(photoOnlyBatch.commit());
+
+  // 4c. Valid Atomic Task Submission with BOTH written proofText AND uploaded photo -> MUST SUCCEED
   const submitBatch = aliceDb.batch();
   submitBatch.update(aliceDb.collection("tasks").doc(taskId), {
     status: "submitted",
     proofText: "Completed QA check across Android screens.",
+    proofImageUrl: sampleImageUrl,
+    proofStoragePath: sampleStoragePath,
     updatedAt: ts,
   });
   submitBatch.set(aliceDb.collection("submissions").doc(taskId), {
@@ -282,6 +344,8 @@ test("4. Admin unrelated balance increase, valid task submission, valid task app
     userName: "Alice",
     userEmail: ALICE_EMAIL,
     proofText: "Completed QA check across Android screens.",
+    proofImageUrl: sampleImageUrl,
+    proofStoragePath: sampleStoragePath,
     status: "submitted",
     adminFeedback: "",
     createdAt: ts,
@@ -364,6 +428,10 @@ test("4. Admin unrelated balance increase, valid task submission, valid task app
 test("5. Task rejection without reward credit succeeds, and rejection cannot credit balance or be re-approved later", async () => {
   const ts = nowTimestamp();
   const taskId = "task_reject_1";
+  const sampleImageUrl =
+    "https://firebasestorage.googleapis.com/v0/b/taskflow-8852d.firebasestorage.app/o/submissions%2Falice_123%2Ftask_reject_1%2Fproof_1.jpg?alt=media";
+  const sampleStoragePath =
+    "submissions/alice_123/task_reject_1/proof_1.jpg";
 
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
@@ -389,6 +457,8 @@ test("5. Task rejection without reward credit succeeds, and rejection cannot cre
       assignedUserEmail: ALICE_EMAIL,
       status: "submitted",
       proofText: "Reviewed onboarding text.",
+      proofImageUrl: sampleImageUrl,
+      proofStoragePath: sampleStoragePath,
       adminFeedback: "",
       createdBy: ADMIN_UID,
       createdAt: ts,
@@ -402,6 +472,8 @@ test("5. Task rejection without reward credit succeeds, and rejection cannot cre
       userName: "Alice",
       userEmail: ALICE_EMAIL,
       proofText: "Reviewed onboarding text.",
+      proofImageUrl: sampleImageUrl,
+      proofStoragePath: sampleStoragePath,
       status: "submitted",
       adminFeedback: "",
       createdAt: ts,
@@ -472,7 +544,7 @@ test("5. Task rejection without reward credit succeeds, and rejection cannot cre
   await assertFails(postRejectApproveBatch.commit());
 });
 
-test("6. Atomic task creation, task reassignment, task deletion consistency, and post-batch approval ownership tamper checks", async () => {
+test("6. Atomic task creation with HTTPS URL & instructions, task reassignment, task deletion consistency, and post-batch approval ownership tamper checks", async () => {
   const ts = nowTimestamp();
   const taskId = "task_assign_consistency_1";
 
@@ -530,11 +602,13 @@ test("6. Atomic task creation, task reassignment, task deletion consistency, and
     })
   );
 
-  // 2. Admin creating a task AND updating Alice's assignedTaskId atomically -> MUST SUCCEED
-  const createBatch = adminDb.batch();
-  createBatch.set(adminDb.collection("tasks").doc(taskId), {
-    title: "Consistent Task",
-    description: "Created atomically with user assignedTaskId",
+  // 1b. Admin creating a task with an insecure non-HTTPS taskLink -> MUST FAIL
+  const insecureUrlBatch = adminDb.batch();
+  insecureUrlBatch.set(adminDb.collection("tasks").doc(taskId), {
+    title: "Insecure URL Task",
+    description: "Has http:// link",
+    instructions: "Step 1",
+    taskLink: "http://insecure.example.com",
     category: "General",
     rewardCents: 1000,
     assignedUserId: ALICE_UID,
@@ -542,6 +616,35 @@ test("6. Atomic task creation, task reassignment, task deletion consistency, and
     assignedUserEmail: ALICE_EMAIL,
     status: "pending",
     proofText: "",
+    proofImageUrl: "",
+    proofStoragePath: "",
+    adminFeedback: "",
+    createdBy: ADMIN_UID,
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  insecureUrlBatch.update(adminDb.collection("users").doc(ALICE_UID), {
+    assignedTaskId: taskId,
+    updatedAt: ts,
+  });
+  await assertFails(insecureUrlBatch.commit());
+
+  // 2. Admin creating a task with valid HTTPS taskLink & step-by-step instructions AND updating Alice's assignedTaskId atomically -> MUST SUCCEED
+  const createBatch = adminDb.batch();
+  createBatch.set(adminDb.collection("tasks").doc(taskId), {
+    title: "Consistent Task",
+    description: "Created atomically with user assignedTaskId",
+    instructions: "1. Open Google Play Store\n2. Install & screenshot",
+    taskLink: "https://play.google.com/store/apps/details?id=com.example.app",
+    category: "General",
+    rewardCents: 1000,
+    assignedUserId: ALICE_UID,
+    assignedUserName: "Alice",
+    assignedUserEmail: ALICE_EMAIL,
+    status: "pending",
+    proofText: "",
+    proofImageUrl: "",
+    proofStoragePath: "",
     adminFeedback: "",
     createdBy: ADMIN_UID,
     createdAt: ts,
@@ -624,4 +727,3 @@ test("6. Atomic task creation, task reassignment, task deletion consistency, and
   });
   await assertSucceeds(deleteBatch.commit());
 });
-

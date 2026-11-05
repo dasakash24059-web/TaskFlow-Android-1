@@ -4,6 +4,7 @@ import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.IgnoreExtraProperties
 import com.google.firebase.firestore.ServerTimestamp
+import java.net.URI
 import java.util.Locale
 
 const val BOOTSTRAPPED_ADMIN_EMAIL = "dasakash24059@gmail.com"
@@ -54,6 +55,8 @@ data class TaskItem(
   @DocumentId val id: String = "",
   val title: String = "",
   val description: String = "",
+  val instructions: String = "",
+  val taskLink: String = "",
   val category: String = "QA Testing",
   val rewardCents: Long = 0L,
   val assignedUserId: String = "",
@@ -61,6 +64,8 @@ data class TaskItem(
   val assignedUserEmail: String = "",
   val status: String = TaskStatus.PENDING,
   val proofText: String = "",
+  val proofImageUrl: String = "",
+  val proofStoragePath: String = "",
   val adminFeedback: String = "",
   val createdBy: String = "",
   @ServerTimestamp val createdAt: Timestamp? = null,
@@ -77,6 +82,8 @@ data class SubmissionItem(
   val userName: String = "",
   val userEmail: String = "",
   val proofText: String = "",
+  val proofImageUrl: String = "",
+  val proofStoragePath: String = "",
   val status: String = TaskStatus.SUBMITTED,
   val adminFeedback: String = "",
   @ServerTimestamp val createdAt: Timestamp? = null,
@@ -110,3 +117,19 @@ fun formatVisibleUserEmail(email: String?, role: String? = null): String {
   return email?.trim()?.takeIf { it.isNotEmpty() } ?: "Verified User"
 }
 
+fun isValidTaskUrl(url: String): Boolean {
+  val trimmed = url.trim()
+  if (trimmed.isEmpty() || trimmed.length > 1000 || trimmed.contains(" ")) return false
+  if (!trimmed.startsWith("https://", ignoreCase = true)) return false
+  return try {
+    val uri = URI(trimmed)
+    val host = uri.host?.trim().orEmpty()
+    uri.scheme.equals("https", ignoreCase = true) &&
+      host.length >= 4 &&
+      host.contains(".") &&
+      !host.startsWith(".") &&
+      !host.endsWith(".")
+  } catch (_: Exception) {
+    false
+  }
+}

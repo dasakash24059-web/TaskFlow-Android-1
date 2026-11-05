@@ -1,5 +1,9 @@
 package com.example.ui.components
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -10,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,11 +24,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -38,15 +46,195 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.formatRewardInr
+import com.example.data.model.isValidTaskUrl
 import java.text.SimpleDateFormat
 import java.util.Locale
+
+fun openExternalTaskUrl(context: Context, rawUrl: String): Boolean {
+  val trimmed = rawUrl.trim()
+  if (!isValidTaskUrl(trimmed)) {
+    runCatching {
+      Toast.makeText(context, "Invalid HTTPS Task URL.", Toast.LENGTH_SHORT).show()
+    }
+    return false
+  }
+  return try {
+    val intent =
+      Intent(Intent.ACTION_VIEW, Uri.parse(trimmed)).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+    context.startActivity(intent)
+    true
+  } catch (e: Throwable) {
+    runCatching {
+      Toast.makeText(context, "Unable to open link on this device.", Toast.LENGTH_SHORT).show()
+    }
+    false
+  }
+}
+
+@Composable
+fun ClickableTaskLinkCard(
+  url: String,
+  modifier: Modifier = Modifier,
+  label: String = "TASK DESTINATION LINK",
+  testTag: String = "clickable_task_link",
+  onLinkOpened: ((String) -> Unit)? = null
+) {
+  val trimmed = url.trim()
+  if (trimmed.isEmpty()) return
+  val context = LocalContext.current
+
+  Surface(
+    shape = RoundedCornerShape(14.dp),
+    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(14.dp))
+        .border(
+          width = 1.dp,
+          color = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
+          shape = RoundedCornerShape(14.dp)
+        )
+        .clickable {
+          openExternalTaskUrl(context, trimmed)
+          onLinkOpened?.invoke(trimmed)
+        }
+        .testTag(testTag)
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+      Row(
+        modifier = Modifier.weight(1f),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        Box(
+          modifier =
+            Modifier.size(36.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+          contentAlignment = Alignment.Center
+        ) {
+          Icon(
+            imageVector = Icons.Default.Link,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp)
+          )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold
+          )
+          Spacer(modifier = Modifier.height(2.dp))
+          Text(
+            text = trimmed,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+            textDecoration = TextDecoration.Underline,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+          )
+        }
+      }
+      Spacer(modifier = Modifier.width(8.dp))
+      Icon(
+        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+        contentDescription = "Open Task Link",
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(18.dp)
+      )
+    }
+  }
+}
+
+@Composable
+fun FullSizeImageDialog(
+  imageUrl: String,
+  title: String,
+  storagePath: String = "",
+  onDismiss: () -> Unit
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = {
+      Text(
+        text = title,
+        style = MaterialTheme.typography.titleLarge
+      )
+    },
+    text = {
+      Column(
+        modifier =
+          Modifier.fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .testTag("full_size_image_dialog_content"),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        Box(
+          modifier =
+            Modifier.fillMaxWidth()
+              .heightIn(min = 240.dp, max = 460.dp)
+              .clip(RoundedCornerShape(16.dp))
+              .background(MaterialTheme.colorScheme.surfaceVariant),
+          contentAlignment = Alignment.Center
+        ) {
+          AsyncImage(
+            model = imageUrl,
+            contentDescription = "Full-size proof screenshot",
+            contentScale = ContentScale.Fit,
+            modifier =
+              Modifier.fillMaxWidth()
+                .heightIn(min = 240.dp, max = 460.dp)
+                .testTag("full_size_proof_image")
+          )
+        }
+        if (storagePath.isNotBlank()) {
+          Text(
+            text = "Storage Ref: $storagePath",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+        }
+        Text(
+          text = "Image URL: $imageUrl",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis
+        )
+      }
+    },
+    confirmButton = {
+      TextButton(
+        onClick = onDismiss,
+        modifier = Modifier.testTag("close_full_image_dialog_button")
+      ) {
+        Text("Close Preview")
+      }
+    }
+  )
+}
 
 @Composable
 fun StatusBadge(status: String, modifier: Modifier = Modifier) {
@@ -132,7 +320,8 @@ fun TaskItemCard(
   task: TaskItem,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
-  showAssignee: Boolean = false
+  showAssignee: Boolean = false,
+  showProofPreview: Boolean = false
 ) {
   val dateStr =
     task.updatedAt?.toDate()?.let {
@@ -195,7 +384,16 @@ fun TaskItemCard(
         overflow = TextOverflow.Ellipsis
       )
 
-      if (task.proofText.isNotBlank()) {
+      if (task.taskLink.isNotBlank()) {
+        Spacer(modifier = Modifier.height(10.dp))
+        ClickableTaskLinkCard(
+          url = task.taskLink,
+          label = "TASK LINK",
+          testTag = "task_card_link_${task.id}"
+        )
+      }
+
+      if (showProofPreview && task.proofText.isNotBlank()) {
         Spacer(modifier = Modifier.height(10.dp))
         Surface(
           shape = RoundedCornerShape(10.dp),
@@ -203,11 +401,24 @@ fun TaskItemCard(
           modifier = Modifier.fillMaxWidth()
         ) {
           Column(modifier = Modifier.padding(10.dp)) {
-            Text(
-              text = "SUBMITTED TEXT PROOF",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.primary
-            )
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              Text(
+                text = "SUBMITTED PROOF (TEXT + PHOTO)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary
+              )
+              if (task.proofImageUrl.isNotBlank()) {
+                Icon(
+                  imageVector = Icons.Default.Image,
+                  contentDescription = "Photo proof attached",
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(14.dp)
+                )
+              }
+            }
             Text(
               text = task.proofText,
               style = MaterialTheme.typography.bodyMedium,
@@ -295,6 +506,7 @@ fun FirebaseConfigSecurityDialog(
             "• Project ID: taskflow-8852d\n" +
               "• Package Name: com.aistudio.taskflow.kxmpzq\n" +
               "• Firestore Named DB: $databaseId\n" +
+              "• Storage Bucket: taskflow-8852d.firebasestorage.app\n" +
               "• Admin Access: Enforced via verified server-side Admin Registry (/admins/{adminId})\n" +
               "• Config Files: app/google-services.json & res/values/firebase_applet_config.xml"
         )
@@ -302,15 +514,15 @@ fun FirebaseConfigSecurityDialog(
           title = "2. Enforced Zero-Trust Security Rules",
           body =
             "• Users cannot modify their own role, approvalStatus, or balanceCents.\n" +
-              "• Task proof submissions are text-only and locked once status leaves 'pending'.\n" +
-              "• PII isolation prevents non-admin users from reading other users' profiles.\n" +
-              "• Admin SDK private keys are never present in client code."
+              "• Task proof submissions require BOTH written text proof and an uploaded gallery photo/screenshot, and are locked once status leaves 'pending'.\n" +
+              "• Firebase Storage rules restrict proof uploads to the authenticated user and limit read access to the submitting user and verified Admins.\n" +
+              "• PII isolation prevents non-admin users from reading other users' profiles."
         )
         ConfigSection(
           title = "3. Manual Console / Server Steps Remaining",
           body =
-            "• Auth Providers: Google Sign-In via Credential Manager is active. If you also want Email/Password Auth outside AI Studio, enable the Email/Password provider manually in the Firebase Console > Authentication > Sign-in method.\n" +
-              "• Server-Side Ledger / Payouts: Real payments/withdrawals are intentionally omitted. Before launching real payouts, move balance crediting to a Cloud Function triggered on task approval using the Firebase Admin SDK."
+            "• Auth Providers: Google Sign-In via Credential Manager is active.\n" +
+              "• Server-Side Ledger / Payouts: Real payments/withdrawals are intentionally omitted and disabled."
         )
       }
     },

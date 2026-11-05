@@ -1,0 +1,42 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedAdmin() {
+      return isSignedIn() && (
+        (('admin' in request.auth.token) && request.auth.token.admin == true) ||
+        (
+          ('email' in request.auth.token) &&
+          request.auth.token.email == 'dasakash24059@gmail.com' &&
+          ('email_verified' in request.auth.token) &&
+          request.auth.token.email_verified == true
+        ) ||
+        firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Proof images uploaded for task submissions:
+    // - Associated with userId and taskId
+    // - Only the submitting user can upload their own proof image (< 10 MB, image/* only)
+    // - Only the submitting user and authorized Admin can read/access the proof image
+    match /submissions/{userId}/{taskId}/{fileName} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isVerifiedAdmin());
+      allow create, update: if isSignedIn() &&
+                               request.auth.uid == userId &&
+                               request.resource != null &&
+                               request.resource.size < 10 * 1024 * 1024 &&
+                               request.resource.contentType.matches('image/.*');
+      allow delete: if false;
+    }
+
+    // Default deny for all other paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

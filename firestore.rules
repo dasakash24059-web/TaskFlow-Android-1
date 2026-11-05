@@ -175,6 +175,8 @@ service cloud.firestore {
     function isValidTask(data) {
       return data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
              data.description is string && data.description.size() >= 1 && data.description.size() <= 2000 &&
+             (!('instructions' in data) || (data.instructions is string && data.instructions.size() <= 4000)) &&
+             (!('taskLink' in data) || (data.taskLink is string && data.taskLink.size() <= 1000 && (data.taskLink == '' || data.taskLink.matches('^https://.+')))) &&
              data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
              data.rewardCents is int && data.rewardCents >= 1 && data.rewardCents <= 10000000 &&
              data.assignedUserId is string && isValidId(data.assignedUserId) &&
@@ -182,6 +184,8 @@ service cloud.firestore {
              data.assignedUserEmail is string && data.assignedUserEmail.size() >= 3 && data.assignedUserEmail.size() <= 254 &&
              data.status is string && (data.status == 'pending' || data.status == 'submitted' || data.status == 'approved' || data.status == 'rejected') &&
              data.proofText is string && data.proofText.size() <= 4000 &&
+             (!('proofImageUrl' in data) || (data.proofImageUrl is string && data.proofImageUrl.size() <= 2000)) &&
+             (!('proofStoragePath' in data) || (data.proofStoragePath is string && data.proofStoragePath.size() <= 500)) &&
              data.adminFeedback is string && data.adminFeedback.size() <= 1000 &&
              data.createdBy is string && isValidId(data.createdBy) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
@@ -196,6 +200,8 @@ service cloud.firestore {
              data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 100 &&
              data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 254 &&
              data.proofText is string && data.proofText.size() >= 1 && data.proofText.size() <= 4000 &&
+             data.proofImageUrl is string && data.proofImageUrl.size() >= 1 && data.proofImageUrl.size() <= 2000 &&
+             data.proofStoragePath is string && data.proofStoragePath.size() >= 1 && data.proofStoragePath.size() <= 500 &&
              data.status is string && (data.status == 'submitted' || data.status == 'approved' || data.status == 'rejected') &&
              data.adminFeedback is string && data.adminFeedback.size() <= 1000 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
@@ -208,21 +214,35 @@ service cloud.firestore {
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
-    function isValidTaskProofSubmissionTransition(taskId) {
+    function isMatchingSubmissionAfter(taskId) {
       let subAfter = getSubmissionAfterData(taskId);
+      return subAfter.taskId == taskId &&
+             subAfter.userId == request.auth.uid &&
+             subAfter.status == 'submitted' &&
+             subAfter.proofText == incoming().proofText &&
+             subAfter.proofImageUrl == incoming().proofImageUrl &&
+             subAfter.proofStoragePath == incoming().proofStoragePath &&
+             subAfter.rewardCents == existing().rewardCents;
+    }
+
+    function isValidTaskProofSubmissionTransition(taskId) {
       return request.auth.uid == existing().assignedUserId &&
              existing().status == 'pending' &&
              incoming().status == 'submitted' &&
              incoming().proofText.size() >= 1 &&
-             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'proofText', 'updatedAt']) &&
+             ('proofImageUrl' in incoming()) &&
+             incoming().proofImageUrl is string &&
+             incoming().proofImageUrl.size() >= 1 &&
+             ('proofStoragePath' in incoming()) &&
+             incoming().proofStoragePath is string &&
+             incoming().proofStoragePath.size() >= 1 &&
+             incoming().diff(existing()).affectedKeys().hasOnly([
+               'status', 'proofText', 'proofImageUrl', 'proofStoragePath', 'updatedAt'
+             ]) &&
              isApprovedUser(request.auth.uid) &&
              !exists(/databases/$(database)/documents/submissions/$(taskId)) &&
              existsAfter(/databases/$(database)/documents/submissions/$(taskId)) &&
-             subAfter.taskId == taskId &&
-             subAfter.userId == request.auth.uid &&
-             subAfter.status == 'submitted' &&
-             subAfter.proofText == incoming().proofText &&
-             subAfter.rewardCents == existing().rewardCents;
+             isMatchingSubmissionAfter(taskId);
     }
 
     function isValidTaskEditOrReassignTransition(taskId) {
@@ -233,7 +253,7 @@ service cloud.firestore {
              incoming().proofText == '' &&
              incoming().adminFeedback == '' &&
              incoming().diff(existing()).affectedKeys().hasOnly([
-               'title', 'description', 'category', 'rewardCents',
+               'title', 'description', 'instructions', 'taskLink', 'category', 'rewardCents',
                'assignedUserId', 'assignedUserName', 'assignedUserEmail', 'updatedAt'
              ]) &&
              exists(/databases/$(database)/documents/users/$(newAssignee)) &&
@@ -246,30 +266,29 @@ service cloud.firestore {
              );
     }
 
-    function isValidTaskApprovalTransition(taskId) {
-      let assignedUid = existing().assignedUserId;
+    function isMatchingUserApprovalCredit(taskId, assignedUid, rewardCents) {
       let userBefore = getUserData(assignedUid);
       let userAfter = getUserAfterData(assignedUid);
+      return userAfter.assignedTaskId == taskId &&
+             userAfter.balanceCents == userBefore.balanceCents + rewardCents &&
+             userAfter.completedTasksCount == userBefore.completedTasksCount + 1;
+    }
+
+    function isValidTaskApprovalTransition(taskId) {
+      let assignedUid = existing().assignedUserId;
       return existing().status == 'submitted' &&
              incoming().status == 'approved' &&
              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminFeedback', 'updatedAt']) &&
              exists(/databases/$(database)/documents/users/$(assignedUid)) &&
-             userAfter.assignedTaskId == taskId &&
-             userAfter.balanceCents == userBefore.balanceCents + existing().rewardCents &&
-             userAfter.completedTasksCount == userBefore.completedTasksCount + 1;
+             isMatchingUserApprovalCredit(taskId, assignedUid, existing().rewardCents);
     }
 
-    function isValidTaskRejectionTransition(taskId) {
-      let assignedUid = existing().assignedUserId;
+    function isMatchingRejectionState(taskId, assignedUid) {
       let subBefore = getSubmissionData(taskId);
       let subAfter = getSubmissionAfterData(taskId);
       let userBefore = getUserData(assignedUid);
       let userAfter = getUserAfterData(assignedUid);
-      return existing().status == 'submitted' &&
-             incoming().status == 'rejected' &&
-             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminFeedback', 'updatedAt']) &&
-             exists(/databases/$(database)/documents/submissions/$(taskId)) &&
-             subBefore.status == 'submitted' &&
+      return subBefore.status == 'submitted' &&
              subAfter.status == 'rejected' &&
              subAfter.adminFeedback == incoming().adminFeedback &&
              (
@@ -279,6 +298,15 @@ service cloud.firestore {
                  userAfter.completedTasksCount == userBefore.completedTasksCount
                )
              );
+    }
+
+    function isValidTaskRejectionTransition(taskId) {
+      let assignedUid = existing().assignedUserId;
+      return existing().status == 'submitted' &&
+             incoming().status == 'rejected' &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminFeedback', 'updatedAt']) &&
+             exists(/databases/$(database)/documents/submissions/$(taskId)) &&
+             isMatchingRejectionState(taskId, assignedUid);
     }
 
     // 4. Collection Rules: /users/{userId}
@@ -386,15 +414,17 @@ service cloud.firestore {
                          'createdAt', 'updatedAt'
                        ]) &&
                        incoming().keys().hasOnly([
-                         'title', 'description', 'category', 'rewardCents',
+                         'title', 'description', 'instructions', 'taskLink', 'category', 'rewardCents',
                          'assignedUserId', 'assignedUserName', 'assignedUserEmail',
-                         'status', 'proofText', 'adminFeedback', 'createdBy',
-                         'createdAt', 'updatedAt'
+                         'status', 'proofText', 'proofImageUrl', 'proofStoragePath',
+                         'adminFeedback', 'createdBy', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidTask(incoming()) &&
                        incoming().createdBy == request.auth.uid &&
                        incoming().status == 'pending' &&
                        incoming().proofText == '' &&
+                       (!('proofImageUrl' in incoming()) || incoming().proofImageUrl == '') &&
+                       (!('proofStoragePath' in incoming()) || incoming().proofStoragePath == '') &&
                        incoming().adminFeedback == '' &&
                        isAdmin() &&
                        exists(/databases/$(database)/documents/users/$(incoming().assignedUserId)) &&
@@ -405,7 +435,7 @@ service cloud.firestore {
                        isValidId(taskId) &&
                        isValidTask(incoming()) &&
                        (
-                         // Transition 1: Assigned & approved user submits text proof ('pending' -> 'submitted')
+                         // Transition 1: Assigned & approved user submits text + photo proof ('pending' -> 'submitted')
                          isValidTaskProofSubmissionTransition(taskId) ||
                          // Transition 2-4: Admin operations
                          (
@@ -448,13 +478,15 @@ service cloud.firestore {
                        incoming().keys().hasAll([
                          'taskId', 'taskTitle', 'rewardCents',
                          'userId', 'userName', 'userEmail',
-                         'proofText', 'status', 'adminFeedback',
+                         'proofText', 'proofImageUrl', 'proofStoragePath',
+                         'status', 'adminFeedback',
                          'createdAt', 'updatedAt'
                        ]) &&
                        incoming().keys().hasOnly([
                          'taskId', 'taskTitle', 'rewardCents',
                          'userId', 'userName', 'userEmail',
-                         'proofText', 'status', 'adminFeedback',
+                         'proofText', 'proofImageUrl', 'proofStoragePath',
+                         'status', 'adminFeedback',
                          'createdAt', 'updatedAt'
                        ]) &&
                        isValidSubmission(incoming()) &&
@@ -471,7 +503,9 @@ service cloud.firestore {
                        incoming().rewardCents == getTaskData(submissionId).rewardCents &&
                        incoming().taskTitle == getTaskData(submissionId).title &&
                        getTaskAfterData(submissionId).status == 'submitted' &&
-                       getTaskAfterData(submissionId).proofText == incoming().proofText;
+                       getTaskAfterData(submissionId).proofText == incoming().proofText &&
+                       getTaskAfterData(submissionId).proofImageUrl == incoming().proofImageUrl &&
+                       getTaskAfterData(submissionId).proofStoragePath == incoming().proofStoragePath;
 
       // UPDATE: Terminal State Machine ('submitted' -> 'approved' | 'rejected' ONLY)
       // Must happen atomically with the parent /tasks/{submissionId} status transition

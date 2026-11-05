@@ -1,12 +1,14 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.net.Uri
 import com.example.R
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.UserProfile
+import com.example.data.model.isValidTaskUrl
 import com.example.data.remote.OperationType
 import com.example.data.remote.handleFirestoreError
 import com.google.firebase.Firebase
@@ -16,13 +18,69 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.snapshots
+import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageMetadata
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 
-class TaskFlowRepository(private val db: FirebaseFirestore) {
+data class UploadedProofPhoto(
+  val downloadUrl: String,
+  val storagePath: String
+)
+
+fun interface ProofPhotoUploader {
+  suspend fun uploadProofPhoto(
+    userId: String,
+    taskId: String,
+    imageUri: Uri,
+    onProgress: (Int) -> Unit
+  ): UploadedProofPhoto
+}
+
+object FirebaseStorageProofUploader : ProofPhotoUploader {
+  override suspend fun uploadProofPhoto(
+    userId: String,
+    taskId: String,
+    imageUri: Uri,
+    onProgress: (Int) -> Unit
+  ): UploadedProofPhoto {
+    val storage = FirebaseStorage.getInstance()
+    val storagePath = "submissions/$userId/$taskId/proof_${System.currentTimeMillis()}.jpg"
+    val storageRef = storage.reference.child(storagePath)
+    val metadata =
+      StorageMetadata.Builder()
+        .setContentType("image/jpeg")
+        .setCustomMetadata("userId", userId)
+        .setCustomMetadata("taskId", taskId)
+        .build()
+
+    onProgress(5)
+    val uploadTask = storageRef.putFile(imageUri, metadata)
+    uploadTask.addOnProgressListener { snapshot ->
+      val total = snapshot.totalByteCount
+      if (total > 0L) {
+        val pct = ((snapshot.bytesTransferred * 90L) / total).toInt().coerceIn(5, 95)
+        onProgress(pct)
+      }
+    }
+    uploadTask.await()
+    onProgress(95)
+    val downloadUrl = storageRef.downloadUrl.await().toString()
+    onProgress(100)
+    return UploadedProofPhoto(
+      downloadUrl = downloadUrl,
+      storagePath = storagePath
+    )
+  }
+}
+
+class TaskFlowRepository(
+  private val db: FirebaseFirestore,
+  private val photoUploader: ProofPhotoUploader = FirebaseStorageProofUploader
+) {
 
   constructor(
     context: Context
@@ -311,20 +369,44 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
     rewardCents: Long,
     userName: String,
     userEmail: String,
-    proofText: String
+    proofText: String,
+    proofImageUrl: String = "",
+    proofStoragePath: String = "",
+    imageUri: Uri? = null
   ): Result<String> {
-    val uid = requireUserId()
-    val taskItem =
-      TaskItem(
-        id = taskId,
-        title = taskTitle,
-        rewardCents = rewardCents,
-        assignedUserId = uid,
-        assignedUserName = userName,
-        assignedUserEmail = userEmail,
-        status = TaskStatus.PENDING
-      )
-    return submitTaskProof(taskItem, proofText).map { taskId }
+    return try {
+      val uid = requireUserId()
+      val taskItem =
+        TaskItem(
+          id = taskId,
+          title = taskTitle,
+          rewardCents = rewardCents,
+          assignedUserId = uid,
+          assignedUserName = userName,
+          assignedUserEmail = userEmail,
+          status = TaskStatus.PENDING
+        )
+      val preUploaded =
+        if (proofImageUrl.isNotBlank() && proofStoragePath.isNotBlank()) {
+          UploadedProofPhoto(
+            downloadUrl = proofImageUrl.trim(),
+            storagePath = proofStoragePath.trim()
+          )
+        } else {
+          null
+        }
+      submitTaskProof(
+          task = taskItem,
+          proofText = proofText,
+          imageUri = imageUri,
+          preUploadedPhoto = preUploaded
+        )
+        .map { taskId }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Result.failure(e)
+    }
   }
 
   suspend fun getUserTasks(userId: String = requireUserId()): Result<List<TaskItem>> {
@@ -377,15 +459,27 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
     }
   }
 
-  suspend fun submitTaskProof(task: TaskItem, proofText: String): Result<Unit> {
+  suspend fun submitTaskProof(
+    task: TaskItem,
+    proofText: String,
+    imageUri: Uri? = null,
+    onUploadProgress: (Int) -> Unit = {},
+    preUploadedPhoto: UploadedProofPhoto? = null
+  ): Result<Unit> {
     val taskId = task.id.trim()
-    require(taskId.isNotEmpty()) { "Task ID cannot be blank." }
-    val cleanProof = proofText.trim().take(4000)
-    require(cleanProof.isNotEmpty()) { "Proof text cannot be empty." }
-    val taskRef = db.collection("tasks").document(taskId)
-    val subRef = db.collection("submissions").document(taskId)
+    val taskRef = db.collection("tasks").document(taskId.ifEmpty { "invalid_task" })
+    val subRef = db.collection("submissions").document(taskId.ifEmpty { "invalid_task" })
 
     return try {
+      require(taskId.isNotEmpty()) { "Task ID cannot be blank." }
+      val cleanProof = proofText.trim().take(4000)
+      require(cleanProof.isNotEmpty()) {
+        "Written text proof is mandatory. Please describe the steps you completed."
+      }
+      require(imageUri != null || preUploadedPhoto != null) {
+        "Photo proof is mandatory. Please select at least one screenshot or photo from your Gallery."
+      }
+
       val uid = requireUserId()
       val verifiedEmail = requireVerifiedTokenEmail()
       val userRef = db.collection("users").document(uid)
@@ -409,6 +503,21 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
       val subSnap = subRef.get().await()
       check(!subSnap.exists()) { "A submission already exists for task $taskId." }
 
+      val uploadedPhoto =
+        preUploadedPhoto
+          ?: photoUploader.uploadProofPhoto(
+            userId = uid,
+            taskId = taskId,
+            imageUri = checkNotNull(imageUri),
+            onProgress = onUploadProgress
+          )
+
+      val cleanImageUrl = uploadedPhoto.downloadUrl.trim().take(2000)
+      val cleanStoragePath = uploadedPhoto.storagePath.trim().take(500)
+      check(cleanImageUrl.isNotEmpty() && cleanStoragePath.isNotEmpty()) {
+        "Failed to obtain Firebase Storage reference for the uploaded proof photo."
+      }
+
       val authoritativeTitle =
         taskSnap.getString("title")?.trim()?.takeIf { it.isNotEmpty() }?.take(120)
           ?: task.title.trim().ifBlank { "Task" }.take(120)
@@ -424,6 +533,8 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
         mapOf(
           "status" to TaskStatus.SUBMITTED,
           "proofText" to cleanProof,
+          "proofImageUrl" to cleanImageUrl,
+          "proofStoragePath" to cleanStoragePath,
           "updatedAt" to FieldValue.serverTimestamp()
         )
       )
@@ -437,6 +548,8 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
           "userName" to authoritativeUserName,
           "userEmail" to verifiedEmail,
           "proofText" to cleanProof,
+          "proofImageUrl" to cleanImageUrl,
+          "proofStoragePath" to cleanStoragePath,
           "status" to TaskStatus.SUBMITTED,
           "adminFeedback" to "",
           "createdAt" to FieldValue.serverTimestamp(),
@@ -525,13 +638,21 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
     rewardCents: Long,
     assignedUserId: String,
     assignedUserName: String,
-    assignedUserEmail: String
+    assignedUserEmail: String,
+    instructions: String = "",
+    taskLink: String = ""
   ): Result<String> {
     val cleanAssignedUserId = assignedUserId.trim()
-    require(cleanAssignedUserId.isNotEmpty()) { "Assigned user ID cannot be blank." }
+    val cleanLink = taskLink.trim().take(1000)
     val tasksRef = db.collection("tasks")
     val docRef = tasksRef.document()
     return try {
+      require(cleanAssignedUserId.isNotEmpty()) { "Assigned user ID cannot be blank." }
+      if (cleanLink.isNotEmpty()) {
+        require(isValidTaskUrl(cleanLink)) {
+          "Task Link must be a valid HTTPS URL (e.g., https://play.google.com/...)."
+        }
+      }
       val adminUid = requireUserId()
       val userRef = db.collection("users").document(cleanAssignedUserId)
       val userSnap = userRef.get().await()
@@ -541,6 +662,8 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
         mapOf(
           "title" to title.trim().take(120),
           "description" to description.trim().take(2000),
+          "instructions" to instructions.trim().take(4000),
+          "taskLink" to cleanLink,
           "category" to category.trim().ifBlank { "General" }.take(60),
           "rewardCents" to rewardCents.coerceIn(1L, 10000000L),
           "assignedUserId" to cleanAssignedUserId,
@@ -548,6 +671,8 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
           "assignedUserEmail" to assignedUserEmail.trim().ifBlank { "user@taskflow.app" }.take(254),
           "status" to TaskStatus.PENDING,
           "proofText" to "",
+          "proofImageUrl" to "",
+          "proofStoragePath" to "",
           "adminFeedback" to "",
           "createdBy" to adminUid,
           "createdAt" to FieldValue.serverTimestamp(),
@@ -578,14 +703,22 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
     rewardCents: Long,
     assignedUserId: String,
     assignedUserName: String,
-    assignedUserEmail: String
+    assignedUserEmail: String,
+    instructions: String = "",
+    taskLink: String = ""
   ): Result<Unit> {
     val cleanTaskId = taskId.trim()
     val cleanAssignedUserId = assignedUserId.trim()
-    require(cleanTaskId.isNotEmpty()) { "Task ID cannot be blank." }
-    require(cleanAssignedUserId.isNotEmpty()) { "Assigned user ID cannot be blank." }
-    val docRef = db.collection("tasks").document(cleanTaskId)
+    val cleanLink = taskLink.trim().take(1000)
+    val docRef = db.collection("tasks").document(cleanTaskId.ifBlank { "invalid" })
     return try {
+      require(cleanTaskId.isNotEmpty()) { "Task ID cannot be blank." }
+      require(cleanAssignedUserId.isNotEmpty()) { "Assigned user ID cannot be blank." }
+      if (cleanLink.isNotEmpty()) {
+        require(isValidTaskUrl(cleanLink)) {
+          "Task Link must be a valid HTTPS URL (e.g., https://play.google.com/...)."
+        }
+      }
       val taskSnap = docRef.get().await()
       check(taskSnap.exists()) { "Task $cleanTaskId does not exist." }
       val currentStatus = taskSnap.getString("status").orEmpty()
@@ -611,6 +744,8 @@ class TaskFlowRepository(private val db: FirebaseFirestore) {
         mapOf(
           "title" to title.trim().take(120),
           "description" to description.trim().take(2000),
+          "instructions" to instructions.trim().take(4000),
+          "taskLink" to cleanLink,
           "category" to category.trim().ifBlank { "General" }.take(60),
           "rewardCents" to rewardCents.coerceIn(1L, 10000000L),
           "assignedUserId" to cleanAssignedUserId,

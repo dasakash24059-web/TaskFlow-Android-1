@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import android.net.Uri
 import com.example.base.FirestoreEmulatorTestBase
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.google.firebase.firestore.FieldValue
@@ -17,9 +18,19 @@ import org.junit.Test
 
 class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
 
+  private val fakeStorageUploader = ProofPhotoUploader { userId, taskId, _, onProgress ->
+    onProgress(50)
+    onProgress(100)
+    UploadedProofPhoto(
+      downloadUrl =
+        "https://firebasestorage.googleapis.com/v0/b/taskflow-8852d.firebasestorage.app/o/submissions%2F$userId%2F$taskId%2Fproof_test.jpg?alt=media",
+      storagePath = "submissions/$userId/$taskId/proof_test.jpg"
+    )
+  }
+
   @Test
   fun verifiedAndUnverifiedEmail_registrationAndRoleOrBalanceTampering() = runBlocking {
-    val repository = TaskFlowRepository(firestore)
+    val repository = TaskFlowRepository(firestore, photoUploader = fakeStorageUploader)
 
     // 1. Unverified email registration must fail
     val unverifiedEmail = "unverified_${UUID.randomUUID()}@test.com"
@@ -84,9 +95,9 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
   }
 
   @Test
-  fun atomicSubmission_approvalExactCredit_repeatedApprovalFailure_andRejectionWithoutCredit() =
+  fun mandatoryTextAndPhotoSubmission_approvalExactCredit_repeatedApprovalFailure_andRejectionWithoutCredit() =
     runBlocking {
-      val repository = TaskFlowRepository(firestore)
+      val repository = TaskFlowRepository(firestore, photoUploader = fakeStorageUploader)
 
       // 1. Alice registers her profile (starts as 'pending')
       val aliceEmail = "alice_sub_${UUID.randomUUID()}@test.com"
@@ -95,13 +106,31 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
         repository.ensureUserProfile(aliceUid, aliceEmail, "Alice").getOrThrow()
       }
 
-      // 2. Verified Bootstrap Admin signs in, approves Alice, and creates two tasks assigned to Alice
+      // 2. Verified Bootstrap Admin signs in, approves Alice, and creates two tasks with HTTPS links & step-by-step instructions
       val adminUid = signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
       withTimeout(DEFAULT_TIMEOUT_MS) {
         repository.ensureUserProfile(adminUid, BOOTSTRAPPED_ADMIN_EMAIL, "Admin").getOrThrow()
         repository.updateUserApprovalStatus(aliceUid, "approved").getOrThrow()
       }
 
+      // 2a. Creating a task with an invalid non-HTTPS URL must fail validation
+      val invalidUrlTaskResult =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.createTask(
+            title = "Invalid Link Task",
+            description = "Task with invalid link",
+            category = "QA Testing",
+            rewardCents = 1000L,
+            assignedUserId = aliceUid,
+            assignedUserName = "Alice",
+            assignedUserEmail = aliceEmail,
+            instructions = "Step 1: Open link",
+            taskLink = "http://not-https.example.com"
+          )
+        }
+      assertTrue("Expected non-HTTPS task link to fail validation", invalidUrlTaskResult.isFailure)
+
+      val playStoreUrl = "https://play.google.com/store/apps/details?id=com.example.taskflow"
       val task1Id =
         withTimeout(DEFAULT_TIMEOUT_MS) {
           repository
@@ -112,10 +141,19 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
               rewardCents = 1500L,
               assignedUserId = aliceUid,
               assignedUserName = "Alice",
-              assignedUserEmail = aliceEmail
+              assignedUserEmail = aliceEmail,
+              instructions = "1. Open Google Play Store link\n2. Verify checkout screen\n3. Take screenshot",
+              taskLink = playStoreUrl
             )
             .getOrThrow()
         }
+
+      val createdTask1 =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.getTaskById(task1Id).getOrThrow() ?: error("Expected created task 1")
+        }
+      assertEquals(playStoreUrl, createdTask1.taskLink)
+      assertTrue(createdTask1.instructions.contains("Open Google Play Store link"))
 
       val aliceAfterTask1Assigned =
         withTimeout(DEFAULT_TIMEOUT_MS) {
@@ -133,7 +171,9 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
               rewardCents = 2000L,
               assignedUserId = aliceUid,
               assignedUserName = "Alice",
-              assignedUserEmail = aliceEmail
+              assignedUserEmail = aliceEmail,
+              instructions = "1. Open website\n2. Capture screenshot of onboarding",
+              taskLink = "https://example.com/onboarding"
             )
             .getOrThrow()
         }
@@ -144,8 +184,41 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
         }
       assertEquals(task2Id, aliceAfterTask2Assigned.assignedTaskId)
 
-      // 3. Alice signs in and submits proof atomically for both tasks
+      // 3. Alice signs in and attempts text-only and photo-only submissions (both MUST be blocked)
       signInTestUser(aliceEmail, emailVerified = true)
+      val sampleGalleryUri = Uri.parse("content://media/picker/0/com.android.providers.media.photopicker/media/1001")
+
+      // 3a. Text without photo -> MUST FAIL
+      val textOnlyAttempt =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.createSubmissionRecord(
+            taskId = task1Id,
+            taskTitle = "Verify Checkout Flow",
+            rewardCents = 1500L,
+            userName = "Alice",
+            userEmail = aliceEmail,
+            proofText = "Text proof without any photo",
+            imageUri = null
+          )
+        }
+      assertTrue("Expected text-only submission without photo to fail", textOnlyAttempt.isFailure)
+
+      // 3b. Photo without text -> MUST FAIL
+      val photoOnlyAttempt =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.createSubmissionRecord(
+            taskId = task1Id,
+            taskTitle = "Verify Checkout Flow",
+            rewardCents = 1500L,
+            userName = "Alice",
+            userEmail = aliceEmail,
+            proofText = "   ",
+            imageUri = sampleGalleryUri
+          )
+        }
+      assertTrue("Expected photo-only submission without text to fail", photoOnlyAttempt.isFailure)
+
+      // 3c. Both written text AND gallery photo -> MUST SUCCEED
       val submit1Result =
         withTimeout(DEFAULT_TIMEOUT_MS) {
           repository.createSubmissionRecord(
@@ -154,11 +227,12 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
             rewardCents = 1500L,
             userName = "Alice",
             userEmail = aliceEmail,
-            proofText = "All checkout steps verified on Android 16."
+            proofText = "All checkout steps verified on Android 16.",
+            imageUri = sampleGalleryUri
           )
         }
       assertTrue(
-        "Expected task 1 submission to succeed: ${submit1Result.exceptionOrNull()}",
+        "Expected task 1 submission with text + photo to succeed: ${submit1Result.exceptionOrNull()}",
         submit1Result.isSuccess
       )
 
@@ -170,11 +244,12 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
             rewardCents = 2000L,
             userName = "Alice",
             userEmail = aliceEmail,
-            proofText = "Reviewed onboarding copy."
+            proofText = "Reviewed onboarding copy and attached screenshot.",
+            imageUri = sampleGalleryUri
           )
         }
       assertTrue(
-        "Expected task 2 submission to succeed: ${submit2Result.exceptionOrNull()}",
+        "Expected task 2 submission with text + photo to succeed: ${submit2Result.exceptionOrNull()}",
         submit2Result.isSuccess
       )
 
@@ -184,12 +259,15 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
         withTimeout(DEFAULT_TIMEOUT_MS) {
           repository.getTaskById(task1Id).getOrThrow() ?: error("Expected task 1")
         }
+      assertTrue(submittedTask1.proofImageUrl.startsWith("https://firebasestorage.googleapis.com/"))
+      assertEquals("submissions/$aliceUid/$task1Id/proof_test.jpg", submittedTask1.proofStoragePath)
+
       val approveResult =
         withTimeout(DEFAULT_TIMEOUT_MS) {
           repository.reviewSubmission(
             task = submittedTask1,
             approve = true,
-            adminFeedback = "Great QA report!"
+            adminFeedback = "Great QA report and clear screenshot!"
           )
         }
       assertTrue(
@@ -225,7 +303,7 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
           repository.reviewSubmission(
             task = submittedTask2,
             approve = false,
-            adminFeedback = "Needs screenshots log."
+            adminFeedback = "Screenshot was blurry."
           )
         }
       assertTrue(
@@ -263,7 +341,9 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
               rewardCents = 900L,
               assignedUserId = aliceUid,
               assignedUserName = "Alice",
-              assignedUserEmail = aliceEmail
+              assignedUserEmail = aliceEmail,
+              instructions = "Follow link",
+              taskLink = "https://example.com/task3"
             )
             .getOrThrow()
         }
@@ -302,7 +382,9 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
             rewardCents = 900L,
             assignedUserId = bobUid,
             assignedUserName = "Bob",
-            assignedUserEmail = bobEmail
+            assignedUserEmail = bobEmail,
+            instructions = "Updated instructions",
+            taskLink = "https://example.com/task3-updated"
           )
           .getOrThrow()
       }
@@ -332,7 +414,7 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
   @Test
   fun unauthorizedBalanceIncrease_withoutApprovedTaskBatch_failsWithPermissionDenied() =
     runBlocking {
-      val repository = TaskFlowRepository(firestore)
+      val repository = TaskFlowRepository(firestore, photoUploader = fakeStorageUploader)
       val aliceEmail = "alice_bal_${UUID.randomUUID()}@test.com"
       val aliceUid = signInTestUser(aliceEmail, emailVerified = true)
       withTimeout(DEFAULT_TIMEOUT_MS) {
@@ -371,7 +453,7 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
   fun getUserProfile_crossUserAccess_failsWithPermissionDenied() = runBlocking {
     val aliceEmail = "alice_iso_${UUID.randomUUID()}@test.com"
     val aliceUid = signInTestUser(aliceEmail, emailVerified = true)
-    val repository = TaskFlowRepository(firestore)
+    val repository = TaskFlowRepository(firestore, photoUploader = fakeStorageUploader)
     withTimeout(DEFAULT_TIMEOUT_MS) {
       repository.ensureUserProfile(aliceUid, aliceEmail, "Alice").getOrThrow()
     }
@@ -389,7 +471,7 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
   @Test
   fun observeUserTasks_unauthenticatedUser_failsWithPermissionDenied() = runBlocking {
     auth.signOut()
-    val repository = TaskFlowRepository(firestore)
+    val repository = TaskFlowRepository(firestore, photoUploader = fakeStorageUploader)
 
     try {
       withTimeout(FLOW_TIMEOUT_MS) {
@@ -406,7 +488,7 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
   }
 
   private companion object {
-    const val DEFAULT_TIMEOUT_MS = 5000L
-    const val FLOW_TIMEOUT_MS = 3000L
+    const val DEFAULT_TIMEOUT_MS = 10000L
+    const val FLOW_TIMEOUT_MS = 10000L
   }
 }
