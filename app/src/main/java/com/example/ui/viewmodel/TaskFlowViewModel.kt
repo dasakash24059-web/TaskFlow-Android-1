@@ -52,7 +52,8 @@ enum class ProfileSubScreen {
 enum class AdminTab {
   TASKS,
   SUBMISSIONS,
-  USERS
+  USERS,
+  WITHDRAWALS
 }
 
 class TaskFlowViewModel(
@@ -122,6 +123,13 @@ class TaskFlowViewModel(
       .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load tasks")) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
 
+  val userSubmissionsState: StateFlow<UiState<List<SubmissionItem>>> =
+    repository
+      .observeUserSubmissions(currentUserId)
+      .map<List<SubmissionItem>, UiState<List<SubmissionItem>>> { UiState.Success(it) }
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load user submissions")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
   val userWithdrawalRequestsState: StateFlow<UiState<List<DemoWithdrawalRequest>>> =
     repository
       .observeUserWithdrawalRequests(currentUserId)
@@ -175,6 +183,15 @@ class TaskFlowViewModel(
 
   init {
     viewModelScope.launch {
+      val authorizedAdmin =
+        repository.checkAndEnsureAdminAuthorization(currentUserId, currentUserEmail)
+      _activePortal.value =
+        if (authorizedAdmin) {
+          PortalLoginTarget.ADMIN_DASHBOARD
+        } else {
+          PortalLoginTarget.USER_APP
+        }
+
       repository
         .ensureUserProfile(
           uid = currentUserId,
@@ -189,6 +206,10 @@ class TaskFlowViewModel(
   }
 
   fun setPortal(portal: PortalLoginTarget) {
+    if (portal == PortalLoginTarget.ADMIN_DASHBOARD && !isAdminAuthorized.value) {
+      _activePortal.value = PortalLoginTarget.USER_APP
+      return
+    }
     _activePortal.value = portal
     _selectedTaskId.value = null
     _submissionError.value = null
@@ -344,7 +365,12 @@ class TaskFlowViewModel(
     }
   }
 
-  fun submitProof(task: TaskItem, proofText: String, imageUri: Uri?) {
+  fun submitProof(
+    task: TaskItem,
+    proofText: String,
+    imageUri: Uri?,
+    onSuccess: () -> Unit = {}
+  ) {
     val cleanedText = proofText.trim()
     if (cleanedText.isEmpty() && imageUri == null) {
       val msg = "Both written text proof AND at least one Gallery photo are mandatory."
@@ -388,8 +414,7 @@ class TaskFlowViewModel(
           _submissionError.value = null
           _bannerMessage.value =
             "Proof text and screenshot submitted for '${task.title}'! Status is now Pending Review."
-          _selectedTaskId.value = null
-          _activeUserTab.value = UserTab.TRACKING
+          onSuccess()
         }
         .onFailure {
           val errMsg = it.localizedMessage ?: "Failed to submit proof. Please try again."
@@ -516,12 +541,35 @@ class TaskFlowViewModel(
     }
   }
 
+  fun setTaskActive(taskId: String, title: String, isActive: Boolean) {
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository
+        .setTaskActiveStatus(taskId = taskId, isActive = isActive)
+        .onSuccess {
+          _bannerMessage.value =
+            if (isActive) {
+              "Task '$title' activated and available for user submissions."
+            } else {
+              "Task '$title' deactivated. It will not accept new submissions."
+            }
+        }
+        .onFailure {
+          _bannerMessage.value = it.localizedMessage ?: "Failed to update task active state."
+        }
+      _isBusy.value = false
+    }
+  }
+
   fun deleteTask(taskId: String) {
     viewModelScope.launch {
       _isBusy.value = true
       repository
         .deleteTask(taskId)
-        .onSuccess { _bannerMessage.value = "Pending task deleted." }
+        .onSuccess {
+          _bannerMessage.value =
+            "Task deleted. Existing submissions and user history remain preserved."
+        }
         .onFailure { _bannerMessage.value = it.localizedMessage ?: "Failed to delete task." }
       _isBusy.value = false
     }

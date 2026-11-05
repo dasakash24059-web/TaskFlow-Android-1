@@ -628,8 +628,131 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
       assertEquals(true, recordedReq?.isDemo)
     }
 
+  @Test
+  fun adminTaskActivationToggle_deactivatedTaskRejectsSubmission_reactivatedAccepts_andDeleteTaskPreservesSubmissionsAndHistory() =
+    runBlocking {
+      val repository = TaskFlowRepository(firestore, photoUploader = fakeStorageUploader)
+
+      // 1. Admin signs in -> checkAndEnsureAdminAuthorization returns true and creates /admins/{adminUid}
+      val adminUid = signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.ensureUserProfile(adminUid, BOOTSTRAPPED_ADMIN_EMAIL, "Admin").getOrThrow()
+      }
+      val isAdmin =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.checkAndEnsureAdminAuthorization(adminUid, BOOTSTRAPPED_ADMIN_EMAIL)
+        }
+      assertTrue("Expected bootstrap admin to be authorized via /admins/{uid}", isAdmin)
+
+      val taskId =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository
+            .createTask(
+              title = "Lifecycle Managed Task",
+              description = "Test task activation, deactivation, reactivation, and deletion",
+              category = "App Install",
+              rewardCents = 2500L,
+              assignedUserId = adminUid,
+              assignedUserName = "Admin",
+              assignedUserEmail = BOOTSTRAPPED_ADMIN_EMAIL,
+              instructions = "1. Open link\n2. Upload screenshot",
+              taskLink = "https://play.google.com/store/apps/details?id=com.example.lifecycle",
+              appName = "Lifecycle App"
+            )
+            .getOrThrow()
+        }
+
+      // 2. Deactivate the task as Admin
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.setTaskActiveStatus(taskId, isActive = false).getOrThrow()
+      }
+      val deactivatedTask =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.getTaskById(taskId).getOrThrow() ?: error("Expected task")
+        }
+      assertEquals(false, deactivatedTask.isActive)
+
+      // 3. Normal user signs in -> checkAndEnsureAdminAuthorization returns false, and submitting proof on deactivated task fails
+      val userEmail = "lifecycle_user_${UUID.randomUUID()}@test.com"
+      val userUid = signInTestUser(userEmail, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.ensureUserProfile(userUid, userEmail, "Kiran User").getOrThrow()
+      }
+      val isNormalUserAdmin =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.checkAndEnsureAdminAuthorization(userUid, userEmail)
+        }
+      assertEquals(false, isNormalUserAdmin)
+
+      val sampleGalleryUri =
+        Uri.parse("content://media/picker/0/com.android.providers.media.photopicker/media/3001")
+      val deactivatedAttempt =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.createSubmissionRecord(
+            taskId = taskId,
+            taskTitle = "Lifecycle Managed Task",
+            rewardCents = 2500L,
+            userName = "Kiran User",
+            userEmail = userEmail,
+            proofText = "Attempt on deactivated task",
+            imageUri = sampleGalleryUri
+          )
+        }
+      assertTrue("Expected submission on deactivated task to fail", deactivatedAttempt.isFailure)
+
+      // 4. Admin reactivates the task
+      signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.setTaskActiveStatus(taskId, isActive = true).getOrThrow()
+      }
+
+      // 5. User submits proof on reactivated task -> succeeds
+      signInTestUser(userEmail, emailVerified = true)
+      val activeAttempt =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.createSubmissionRecord(
+            taskId = taskId,
+            taskTitle = "Lifecycle Managed Task",
+            rewardCents = 2500L,
+            userName = "Kiran User",
+            userEmail = userEmail,
+            proofText = "Completed task after reactivation",
+            imageUri = sampleGalleryUri
+          )
+        }
+      assertTrue(
+        "Expected submission on reactivated task to succeed: ${activeAttempt.exceptionOrNull()}",
+        activeAttempt.isSuccess
+      )
+
+      // 6. Admin deletes the task from /tasks -> existing submission and user history remain preserved
+      signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.deleteTask(taskId).getOrThrow()
+      }
+      val adminSubmissionsAfterDelete =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.getAdminSubmissions().getOrThrow()
+        }
+      assertTrue(
+        "Expected Admin submission record to be preserved after task deletion",
+        adminSubmissionsAfterDelete.any { it.taskId == taskId && it.userId == userUid }
+      )
+
+      signInTestUser(userEmail, emailVerified = true)
+      val userSubmissionsAfterDelete =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.getUserSubmissions(userUid).getOrThrow()
+        }
+      assertTrue(
+        "Expected User submission history to be preserved after task deletion",
+        userSubmissionsAfterDelete.any { it.taskId == taskId && it.userId == userUid }
+      )
+    }
+
   private companion object {
     const val DEFAULT_TIMEOUT_MS = 10000L
     const val FLOW_TIMEOUT_MS = 10000L
   }
 }
+

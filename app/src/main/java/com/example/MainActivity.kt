@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RateReview
@@ -47,7 +48,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,10 +68,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.data.repository.TaskFlowRepository
 import com.example.ui.admin.AdminDashboardScreen
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.PortalLoginTarget
+import com.example.ui.auth.TaskFlowSplashScreen
 import com.example.ui.auth.signOutUser
 import com.example.ui.components.FirebaseConfigSecurityDialog
 import com.example.ui.components.TaskFlowBrandLogo
@@ -129,7 +131,8 @@ internal fun ensureFirebaseInitialized(context: Context): Boolean {
             .setStorageBucket("taskflow-8852d.firebasestorage.app")
             .setGcmSenderId("54814309263")
             .build()
-        FirebaseApp.initializeApp(appContext, options) != null
+        FirebaseApp.initializeApp(appContext, options)
+        true
       }
     }
   } catch (e: Throwable) {
@@ -146,7 +149,10 @@ internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
 }
 
 @Composable
-fun TaskFlowAppRoot(auth: FirebaseAuth? = null) {
+fun TaskFlowAppRoot(
+  auth: FirebaseAuth? = null,
+  initialShowSplash: Boolean = true
+) {
   val context = LocalContext.current
   val resolvedAuth =
     remember(auth, context) {
@@ -158,6 +164,7 @@ fun TaskFlowAppRoot(auth: FirebaseAuth? = null) {
           .getOrNull()
     }
 
+  var showSplash by rememberSaveable { mutableStateOf(initialShowSplash) }
   var preferredPortal by rememberSaveable { mutableStateOf(PortalLoginTarget.USER_APP) }
   var manualUserOverride by remember { mutableStateOf<FirebaseUser?>(resolvedAuth?.currentUser) }
 
@@ -171,6 +178,13 @@ fun TaskFlowAppRoot(auth: FirebaseAuth? = null) {
     }
 
   val activeUser = observedUser ?: manualUserOverride
+
+  if (showSplash) {
+    TaskFlowSplashScreen(
+      onSplashFinished = { showSplash = false }
+    )
+    return
+  }
 
   if (activeUser == null) {
     AuthScreen(
@@ -208,7 +222,7 @@ private fun AuthenticatedWorkspace(
 
   val viewModel: TaskFlowViewModel =
     viewModel(
-      key = "${user.uid}_${initialPortal.name}",
+      key = user.uid,
       factory =
         viewModelFactory {
           initializer {
@@ -217,15 +231,11 @@ private fun AuthenticatedWorkspace(
                 "APPLICATION_KEY missing from CreationExtras"
               }
             ensureFirebaseInitialized(app)
-            val dbId =
-              runCatching { app.getString(R.string.firestore_database_id).trim() }
-                .getOrDefault("(default)")
             val db =
-              if (dbId.isEmpty() || dbId == "(default)") {
-                FirebaseFirestore.getInstance()
-              } else {
-                FirebaseFirestore.getInstance(dbId)
-              }
+              runCatching {
+                  FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
+                }
+                .getOrElse { FirebaseFirestore.getInstance() }
             TaskFlowViewModel(
               repository = TaskFlowRepository(db),
               currentUserId = user.uid,
@@ -237,10 +247,6 @@ private fun AuthenticatedWorkspace(
         }
     )
 
-  LaunchedEffect(initialPortal) {
-    viewModel.setPortal(initialPortal)
-  }
-
   val activePortal by viewModel.activePortal.collectAsStateWithLifecycle()
   val activeUserTab by viewModel.activeUserTab.collectAsStateWithLifecycle()
   val profileSubScreen by viewModel.profileSubScreen.collectAsStateWithLifecycle()
@@ -251,6 +257,7 @@ private fun AuthenticatedWorkspace(
   val isAdminAuthorized by viewModel.isAdminAuthorized.collectAsStateWithLifecycle()
   val userProfileState by viewModel.userProfileState.collectAsStateWithLifecycle()
   val userTasksState by viewModel.userTasksState.collectAsStateWithLifecycle()
+  val userSubmissionsState by viewModel.userSubmissionsState.collectAsStateWithLifecycle()
   val userWithdrawalRequestsState by viewModel.userWithdrawalRequestsState.collectAsStateWithLifecycle()
   val adminTasksState by viewModel.adminTasksState.collectAsStateWithLifecycle()
   val adminSubmissionsState by viewModel.adminSubmissionsState.collectAsStateWithLifecycle()
@@ -285,7 +292,7 @@ private fun AuthenticatedWorkspace(
     }
   }
 
-  if (showSecuritySheet) {
+  if (showSecuritySheet && isAdminAuthorized) {
     FirebaseConfigSecurityDialog(
       databaseId = databaseId,
       onDismiss = { viewModel.setShowSecuritySheet(false) }
@@ -310,63 +317,65 @@ private fun AuthenticatedWorkspace(
           }
         },
         actions = {
-          // Portal Mode Switcher Pill (User App <-> Admin Dashboard)
-          Surface(
-            shape = RoundedCornerShape(50),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier =
-              Modifier.clip(RoundedCornerShape(50))
-                .clickable {
-                  val next =
-                    if (activePortal == PortalLoginTarget.USER_APP) {
-                      PortalLoginTarget.ADMIN_DASHBOARD
+          // Only show Admin Mode Switcher & Security Info to verified Admin accounts
+          if (isAdminAuthorized) {
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = MaterialTheme.colorScheme.surfaceVariant,
+              modifier =
+                Modifier.clip(RoundedCornerShape(50))
+                  .clickable {
+                    val next =
+                      if (activePortal == PortalLoginTarget.USER_APP) {
+                        PortalLoginTarget.ADMIN_DASHBOARD
+                      } else {
+                        PortalLoginTarget.USER_APP
+                      }
+                    viewModel.setPortal(next)
+                  }
+                  .testTag("portal_mode_toggle_pill")
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                Icon(
+                  imageVector =
+                    if (activePortal == PortalLoginTarget.ADMIN_DASHBOARD) {
+                      Icons.Default.AdminPanelSettings
                     } else {
-                      PortalLoginTarget.USER_APP
-                    }
-                  viewModel.setPortal(next)
-                }
-                .testTag("portal_mode_toggle_pill")
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp)
+                      Icons.Default.Person
+                    },
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(16.dp)
+                )
+                Text(
+                  text =
+                    if (activePortal == PortalLoginTarget.ADMIN_DASHBOARD) {
+                      "Admin Mode"
+                    } else {
+                      "User Mode"
+                    },
+                  style = MaterialTheme.typography.labelLarge,
+                  color = MaterialTheme.colorScheme.onSurface
+                )
+              }
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
+
+            IconButton(
+              onClick = { viewModel.setShowSecuritySheet(true) },
+              modifier = Modifier.testTag("top_bar_security_info_button")
             ) {
               Icon(
-                imageVector =
-                  if (activePortal == PortalLoginTarget.ADMIN_DASHBOARD) {
-                    Icons.Default.AdminPanelSettings
-                  } else {
-                    Icons.Default.Person
-                  },
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp)
-              )
-              Text(
-                text =
-                  if (activePortal == PortalLoginTarget.ADMIN_DASHBOARD) {
-                    "Admin Mode"
-                  } else {
-                    "User Mode"
-                  },
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface
+                imageVector = Icons.Default.Security,
+                contentDescription = stringResource(R.string.security_info_title),
+                tint = MaterialTheme.colorScheme.primary
               )
             }
-          }
-
-          Spacer(modifier = Modifier.width(4.dp))
-
-          IconButton(
-            onClick = { viewModel.setShowSecuritySheet(true) },
-            modifier = Modifier.testTag("top_bar_security_info_button")
-          ) {
-            Icon(
-              imageVector = Icons.Default.Security,
-              contentDescription = stringResource(R.string.security_info_title),
-              tint = MaterialTheme.colorScheme.primary
-            )
           }
         },
         colors =
@@ -376,7 +385,7 @@ private fun AuthenticatedWorkspace(
       )
     },
     bottomBar = {
-      if (activePortal == PortalLoginTarget.USER_APP) {
+      if (activePortal == PortalLoginTarget.USER_APP || !isAdminAuthorized) {
         NavigationBar {
           NavigationBarItem(
             selected = activeUserTab == UserTab.HOME,
@@ -433,6 +442,13 @@ private fun AuthenticatedWorkspace(
             label = { Text(stringResource(R.string.nav_admin_users)) },
             modifier = Modifier.testTag("nav_admin_users")
           )
+          NavigationBarItem(
+            selected = activeAdminTab == AdminTab.WITHDRAWALS,
+            onClick = { viewModel.setAdminTab(AdminTab.WITHDRAWALS) },
+            icon = { Icon(Icons.Default.Payment, contentDescription = null) },
+            label = { Text("Withdrawals") },
+            modifier = Modifier.testTag("nav_admin_withdrawals")
+          )
         }
       }
     }
@@ -479,9 +495,15 @@ private fun AuthenticatedWorkspace(
           }
         }
 
-        if (activePortal == PortalLoginTarget.USER_APP) {
-          val tasks = (userTasksState as? UiState.Success)?.data ?: emptyList()
-          val selectedTask = tasks.firstOrNull { it.id == selectedTaskId }
+        if (activePortal == PortalLoginTarget.USER_APP || !isAdminAuthorized) {
+          val rawTasks = (userTasksState as? UiState.Success)?.data ?: emptyList()
+          val userSubmissions =
+            (userSubmissionsState as? UiState.Success)?.data ?: emptyList()
+          val mergedTasks =
+            remember(rawTasks, userSubmissions, user.uid) {
+              mergeTasksWithPreservedSubmissions(rawTasks, userSubmissions, user.uid)
+            }
+          val selectedTask = mergedTasks.firstOrNull { it.id == selectedTaskId }
 
           if (selectedTask != null) {
             val currentApprovalStatus =
@@ -512,7 +534,8 @@ private fun AuthenticatedWorkspace(
                   },
                   onSwitchToAdmin = {
                     viewModel.setPortal(PortalLoginTarget.ADMIN_DASHBOARD)
-                  }
+                  },
+                  submissionsState = userSubmissionsState
                 )
               }
               UserTab.TRACKING -> {
@@ -533,6 +556,7 @@ private fun AuthenticatedWorkspace(
                   isBusy = isBusy,
                   withdrawalValidationError = withdrawalValidationError,
                   onClearValidationError = { viewModel.clearWithdrawalValidationError() },
+                  submissionsState = userSubmissionsState,
                   onSubmitDemoWithdrawal = {
                       amountInr,
                       method,
@@ -573,6 +597,7 @@ private fun AuthenticatedWorkspace(
                     )
                   },
                   withdrawalRequestsState = userWithdrawalRequestsState,
+                  submissionsState = userSubmissionsState,
                   activeSubScreen = profileSubScreen,
                   onNavigateSubScreen = { viewModel.setProfileSubScreen(it) }
                 )
@@ -620,6 +645,9 @@ private fun AuthenticatedWorkspace(
             onToggleUserStatus = { viewModel.toggleUserApprovalStatus(it) },
             adminSubmissionsState = adminSubmissionsState,
             adminWithdrawalRequestsState = adminWithdrawalRequestsState,
+            onToggleTaskActive = { task, isActive ->
+              viewModel.setTaskActive(task.id, task.title, isActive)
+            },
             onCreateTaskExtended = {
                 title,
                 desc,

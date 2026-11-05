@@ -30,6 +30,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // Requires all three:
+    // 1. Signed-in user
+    // 2. Token email matches expectedEmail
+    // 3. request.auth.token.email_verified == true
     function hasVerifiedTokenEmail(expectedEmail) {
       return isSignedIn() &&
              ('email' in request.auth.token) &&
@@ -39,6 +43,7 @@ service cloud.firestore {
              request.auth.token.email_verified == true;
     }
 
+    // Cross-document state helpers (Pre-operation vs. Post-batch/transaction state)
     function getUserData(uid) {
       return get(/databases/$(database)/documents/users/$(uid)).data;
     }
@@ -63,10 +68,12 @@ service cloud.firestore {
       return getAfter(/databases/$(database)/documents/submissions/$(subId)).data;
     }
 
+    // Root Bootstrap Owner Check (Verified token email ONLY)
     function isVerifiedAdminEmail() {
       return hasVerifiedTokenEmail('dasakash24059@gmail.com');
     }
 
+    // Trusted Admin Check
     function isAdmin() {
       return isSignedIn() && (
         (('admin' in request.auth.token) && request.auth.token.admin == true) ||
@@ -75,12 +82,14 @@ service cloud.firestore {
       );
     }
 
+    // Checks that a user profile exists and is active (not suspended)
     function isApprovedUser(uid) {
       let user = getUserData(uid);
       return exists(/databases/$(database)/documents/users/$(uid)) &&
              (user.approvalStatus == 'approved' || user.approvalStatus == 'pending');
     }
 
+    // Atomic Batch Validator for Task Approval & Reward Credit:
     function isAtomicTaskApprovalForUser(taskId, userId, beforeBalance, afterBalance, beforeCount, afterCount) {
       let taskBefore = getTaskData(taskId);
       let taskAfter = getTaskAfterData(taskId);
@@ -109,6 +118,7 @@ service cloud.firestore {
              afterCount == beforeCount + 1;
     }
 
+    // Validates that an admin update to /users/{userId}.assignedTaskId is atomically consistent
     function isConsistentUserTaskAssignment(userId) {
       let prevTaskId = existing().assignedTaskId;
       let nextTaskId = incoming().assignedTaskId;
@@ -130,6 +140,7 @@ service cloud.firestore {
              );
     }
 
+    // 3. Schema Validation Blueprints (Anti-Update-Gap)
     function isValidUserProfile(data) {
       return data.userId is string && isValidId(data.userId) &&
              data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
@@ -157,6 +168,7 @@ service cloud.firestore {
              data.assignedUserName is string && data.assignedUserName.size() >= 1 && data.assignedUserName.size() <= 100 &&
              data.assignedUserEmail is string && data.assignedUserEmail.size() >= 3 && data.assignedUserEmail.size() <= 254 &&
              data.status is string && (data.status == 'pending' || data.status == 'submitted' || data.status == 'approved' || data.status == 'rejected') &&
+             (!('isActive' in data) || data.isActive is bool) &&
              data.proofText is string && data.proofText.size() <= 4000 &&
              (!('proofImageUrl' in data) || (data.proofImageUrl is string && data.proofImageUrl.size() <= 350000)) &&
              (!('proofStoragePath' in data) || (data.proofStoragePath is string && data.proofStoragePath.size() <= 500)) &&
@@ -217,6 +229,7 @@ service cloud.firestore {
 
     function isValidTaskProofSubmissionTransition(taskId) {
       return existing().status == 'pending' &&
+             (!('isActive' in existing()) || existing().isActive == true) &&
              incoming().status == 'submitted' &&
              incoming().assignedUserId == request.auth.uid &&
              incoming().proofText.size() >= 1 &&
@@ -236,6 +249,12 @@ service cloud.firestore {
              isMatchingSubmissionAfter(taskId);
     }
 
+    function isValidTaskActivationToggle() {
+      return ('isActive' in incoming()) &&
+             incoming().isActive is bool &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['isActive', 'updatedAt']);
+    }
+
     function isValidTaskEditOrReassignTransition(taskId) {
       let newAssignee = incoming().assignedUserId;
       let oldAssignee = existing().assignedUserId;
@@ -246,7 +265,8 @@ service cloud.firestore {
              incoming().diff(existing()).affectedKeys().hasOnly([
                'title', 'appName', 'appIconUrl', 'description', 'instructions',
                'requiredProof', 'taskLink', 'category', 'rewardCents',
-               'assignedUserId', 'assignedUserName', 'assignedUserEmail', 'updatedAt'
+               'assignedUserId', 'assignedUserName', 'assignedUserEmail',
+               'isActive', 'updatedAt'
              ]) &&
              exists(/databases/$(database)/documents/users/$(newAssignee)) &&
              getUserAfterData(newAssignee).assignedTaskId == taskId &&
@@ -306,6 +326,7 @@ service cloud.firestore {
       let taskAfter = getTaskAfterData(submissionId);
       return exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
              taskBefore.status == 'pending' &&
+             (!('isActive' in taskBefore) || taskBefore.isActive == true) &&
              taskAfter.assignedUserId == request.auth.uid &&
              incoming().rewardCents == taskBefore.rewardCents &&
              incoming().taskTitle == taskBefore.title &&
@@ -325,6 +346,7 @@ service cloud.firestore {
              taskAfter.assignedUserId == existing().userId;
     }
 
+    // 4. Collection Rules: /users/{userId}
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
@@ -404,6 +426,7 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isValidId(userId) && isVerifiedAdminEmail();
     }
 
+    // 5. Collection Rules: /tasks/{taskId}
     match /tasks/{taskId} {
       allow get: if isSignedIn() && isValidId(taskId);
 
@@ -421,7 +444,7 @@ service cloud.firestore {
                          'title', 'appName', 'appIconUrl', 'description', 'instructions',
                          'requiredProof', 'taskLink', 'category', 'rewardCents',
                          'assignedUserId', 'assignedUserName', 'assignedUserEmail',
-                         'status', 'proofText', 'proofImageUrl', 'proofStoragePath',
+                         'status', 'isActive', 'proofText', 'proofImageUrl', 'proofStoragePath',
                          'adminFeedback', 'createdBy', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidTask(incoming()) &&
@@ -440,6 +463,7 @@ service cloud.firestore {
                        isValidTask(incoming()) &&
                        (
                          (incoming().status == 'submitted' && isValidTaskProofSubmissionTransition(taskId)) ||
+                         (isAdmin() && isValidTaskActivationToggle()) ||
                          (isAdmin() && incoming().status == 'pending' && isValidTaskEditOrReassignTransition(taskId)) ||
                          (isAdmin() && incoming().status == 'approved' && isValidTaskApprovalTransition(taskId)) ||
                          (isAdmin() && incoming().status == 'rejected' && isValidTaskRejectionTransition(taskId))
@@ -448,7 +472,6 @@ service cloud.firestore {
       allow delete: if isSignedIn() &&
                        isValidId(taskId) &&
                        isAdmin() &&
-                       existing().status == 'pending' &&
                        (
                          !exists(/databases/$(database)/documents/users/$(existing().assignedUserId)) ||
                          getUserData(existing().assignedUserId).assignedTaskId != taskId ||
@@ -456,6 +479,7 @@ service cloud.firestore {
                        );
     }
 
+    // 6. Collection Rules: /submissions/{submissionId}
     match /submissions/{submissionId} {
       allow get: if isSignedIn() &&
                     isValidId(submissionId) &&
@@ -503,6 +527,7 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // 6B. Collection Rules: /withdrawal_requests/{requestId}
     match /withdrawal_requests/{requestId} {
       allow get: if isSignedIn() &&
                     isValidId(requestId) &&
@@ -527,6 +552,7 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // 7. Collection Rules: /admins/{adminId}
     match /admins/{adminId} {
       allow get: if isSignedIn() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
       allow list: if isAdmin();

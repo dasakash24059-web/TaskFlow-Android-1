@@ -168,6 +168,7 @@ service cloud.firestore {
              data.assignedUserName is string && data.assignedUserName.size() >= 1 && data.assignedUserName.size() <= 100 &&
              data.assignedUserEmail is string && data.assignedUserEmail.size() >= 3 && data.assignedUserEmail.size() <= 254 &&
              data.status is string && (data.status == 'pending' || data.status == 'submitted' || data.status == 'approved' || data.status == 'rejected') &&
+             (!('isActive' in data) || data.isActive is bool) &&
              data.proofText is string && data.proofText.size() <= 4000 &&
              (!('proofImageUrl' in data) || (data.proofImageUrl is string && data.proofImageUrl.size() <= 350000)) &&
              (!('proofStoragePath' in data) || (data.proofStoragePath is string && data.proofStoragePath.size() <= 500)) &&
@@ -228,6 +229,7 @@ service cloud.firestore {
 
     function isValidTaskProofSubmissionTransition(taskId) {
       return existing().status == 'pending' &&
+             (!('isActive' in existing()) || existing().isActive == true) &&
              incoming().status == 'submitted' &&
              incoming().assignedUserId == request.auth.uid &&
              incoming().proofText.size() >= 1 &&
@@ -247,6 +249,12 @@ service cloud.firestore {
              isMatchingSubmissionAfter(taskId);
     }
 
+    function isValidTaskActivationToggle() {
+      return ('isActive' in incoming()) &&
+             incoming().isActive is bool &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['isActive', 'updatedAt']);
+    }
+
     function isValidTaskEditOrReassignTransition(taskId) {
       let newAssignee = incoming().assignedUserId;
       let oldAssignee = existing().assignedUserId;
@@ -257,7 +265,8 @@ service cloud.firestore {
              incoming().diff(existing()).affectedKeys().hasOnly([
                'title', 'appName', 'appIconUrl', 'description', 'instructions',
                'requiredProof', 'taskLink', 'category', 'rewardCents',
-               'assignedUserId', 'assignedUserName', 'assignedUserEmail', 'updatedAt'
+               'assignedUserId', 'assignedUserName', 'assignedUserEmail',
+               'isActive', 'updatedAt'
              ]) &&
              exists(/databases/$(database)/documents/users/$(newAssignee)) &&
              getUserAfterData(newAssignee).assignedTaskId == taskId &&
@@ -317,6 +326,7 @@ service cloud.firestore {
       let taskAfter = getTaskAfterData(submissionId);
       return exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
              taskBefore.status == 'pending' &&
+             (!('isActive' in taskBefore) || taskBefore.isActive == true) &&
              taskAfter.assignedUserId == request.auth.uid &&
              incoming().rewardCents == taskBefore.rewardCents &&
              incoming().taskTitle == taskBefore.title &&
@@ -434,7 +444,7 @@ service cloud.firestore {
                          'title', 'appName', 'appIconUrl', 'description', 'instructions',
                          'requiredProof', 'taskLink', 'category', 'rewardCents',
                          'assignedUserId', 'assignedUserName', 'assignedUserEmail',
-                         'status', 'proofText', 'proofImageUrl', 'proofStoragePath',
+                         'status', 'isActive', 'proofText', 'proofImageUrl', 'proofStoragePath',
                          'adminFeedback', 'createdBy', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidTask(incoming()) &&
@@ -453,15 +463,17 @@ service cloud.firestore {
                        isValidTask(incoming()) &&
                        (
                          (incoming().status == 'submitted' && isValidTaskProofSubmissionTransition(taskId)) ||
-                         (isAdmin() && incoming().status == 'pending' && isValidTaskEditOrReassignTransition(taskId)) ||
-                         (isAdmin() && incoming().status == 'approved' && isValidTaskApprovalTransition(taskId)) ||
-                         (isAdmin() && incoming().status == 'rejected' && isValidTaskRejectionTransition(taskId))
+                         (isAdmin() && (
+                           isValidTaskActivationToggle() ||
+                           (incoming().status == 'pending' && isValidTaskEditOrReassignTransition(taskId)) ||
+                           (incoming().status == 'approved' && isValidTaskApprovalTransition(taskId)) ||
+                           (incoming().status == 'rejected' && isValidTaskRejectionTransition(taskId))
+                         ))
                        );
 
       allow delete: if isSignedIn() &&
                        isValidId(taskId) &&
                        isAdmin() &&
-                       existing().status == 'pending' &&
                        (
                          !exists(/databases/$(database)/documents/users/$(existing().assignedUserId)) ||
                          getUserData(existing().assignedUserId).assignedTaskId != taskId ||

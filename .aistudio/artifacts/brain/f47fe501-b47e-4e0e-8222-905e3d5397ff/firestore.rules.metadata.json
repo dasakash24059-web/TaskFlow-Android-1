@@ -1,5 +1,5 @@
 {
-  "summary": "Zero-trust Firestore Security Rules for TaskFlow including safe demo-only withdrawal requests (/withdrawal_requests/{requestId}) that prohibit storing banking/UPI PII, enforce ₹200 minimum and balance limits, and preserve all existing task/submission rules.",
-  "updatedAt": "2026-11-05T15:07:36.679821982Z",
+  "summary": "Zero-trust Firestore Security Rules for TaskFlow with task activation/deactivation/reactivation (isActive), mandatory text + photo proof validation, preserved submissions on task deletion, INR reward credit, and demo withdrawal requests.",
+  "updatedAt": "2026-11-05T16:30:09.722136415Z",
   "userFacing": true
 }

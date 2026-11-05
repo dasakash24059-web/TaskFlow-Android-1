@@ -478,39 +478,52 @@ fun FullSizeImageDialog(
 }
 
 @Composable
-fun StatusBadge(status: String, modifier: Modifier = Modifier) {
+fun StatusBadge(
+  status: String,
+  modifier: Modifier = Modifier,
+  isActive: Boolean = true
+) {
+  val isDeactivated = !isActive && status.lowercase(Locale.US) == TaskStatus.PENDING
   val (bgColor, fgColor, icon) =
-    when (status.lowercase(Locale.US)) {
-      TaskStatus.PENDING ->
-        Triple(
-          Color(0xFFF59E0B).copy(alpha = 0.16f),
-          Color(0xFFFBBF24),
-          Icons.Default.HourglassEmpty
-        )
-      TaskStatus.SUBMITTED ->
-        Triple(
-          Color(0xFF0EA5E9).copy(alpha = 0.16f),
-          Color(0xFF38BDF8),
-          Icons.AutoMirrored.Filled.Send
-        )
-      TaskStatus.APPROVED ->
-        Triple(
-          Color(0xFF10B981).copy(alpha = 0.18f),
-          Color(0xFF34D399),
-          Icons.Default.CheckCircle
-        )
-      TaskStatus.REJECTED ->
-        Triple(
-          Color(0xFFF43F5E).copy(alpha = 0.16f),
-          Color(0xFFFB7185),
-          Icons.Default.Cancel
-        )
-      else ->
-        Triple(
-          MaterialTheme.colorScheme.surfaceVariant,
-          MaterialTheme.colorScheme.onSurfaceVariant,
-          Icons.Default.Info
-        )
+    if (isDeactivated) {
+      Triple(
+        Color(0xFF64748B).copy(alpha = 0.18f),
+        Color(0xFF475569),
+        Icons.Default.Cancel
+      )
+    } else {
+      when (status.lowercase(Locale.US)) {
+        TaskStatus.PENDING ->
+          Triple(
+            Color(0xFFF59E0B).copy(alpha = 0.16f),
+            Color(0xFFD97706),
+            Icons.Default.HourglassEmpty
+          )
+        TaskStatus.SUBMITTED ->
+          Triple(
+            Color(0xFF0EA5E9).copy(alpha = 0.16f),
+            Color(0xFF0284C7),
+            Icons.AutoMirrored.Filled.Send
+          )
+        TaskStatus.APPROVED ->
+          Triple(
+            Color(0xFF10B981).copy(alpha = 0.18f),
+            Color(0xFF059669),
+            Icons.Default.CheckCircle
+          )
+        TaskStatus.REJECTED ->
+          Triple(
+            Color(0xFFF43F5E).copy(alpha = 0.16f),
+            Color(0xFFE11D48),
+            Icons.Default.Cancel
+          )
+        else ->
+          Triple(
+            MaterialTheme.colorScheme.surfaceVariant,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            Icons.Default.Info
+          )
+      }
     }
 
   Surface(
@@ -530,7 +543,7 @@ fun StatusBadge(status: String, modifier: Modifier = Modifier) {
         modifier = Modifier.size(14.dp)
       )
       Text(
-        text = TaskStatus.label(status),
+        text = TaskStatus.label(status, isActive),
         style = MaterialTheme.typography.labelSmall,
         color = fgColor,
         fontWeight = FontWeight.Bold
@@ -557,9 +570,15 @@ fun RewardBadge(rewardCents: Long, modifier: Modifier = Modifier) {
 }
 
 /**
- * Professional Task Card for the User Dashboard & Tracking lists.
- * Displays: App Icon/Image, Task Title, App/Website Name, Category, INR Reward, Status Badge,
- * optional clickable URL, and a clear "Start Task" / "View Task" action button.
+ * Clean, compact individual Task Card for the Available Tasks screen.
+ * Displays ONLY:
+ * - App/site icon or image
+ * - Task title
+ * - App or website name
+ * - Category
+ * - Reward in INR (₹)
+ * - "View Task" button
+ * Does NOT show the full task description or submission form on the task list.
  */
 @Composable
 fun TaskItemCard(
@@ -569,25 +588,23 @@ fun TaskItemCard(
   showAssignee: Boolean = false,
   showProofPreview: Boolean = false
 ) {
-  val dateStr =
-    task.updatedAt?.toDate()?.let {
-      SimpleDateFormat("MMM d, h:mm a", Locale.US).format(it)
-    } ?: "Just now"
   val appOrSiteLabel = resolveAppOrWebsiteLabel(task)
 
   Card(
     modifier =
       modifier
         .fillMaxWidth()
-        .clip(RoundedCornerShape(22.dp))
+        .clip(RoundedCornerShape(20.dp))
         .clickable(onClick = onClick)
         .testTag("task_card_${task.id}"),
-    shape = RoundedCornerShape(22.dp),
+    shape = RoundedCornerShape(20.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
   ) {
-    Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
-      // Top Row: App Icon + Title + App/Website Name + INR Reward Badge
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -597,20 +614,21 @@ fun TaskItemCard(
           appIconUrl = task.appIconUrl,
           appName = task.appName,
           category = task.category,
-          size = 52.dp
+          size = 50.dp
         )
 
         Column(modifier = Modifier.weight(1f)) {
           Text(
             text = task.title,
-            style = MaterialTheme.typography.titleLarge,
-            maxLines = 2,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis
           )
           Spacer(modifier = Modifier.height(2.dp))
           Text(
             text = appOrSiteLabel,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -621,9 +639,6 @@ fun TaskItemCard(
         RewardBadge(rewardCents = task.rewardCents)
       }
 
-      Spacer(modifier = Modifier.height(12.dp))
-
-      // Category & Status Row
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -634,130 +649,35 @@ fun TaskItemCard(
           color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
         ) {
           Text(
-            text = task.category.uppercase(Locale.US),
+            text = task.category,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSecondaryContainer,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
           )
         }
-        StatusBadge(status = task.status)
-      }
-
-      Spacer(modifier = Modifier.height(10.dp))
-
-      Text(
-        text = task.description,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis
-      )
-
-      if (task.taskLink.isNotBlank()) {
-        Spacer(modifier = Modifier.height(10.dp))
-        ClickableTaskLinkCard(
-          url = task.taskLink,
-          label = "DOWNLOAD / WEBSITE LINK",
-          testTag = "task_card_link_${task.id}"
-        )
-      }
-
-      if (showProofPreview && task.proofText.isNotBlank()) {
-        Spacer(modifier = Modifier.height(10.dp))
-        Surface(
-          shape = RoundedCornerShape(12.dp),
-          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-          modifier = Modifier.fillMaxWidth()
-        ) {
-          Column(modifier = Modifier.padding(10.dp)) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-              Text(
-                text = "SUBMITTED PROOF (TEXT + SCREENSHOT)",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
-              )
-              if (task.proofImageUrl.isNotBlank()) {
-                Icon(
-                  imageVector = Icons.Default.Image,
-                  contentDescription = "Photo proof attached",
-                  tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(14.dp)
-                )
-              }
-            }
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-              text = task.proofText,
-              style = MaterialTheme.typography.bodyMedium,
-              maxLines = 2,
-              overflow = TextOverflow.Ellipsis
-            )
-          }
-        }
-      }
-
-      Spacer(modifier = Modifier.height(14.dp))
-
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Text(
-          text =
-            if (showAssignee) {
-              "Participant: ${task.assignedUserName} • $dateStr"
-            } else {
-              "Updated $dateStr"
-            },
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.weight(1f)
-        )
-
-        Spacer(modifier = Modifier.width(8.dp))
 
         Button(
           onClick = onClick,
           shape = RoundedCornerShape(12.dp),
-          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
           colors =
             ButtonDefaults.buttonColors(
-              containerColor =
-                if (task.status == TaskStatus.PENDING) {
-                  MaterialTheme.colorScheme.primary
-                } else {
-                  MaterialTheme.colorScheme.secondaryContainer
-                },
-              contentColor =
-                if (task.status == TaskStatus.PENDING) {
-                  MaterialTheme.colorScheme.onPrimary
-                } else {
-                  MaterialTheme.colorScheme.onSecondaryContainer
-                }
+              containerColor = MaterialTheme.colorScheme.primary,
+              contentColor = MaterialTheme.colorScheme.onPrimary
             ),
           modifier = Modifier.testTag("start_or_view_task_button_${task.id}")
         ) {
-          Icon(
-            imageVector =
-              if (task.status == TaskStatus.PENDING) {
-                Icons.Default.PlayArrow
-              } else {
-                Icons.AutoMirrored.Filled.ArrowForward
-              },
-            contentDescription = null,
-            modifier = Modifier.size(16.dp)
-          )
-          Spacer(modifier = Modifier.width(6.dp))
           Text(
-            text = if (task.status == TaskStatus.PENDING) "Start Task" else "View Task",
+            text = "View Task",
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp)
           )
         }
       }

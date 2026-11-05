@@ -2,6 +2,7 @@ package com.example.data.model
 
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
+import com.google.firebase.firestore.PropertyName
 import com.google.firebase.firestore.ServerTimestamp
 import java.net.URI
 import java.util.Locale
@@ -75,14 +76,18 @@ object TaskStatus {
   const val APPROVED = "approved"
   const val REJECTED = "rejected"
 
-  fun label(status: String): String =
-    when (status.lowercase(Locale.US)) {
+  fun label(status: String, isActive: Boolean = true): String {
+    if (!isActive && status.lowercase(Locale.US) == PENDING) {
+      return "Deactivated"
+    }
+    return when (status.lowercase(Locale.US)) {
       PENDING -> "Available"
       SUBMITTED -> "Pending Review"
       APPROVED -> "Approved"
       REJECTED -> "Rejected"
       else -> status.replaceFirstChar { it.uppercase() }
     }
+  }
 
   fun historyLabel(status: String): String =
     when (status.lowercase(Locale.US)) {
@@ -142,6 +147,7 @@ data class TaskItem(
   val assignedUserName: String = "",
   val assignedUserEmail: String = "",
   val status: String = TaskStatus.PENDING,
+  @get:PropertyName("isActive") val isActive: Boolean = true,
   val proofText: String = "",
   val proofImageUrl: String = "",
   val proofStoragePath: String = "",
@@ -149,7 +155,10 @@ data class TaskItem(
   val createdBy: String = "",
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
-)
+) {
+  fun isAvailableForNewSubmission(): Boolean =
+    isActive && status == TaskStatus.PENDING
+}
 
 data class SubmissionItem(
   @DocumentId val id: String = "",
@@ -168,7 +177,66 @@ data class SubmissionItem(
   val adminFeedback: String = "",
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
-)
+) {
+  /**
+   * Converts a preserved `/submissions/{id}` document into a `TaskItem` representation so user
+   * history and activity remain intact even if the original task in `/tasks` was deleted by Admin.
+   */
+  fun toHistoryTaskItem(existingTask: TaskItem? = null): TaskItem {
+    val resolvedId = taskId.ifBlank { id }
+    return TaskItem(
+      id = resolvedId,
+      title = taskTitle.ifBlank { existingTask?.title ?: "Completed Task" },
+      appName = appName.ifBlank { existingTask?.appName ?: "" },
+      appIconUrl = appIconUrl.ifBlank { existingTask?.appIconUrl ?: "" },
+      description = existingTask?.description ?: "Submitted task proof record preserved in history.",
+      instructions = existingTask?.instructions ?: "",
+      requiredProof = existingTask?.requiredProof ?: "",
+      taskLink = existingTask?.taskLink ?: "",
+      category = existingTask?.category ?: "App Install",
+      rewardCents = if (rewardCents > 0L) rewardCents else (existingTask?.rewardCents ?: 0L),
+      assignedUserId = userId,
+      assignedUserName = userName,
+      assignedUserEmail = userEmail,
+      status = status,
+      isActive = existingTask?.isActive ?: false,
+      proofText = proofText,
+      proofImageUrl = proofImageUrl,
+      proofStoragePath = proofStoragePath,
+      adminFeedback = adminFeedback,
+      createdBy = existingTask?.createdBy ?: "",
+      createdAt = createdAt ?: existingTask?.createdAt,
+      updatedAt = updatedAt ?: existingTask?.updatedAt ?: createdAt
+    )
+  }
+}
+
+/**
+ * Merges active/existing tasks from `/tasks` with the user's preserved `/submissions` documents
+ * so deleting a task from `/tasks` never erases the user's submission history or activity records.
+ */
+fun mergeTasksWithPreservedSubmissions(
+  tasks: List<TaskItem>,
+  submissions: List<SubmissionItem>,
+  currentUserId: String
+): List<TaskItem> {
+  val taskMap = tasks.associateBy { it.id }.toMutableMap()
+  submissions
+    .filter { currentUserId.isBlank() || it.userId == currentUserId }
+    .forEach { sub ->
+      val key = sub.taskId.ifBlank { sub.id }
+      if (key.isNotBlank()) {
+        val existing = taskMap[key]
+        // If task was deleted from /tasks or doesn't reflect this user's submission, preserve it
+        if (existing == null || existing.status == TaskStatus.PENDING) {
+          taskMap[key] = sub.toHistoryTaskItem(existing)
+        }
+      }
+    }
+  return taskMap.values.sortedByDescending {
+    (it.updatedAt ?: it.createdAt)?.seconds ?: 0L
+  }
+}
 
 /**
  * Safe demo-only withdrawal request record stored in `/withdrawal_requests/{requestId}`.

@@ -1,6 +1,9 @@
 <resources>
     <string name="app_name">TaskFlow</string>
-    <string name="tagline_subtitle">Verified micro-tasks, instant tracking &amp; zero-trust rewards</string>
+    <string name="splash_tagline">Complete Tasks. Track Progress.</string>
+    <string name="tagline_subtitle">Complete Tasks. Track Progress.</string>
+    <string name="welcome_to_taskflow">Welcome to TaskFlow</string>
+    <string name="sign_in_to_continue">Sign in to continue</string>
     <string name="sign_in_with_google">Continue with Google</string>
     <string name="sign_out">Sign Out</string>
     <string name="mode_user_app">User App</string>
@@ -14,16 +17,14 @@
     <string name="nav_admin_submissions">Submissions</string>
     <string name="nav_admin_withdrawals">Withdrawals</string>
     <string name="nav_admin_users">Users</string>
-    <string name="currently_assigned_task">Currently Assigned Task</string>
-    <string name="no_assigned_task_title">No Active Pending Task</string>
-    <string name="no_assigned_task_desc">All caught up! New tasks assigned by an administrator will appear here automatically in real time.</string>
+    <string name="currently_assigned_task">Available Tasks</string>
+    <string name="no_assigned_task_title">No Active Tasks Available</string>
+    <string name="no_assigned_task_desc">New tasks published by the administrator will appear here automatically in real time.</string>
     <string name="submit_proof_title">Submit Task Proof (Text + Photo Required)</string>
     <string name="submit_proof_hint">Provide detailed written verification notes and completion steps…</string>
-    <string name="submit_proof_cta">Submit Proof for Review</string>
+    <string name="submit_proof_cta">Submit</string>
     <string name="create_task_cta">New Task</string>
     <string name="approve_submission">Approve &amp; Credit</string>
     <string name="reject_submission">Reject</string>
     <string name="security_info_title">Firebase Config &amp; Security Status</string>
-
-    <string name="default_web_client_id" translatable="false">54814309263-uralqcp874c3v5nrk9r4ajj9scpt93ug.apps.googleusercontent.com</string>
 </resources>

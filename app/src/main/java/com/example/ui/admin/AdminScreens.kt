@@ -116,6 +116,7 @@ fun AdminDashboardScreen(
   onToggleUserStatus: (UserProfile) -> Unit,
   adminSubmissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList()),
   adminWithdrawalRequestsState: UiState<List<DemoWithdrawalRequest>> = UiState.Success(emptyList()),
+  onToggleTaskActive: (TaskItem, Boolean) -> Unit = { _, _ -> },
   onCreateTaskExtended:
     ((String, String, String, String, UserProfile, String, String, String, String, String) -> Unit)? =
     null,
@@ -150,7 +151,33 @@ fun AdminDashboardScreen(
       }
     }
 
-  // Merge tasks and /submissions records so any submission in /submissions/{taskId} is always visible to Admin
+  // Active tasks currently in /tasks, enriched with submission details
+  val activeManagedTasks =
+    remember(tasks, submissions) {
+      val subByTaskId = submissions.associateBy { it.taskId.ifBlank { it.id } }
+      tasks
+        .map { task ->
+          val sub = subByTaskId[task.id]
+          if (sub != null) {
+            task.copy(
+              status = sub.status.ifBlank { task.status },
+              assignedUserId = sub.userId.ifBlank { task.assignedUserId },
+              assignedUserName = sub.userName.ifBlank { task.assignedUserName },
+              assignedUserEmail = sub.userEmail.ifBlank { task.assignedUserEmail },
+              proofText = sub.proofText.ifBlank { task.proofText },
+              proofImageUrl = sub.proofImageUrl.ifBlank { task.proofImageUrl },
+              proofStoragePath = sub.proofStoragePath.ifBlank { task.proofStoragePath },
+              adminFeedback = sub.adminFeedback.ifBlank { task.adminFeedback },
+              updatedAt = sub.updatedAt ?: task.updatedAt
+            )
+          } else {
+            task
+          }
+        }
+        .sortedByDescending { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
+    }
+
+  // Merge tasks and /submissions records so any submission in /submissions/{taskId} is always visible to Admin even if the task is deleted
   val mergedReviewTasks =
     remember(tasks, submissions) {
       val taskById = tasks.associateBy { it.id }.toMutableMap()
@@ -315,7 +342,7 @@ fun AdminDashboardScreen(
       when (activeTab) {
         AdminTab.TASKS -> {
           AdminTasksTabContent(
-            tasks = mergedReviewTasks,
+            tasks = activeManagedTasks,
             withdrawalRequests = withdrawalRequests,
             onCreateClick = {
               editingTask = null
@@ -326,6 +353,7 @@ fun AdminDashboardScreen(
               editingTask = task
               showTaskModal = true
             },
+            onToggleTaskActive = onToggleTaskActive,
             onDeleteTask = onDeleteTask
           )
         }
@@ -348,6 +376,17 @@ fun AdminDashboardScreen(
             },
             onToggleUserStatus = onToggleUserStatus
           )
+        }
+        AdminTab.WITHDRAWALS -> {
+          LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 24.dp)
+          ) {
+            item {
+              AdminWithdrawalRequestsSection(withdrawalRequests = withdrawalRequests)
+            }
+          }
         }
       }
     }
@@ -549,8 +588,57 @@ private fun AdminTasksTabContent(
   withdrawalRequests: List<DemoWithdrawalRequest>,
   onCreateClick: () -> Unit,
   onEditTask: (TaskItem) -> Unit,
+  onToggleTaskActive: (TaskItem, Boolean) -> Unit,
   onDeleteTask: (String) -> Unit
 ) {
+  var taskPendingDeletion by remember { mutableStateOf<TaskItem?>(null) }
+
+  taskPendingDeletion?.let { targetTask ->
+    AlertDialog(
+      onDismissRequest = { taskPendingDeletion = null },
+      modifier = Modifier.testTag("delete_task_confirm_dialog"),
+      title = {
+        Text(
+          text = "Delete Task?",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold
+        )
+      },
+      text = {
+        Text(
+          text =
+            "Are you sure you want to delete \"${targetTask.title}\"? Existing user submissions, review records, and user history will be preserved.",
+          style = MaterialTheme.typography.bodyMedium
+        )
+      },
+      confirmButton = {
+        Button(
+          onClick = {
+            val idToDelete = targetTask.id
+            taskPendingDeletion = null
+            onDeleteTask(idToDelete)
+          },
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor = MaterialTheme.colorScheme.error,
+              contentColor = MaterialTheme.colorScheme.onError
+            ),
+          modifier = Modifier.testTag("confirm_delete_task_button")
+        ) {
+          Text("Delete")
+        }
+      },
+      dismissButton = {
+        TextButton(
+          onClick = { taskPendingDeletion = null },
+          modifier = Modifier.testTag("cancel_delete_task_button")
+        ) {
+          Text("Cancel")
+        }
+      }
+    )
+  }
+
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -619,7 +707,35 @@ private fun AdminTasksTabContent(
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically
             ) {
-              StatusBadge(status = task.status)
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                StatusBadge(status = task.status, isActive = task.isActive)
+                Surface(
+                  shape = RoundedCornerShape(50),
+                  color =
+                    if (task.isActive) {
+                      MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                      MaterialTheme.colorScheme.errorContainer
+                    },
+                  modifier = Modifier.testTag("task_active_badge_${task.id}")
+                ) {
+                  Text(
+                    text = if (task.isActive) "Active" else "Deactivated",
+                    style = MaterialTheme.typography.labelSmall,
+                    color =
+                      if (task.isActive) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                      } else {
+                        MaterialTheme.colorScheme.onErrorContainer
+                      },
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                  )
+                }
+              }
               RewardBadge(rewardCents = task.rewardCents)
             }
 
@@ -729,8 +845,23 @@ private fun AdminTasksTabContent(
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
               }
-              if (task.status == TaskStatus.PENDING) {
-                Row {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+              ) {
+                OutlinedButton(
+                  onClick = { onToggleTaskActive(task, !task.isActive) },
+                  shape = RoundedCornerShape(10.dp),
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                  modifier = Modifier.testTag("toggle_task_active_${task.id}")
+                ) {
+                  Text(
+                    text = if (task.isActive) "Deactivate" else "Activate",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                  )
+                }
+                if (task.status == TaskStatus.PENDING) {
                   IconButton(
                     onClick = { onEditTask(task) },
                     modifier = Modifier.testTag("edit_task_${task.id}")
@@ -741,16 +872,16 @@ private fun AdminTasksTabContent(
                       tint = MaterialTheme.colorScheme.primary
                     )
                   }
-                  IconButton(
-                    onClick = { onDeleteTask(task.id) },
-                    modifier = Modifier.testTag("delete_task_${task.id}")
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.Delete,
-                      contentDescription = "Delete Task",
-                      tint = MaterialTheme.colorScheme.error
-                    )
-                  }
+                }
+                IconButton(
+                  onClick = { taskPendingDeletion = task },
+                  modifier = Modifier.testTag("delete_task_${task.id}")
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete Task",
+                    tint = MaterialTheme.colorScheme.error
+                  )
                 }
               }
             }

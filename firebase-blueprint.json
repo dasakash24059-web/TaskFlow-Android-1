@@ -120,6 +120,10 @@
           "enum": ["pending", "submitted", "approved", "rejected"],
           "description": "Current workflow status of the task."
         },
+        "isActive": {
+          "type": "boolean",
+          "description": "Whether the task is active and accepting new user submissions (true by default; can be deactivated or reactivated by Admin)."
+        },
         "proofText": {
           "type": "string",
           "description": "Written text proof submitted by the user."

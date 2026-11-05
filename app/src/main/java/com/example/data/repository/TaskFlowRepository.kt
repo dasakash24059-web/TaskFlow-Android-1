@@ -21,6 +21,7 @@ import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -180,7 +181,8 @@ class TaskFlowRepository(
   private val withdrawalRequestsCollection = firestore.collection("withdrawal_requests")
 
   /**
-   * Checks if the current user is an authorized administrator.
+   * Checks if the current user is an authorized administrator via `/admins/{uid}` (and bootstrapped owner).
+   * Never trusts client-editable `role` in `/users/{uid}`.
    */
   fun observeAdminAuthorization(uid: String, email: String): Flow<Boolean> = callbackFlow {
     require(uid.isNotBlank()) { "uid must not be blank" }
@@ -200,6 +202,38 @@ class TaskFlowRepository(
         trySend(isBootstrappedEmail || existsInAdmins)
       }
     awaitClose { listener.remove() }
+  }
+
+  /**
+   * Performs a one-shot secure Admin authorization check against `/admins/{uid}` in Firestore
+   * (and initializes `/admins/{uid}` if the user is the verified bootstrap Admin).
+   * Never trusts client-editable `role` in `/users/{uid}`.
+   */
+  suspend fun checkAndEnsureAdminAuthorization(uid: String, email: String): Boolean {
+    if (uid.isBlank()) return false
+    val safeEmail = email.trim()
+    val isBootstrappedAdmin =
+      safeEmail.lowercase(Locale.US) == BOOTSTRAPPED_ADMIN_EMAIL.lowercase(Locale.US)
+    return runCatching {
+      val adminDocRef = adminsCollection.document(uid)
+      val adminSnap = adminDocRef.get().await()
+      if (adminSnap.exists()) {
+        true
+      } else if (isBootstrappedAdmin) {
+        adminDocRef
+          .set(
+            mapOf(
+              "userId" to uid,
+              "email" to safeEmail,
+              "createdAt" to FieldValue.serverTimestamp()
+            )
+          )
+          .await()
+        true
+      } else {
+        false
+      }
+    }.getOrElse { isBootstrappedAdmin }
   }
 
   /**
@@ -322,6 +356,12 @@ class TaskFlowRepository(
         .await()
     }
 
+  private fun DocumentSnapshot.toTaskItem(): TaskItem? {
+    val parsed = toObject(TaskItem::class.java) ?: return null
+    val explicitActive = getBoolean("isActive") ?: true
+    return parsed.copy(isActive = explicitActive)
+  }
+
   /**
    * Observes all tasks in `/tasks` for any authenticated user.
    */
@@ -346,7 +386,7 @@ class TaskFlowRepository(
         val items =
           snapshot
             ?.documents
-            ?.mapNotNull { it.toObject(TaskItem::class.java) }
+            ?.mapNotNull { it.toTaskItem() }
             ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
             ?: emptyList()
         trySend(items)
@@ -361,8 +401,46 @@ class TaskFlowRepository(
     require(uid.isNotBlank()) { "uid must not be blank" }
     val snapshot = tasksCollection.get().await()
     snapshot.documents
-      .mapNotNull { it.toObject(TaskItem::class.java) }
+      .mapNotNull { it.toTaskItem() }
       .sortedByDescending { it.createdAt?.seconds ?: 0L }
+  }
+
+  /**
+   * Observes the current user's own submissions in `/submissions` so user history and activity
+   * remain preserved even if an Admin deletes the original task from `/tasks`.
+   */
+  fun observeUserSubmissions(uid: String): Flow<List<SubmissionItem>> = callbackFlow {
+    require(uid.isNotBlank()) { "uid must not be blank" }
+    val listener =
+      submissionsCollection
+        .whereEqualTo("userId", uid)
+        .addSnapshotListener { snapshot, error ->
+          if (error != null) {
+            close(error)
+            return@addSnapshotListener
+          }
+          val items =
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toObject(SubmissionItem::class.java) }
+              ?.sortedByDescending {
+                it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L
+              }
+              ?: emptyList()
+          trySend(items)
+        }
+    awaitClose { listener.remove() }
+  }
+
+  /**
+   * One-shot fetch of a user's own submissions in `/submissions`.
+   */
+  suspend fun getUserSubmissions(uid: String): Result<List<SubmissionItem>> = runCatching {
+    require(uid.isNotBlank()) { "uid must not be blank" }
+    val snapshot = submissionsCollection.whereEqualTo("userId", uid).get().await()
+    snapshot.documents
+      .mapNotNull { it.toObject(SubmissionItem::class.java) }
+      .sortedByDescending { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
   }
 
   /**
@@ -371,7 +449,7 @@ class TaskFlowRepository(
   suspend fun getTaskById(taskId: String): Result<TaskItem?> = runCatching {
     require(taskId.isNotBlank()) { "taskId must not be blank" }
     val snap = tasksCollection.document(taskId).get().await()
-    snap.toObject(TaskItem::class.java)
+    snap.toTaskItem()
   }
 
   /**
@@ -403,7 +481,7 @@ class TaskFlowRepository(
           val items =
             snapshot
               ?.documents
-              ?.mapNotNull { it.toObject(TaskItem::class.java) }
+              ?.mapNotNull { it.toTaskItem() }
               ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
               ?: emptyList()
           trySend(items)
@@ -553,6 +631,7 @@ class TaskFlowRepository(
         "assignedUserName" to assignedUserName.trim().ifEmpty { "Assigned User" },
         "assignedUserEmail" to assignedUserEmail.trim().ifEmpty { "user@taskflow.app" },
         "status" to TaskStatus.PENDING,
+        "isActive" to true,
         "proofText" to "",
         "proofImageUrl" to "",
         "proofStoragePath" to "",
@@ -679,7 +758,27 @@ class TaskFlowRepository(
   }
 
   /**
-   * Deletes a pending task (Admin only) and clears the assignee's `assignedTaskId` if it points to this task.
+   * Activates, deactivates, or reactivates a task (`isActive: Boolean`) in `/tasks/{taskId}`.
+   * Deactivated tasks cannot accept new user submissions until reactivated by Admin.
+   */
+  suspend fun setTaskActiveStatus(taskId: String, isActive: Boolean): Result<Unit> = runCatching {
+    require(taskId.isNotBlank()) { "taskId must not be blank" }
+    val taskRef = tasksCollection.document(taskId)
+    val taskSnap = taskRef.get().await()
+    check(taskSnap.exists()) { "Task $taskId does not exist." }
+    taskRef
+      .update(
+        mapOf(
+          "isActive" to isActive,
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
+      )
+      .await()
+  }
+
+  /**
+   * Deletes a task from `/tasks/{taskId}` (Admin only) and clears the assignee's `assignedTaskId`
+   * if it points to this task, while preserving `/submissions/{taskId}` and user history.
    */
   suspend fun deleteTask(taskId: String): Result<Unit> = runCatching {
     require(taskId.isNotBlank()) { "taskId must not be blank" }
@@ -710,7 +809,7 @@ class TaskFlowRepository(
   /**
    * Submits MANDATORY written text proof AND MANDATORY Gallery photo/screenshot proof for an open task.
    *
-   * Any active (non-suspended) authenticated user can submit proof on an available ('pending') task.
+   * Any active (non-suspended) authenticated user can submit proof on an active ('pending' and `isActive == true`) task.
    * Uploads/persists the selected image first, then atomically updates `/tasks/{taskId}` to `submitted`
    * (associating the submitting user's UID, name, and email) and creates `/submissions/{taskId}`.
    */
@@ -751,10 +850,14 @@ class TaskFlowRepository(
       }
     }
 
-    // 2. Verify task exists and is still open ('pending')
+    // 2. Verify task exists, is still open ('pending'), and is active ('isActive' != false)
     val taskRef = tasksCollection.document(task.id)
     val latestTaskSnap = taskRef.get().await()
     check(latestTaskSnap.exists()) { "Task ${task.id} no longer exists." }
+    val isActive = latestTaskSnap.getBoolean("isActive") ?: true
+    check(isActive) {
+      "This task is currently deactivated by Admin and is not accepting new submissions."
+    }
     val currentStatus = latestTaskSnap.getString("status") ?: ""
     check(currentStatus == TaskStatus.PENDING) {
       "Task proof can only be submitted while the task is Available (current status: ${TaskStatus.label(currentStatus)})."

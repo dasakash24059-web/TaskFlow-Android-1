@@ -7,11 +7,13 @@ import android.os.Looper
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
@@ -24,11 +26,12 @@ import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethod
 import com.example.ui.admin.AdminDashboardScreen
 import com.example.ui.auth.AuthScreen
-import com.example.ui.auth.PortalLoginTarget
+import com.example.ui.auth.TaskFlowSplashScreen
 import com.example.ui.theme.TaskFlowTheme
 import com.example.ui.user.UserHomeScreen
 import com.example.ui.user.UserProfileScreen
 import com.example.ui.user.UserTaskDetailScreen
+import com.example.ui.user.UserTrackingScreen
 import com.example.ui.user.UserWalletScreen
 import com.example.ui.viewmodel.AdminTab
 import com.example.ui.viewmodel.UiState
@@ -53,10 +56,14 @@ class ExampleRobolectricTest {
   fun `verify app strings and firebase oauth resources`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     assertEquals("TaskFlow", context.getString(R.string.app_name))
+    assertEquals("Complete Tasks. Track Progress.", context.getString(R.string.splash_tagline))
+    assertEquals("Welcome to TaskFlow", context.getString(R.string.welcome_to_taskflow))
+    assertEquals("Sign in to continue", context.getString(R.string.sign_in_to_continue))
+    assertEquals("Continue with Google", context.getString(R.string.sign_in_with_google))
     assertEquals("(default)", context.getString(R.string.firestore_database_id))
-    assertEquals(
-      "54814309263-uralqcp874c3v5nrk9r4ajj9scpt93ug.apps.googleusercontent.com",
-      context.getString(R.string.default_web_client_id)
+    assertTrue(
+      "Expected default_web_client_id generated from google-services.json",
+      context.getString(R.string.default_web_client_id).endsWith(".apps.googleusercontent.com")
     )
   }
 
@@ -71,29 +78,52 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `AuthScreen portal selector switches between User App and Admin Portal`() {
-    var selectedPortal = PortalLoginTarget.USER_APP
+  fun `TaskFlowSplashScreen displays only logo, app name, and tagline and triggers auth check`() {
+    var splashCompleted = false
     composeTestRule.setContent {
       TaskFlowTheme {
-        AuthScreen(
-          selectedPortal = selectedPortal,
-          onSelectPortal = { selectedPortal = it },
-          onAuthSuccess = {}
+        TaskFlowSplashScreen(
+          durationMillis = 300L,
+          onSplashFinished = { splashCompleted = true }
         )
       }
     }
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("portal_user_tab").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("portal_admin_tab").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("splash_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("splash_app_name").assertIsDisplayed()
+    composeTestRule.onNodeWithText("TaskFlow").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("splash_tagline").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Complete Tasks. Track Progress.").assertIsDisplayed()
+    composeTestRule.onNodeWithText(BOOTSTRAPPED_ADMIN_EMAIL, substring = true).assertDoesNotExist()
 
-    composeTestRule.onNodeWithTag("portal_admin_tab").performClick()
     composeTestRule.waitForIdle()
-    assertEquals(PortalLoginTarget.ADMIN_DASHBOARD, selectedPortal)
+    assertTrue("Expected splash screen to complete and trigger auth check", splashCompleted)
   }
 
   @Test
-  fun `UserHomeScreen displays clickable task URL in INR and opens browser intent when tapped`() {
+  fun `AuthScreen displays clean Google Login screen with Welcome to TaskFlow, Sign in to continue, and Continue with Google button`() {
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        AuthScreen(onAuthSuccess = {})
+      }
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("google_login_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("login_app_name").assertIsDisplayed()
+    composeTestRule.onNodeWithText("TaskFlow").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("login_welcome_heading").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Welcome to TaskFlow").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("login_subtitle").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Sign in to continue").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("google_sign_in_button").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Continue with Google").assertIsDisplayed()
+    // Ensure no unnecessary portal tabs or admin email are shown on login screen
+    composeTestRule.onNodeWithTag("portal_user_tab").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("portal_admin_tab").assertDoesNotExist()
+    composeTestRule.onNodeWithText(BOOTSTRAPPED_ADMIN_EMAIL, substring = true).assertDoesNotExist()
+  }
+
+  @Test
+  fun `UserHomeScreen displays welcome message, Available Balance in INR, Available Tasks button, compact task cards, and recent activity without any submission form`() {
     val playStoreUrl = "https://play.google.com/store/apps/details?id=com.example.app"
     val sampleProfile =
       UserProfile(
@@ -121,8 +151,12 @@ class ExampleRobolectricTest {
         assignedUserId = "user_1",
         assignedUserName = "Test Worker",
         assignedUserEmail = "worker@example.com",
-        status = TaskStatus.PENDING
+        status = TaskStatus.PENDING,
+        isActive = true
       )
+
+    var navigatedFilter = ""
+    var selectedTaskId = ""
 
     composeTestRule.setContent {
       TaskFlowTheme {
@@ -130,32 +164,102 @@ class ExampleRobolectricTest {
           profileState = UiState.Success(sampleProfile),
           tasksState = UiState.Success(listOf(sampleTask)),
           isAdminAuthorized = false,
-          onSelectTask = {},
-          onNavigateToTracking = {},
+          onSelectTask = { selectedTaskId = it },
+          onNavigateToTracking = { navigatedFilter = it },
           onSwitchToAdmin = {}
         )
       }
     }
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Welcome back,").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("home_welcome_message").assertIsDisplayed()
     composeTestRule.onNodeWithText("Test Worker").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("home_available_balance").assertIsDisplayed()
     composeTestRule.onNodeWithText("₹25.00").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("home_available_tasks_section").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("browse_available_tasks_button").assertIsDisplayed().performClick()
+    assertEquals(TaskStatus.PENDING, navigatedFilter)
+
+    // Compact task card on Home shows View Task button and NO submission form
+    composeTestRule
+      .onNodeWithTag("user_home_screen")
+      .performScrollToNode(hasTestTag("start_or_view_task_button_task_101"))
     composeTestRule.onNodeWithText("₹15.00").assertIsDisplayed()
     composeTestRule.onNodeWithText("Verify Checkout UI").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("submit_proof_modal").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("task_proof_input").assertDoesNotExist()
     composeTestRule
-      .onNodeWithTag("dashboard_featured_task_link_task_101")
-      .performScrollTo()
+      .onNodeWithTag("start_or_view_task_button_task_101")
       .assertIsDisplayed()
       .performClick()
+    assertEquals("task_101", selectedTaskId)
 
-    val context = ApplicationProvider.getApplicationContext<Context>()
-    val nextStartedActivity = Shadows.shadowOf(context as android.app.Application).nextStartedActivity
-    assertNotNull("Expected ACTION_VIEW Intent to be launched when clicking task URL", nextStartedActivity)
-    assertEquals(Intent.ACTION_VIEW, nextStartedActivity.action)
-    assertEquals(Uri.parse(playStoreUrl), nextStartedActivity.data)
+    composeTestRule
+      .onNodeWithTag("user_home_screen")
+      .performScrollToNode(hasTestTag("home_recent_activity_section"))
+    composeTestRule
+      .onNodeWithTag("home_recent_activity_section")
+      .assertIsDisplayed()
   }
 
   @Test
-  fun `UserTaskDetailScreen displays all 9 task detail sections and enforces mandatory text AND photo proof`() {
+  fun `UserTrackingScreen displays active tasks as compact cards with View Task button and excludes deactivated tasks`() {
+    val activeTask =
+      TaskItem(
+        id = "task_active_1",
+        title = "Install Active App",
+        appName = "Active Companion",
+        description = "Full description that should not clutter the compact card",
+        category = "App Install",
+        rewardCents = 4000L,
+        status = TaskStatus.PENDING,
+        isActive = true
+      )
+    val deactivatedTask =
+      TaskItem(
+        id = "task_deactivated_2",
+        title = "Paused Campaign Task",
+        appName = "Paused App",
+        description = "Deactivated by admin",
+        category = "Website Visit",
+        rewardCents = 2000L,
+        status = TaskStatus.PENDING,
+        isActive = false
+      )
+
+    var openedTaskId = ""
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        UserTrackingScreen(
+          tasksState = UiState.Success(listOf(activeTask, deactivatedTask)),
+          selectedFilter = "all",
+          onSelectFilter = {},
+          onSelectTask = { openedTaskId = it },
+          currentUserId = "user_1"
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Active task is shown as a compact card with "View Task" button
+    composeTestRule.onNodeWithTag("available_tasks_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("task_card_task_active_1").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Install Active App").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Active Companion").assertIsDisplayed()
+    composeTestRule.onNodeWithText("₹40.00").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("start_or_view_task_button_task_active_1").assertIsDisplayed().performClick()
+    assertEquals("task_active_1", openedTaskId)
+
+    // Deactivated pending task is excluded from Available Tasks list
+    composeTestRule.onNodeWithTag("task_card_task_deactivated_2").assertDoesNotExist()
+    // Full description and submission form are NOT shown on the task list
+    composeTestRule.onNodeWithText("Full description that should not clutter the compact card").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("submit_proof_modal").assertDoesNotExist()
+  }
+
+  @Test
+  fun `UserTaskDetailScreen does NOT auto-open submission form, opens SubmitProofModalDialog only when Submit Proof is tapped, and enforces mandatory text AND photo proof`() {
+    val playStoreUrl = "https://play.google.com/store/apps/details?id=com.example.app"
     val sampleTask =
       TaskItem(
         id = "task_202",
@@ -165,13 +269,14 @@ class ExampleRobolectricTest {
         description = "Download our app and verify onboarding",
         instructions = "Step 1: Tap the link\nStep 2: Screenshot the welcome screen",
         requiredProof = "Provide your test username and welcome screen screenshot",
-        taskLink = "https://play.google.com/store/apps/details?id=com.example.app",
+        taskLink = playStoreUrl,
         category = "App Install",
         rewardCents = 5000L,
         assignedUserId = "admin_1",
         assignedUserName = "Primary Admin",
         assignedUserEmail = BOOTSTRAPPED_ADMIN_EMAIL,
-        status = TaskStatus.PENDING
+        status = TaskStatus.PENDING,
+        isActive = true
       )
     val fakePhotoUri = Uri.parse("content://media/picker/0/photo_proof_1.jpg")
     var submittedText: String? = null
@@ -195,7 +300,7 @@ class ExampleRobolectricTest {
     }
     composeTestRule.waitForIdle()
 
-    // Verify all dedicated task detail sections are displayed
+    // 1. Verify all dedicated task detail sections are displayed
     composeTestRule.onNodeWithTag("task_detail_title").assertIsDisplayed()
     composeTestRule.onNodeWithTag("task_detail_app_info_section").assertIsDisplayed()
     composeTestRule.onNodeWithTag("task_detail_app_icon").assertIsDisplayed()
@@ -205,42 +310,45 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("task_detail_required_proof_section").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("task_detail_clickable_link").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("start_task_open_link_button").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("open_submit_proof_button").performScrollTo().assertIsDisplayed()
+
+    // 2. Verify submission form modal is NOT automatically opened on Task Details screen
+    composeTestRule.onNodeWithTag("submit_proof_modal").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("task_proof_input").assertDoesNotExist()
+
+    // 3. Tap "Start Task / Open Link" -> launches ACTION_VIEW Intent
+    composeTestRule.onNodeWithTag("start_task_open_link_button").performScrollTo().performClick()
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val nextStartedActivity = Shadows.shadowOf(context as android.app.Application).nextStartedActivity
+    assertNotNull("Expected ACTION_VIEW Intent when tapping Start Task / Open Link", nextStartedActivity)
+    assertEquals(Intent.ACTION_VIEW, nextStartedActivity.action)
+    assertEquals(Uri.parse(playStoreUrl), nextStartedActivity.data)
+
+    // 4. Tap "Submit Proof" -> opens the clean SubmitProofModalDialog
+    composeTestRule.onNodeWithTag("open_submit_proof_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("submit_proof_modal").assertIsDisplayed()
 
     // Case 1: Photo is selected (initialSelectedImageUri), but written text proof is empty -> Submit button MUST be disabled
-    composeTestRule
-      .onNodeWithTag("submit_proof_button")
-      .performScrollTo()
-      .assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("submit_proof_button").assertIsNotEnabled()
 
     // Case 2: Enter written text proof while photo is selected -> Submit button MUST become enabled
     composeTestRule
       .onNodeWithTag("task_proof_input")
-      .performScrollTo()
       .performTextInput("Completed app installation and verified welcome screen.")
     composeTestRule.waitForIdle()
-
-    composeTestRule
-      .onNodeWithTag("submit_proof_button")
-      .performScrollTo()
-      .assertIsEnabled()
+    composeTestRule.onNodeWithTag("submit_proof_button").assertIsEnabled()
 
     // Case 3: Remove the selected photo while text proof is present (text-only) -> Submit button MUST become disabled
-    composeTestRule
-      .onNodeWithTag("remove_photo_button")
-      .performScrollTo()
-      .performClick()
+    composeTestRule.onNodeWithTag("remove_photo_button").performScrollTo().performClick()
     composeTestRule.waitForIdle()
-
-    composeTestRule
-      .onNodeWithTag("submit_proof_button")
-      .performScrollTo()
-      .assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("submit_proof_button").assertIsNotEnabled()
     assertEquals(null, submittedText)
     assertEquals(null, submittedUri)
   }
 
   @Test
-  fun `UserTaskDetailScreen submits when both written text and gallery photo are provided`() {
+  fun `UserTaskDetailScreen submits when Submit Proof button is tapped and both written text and gallery photo are provided`() {
     val sampleTask =
       TaskItem(
         id = "task_203",
@@ -255,7 +363,8 @@ class ExampleRobolectricTest {
         assignedUserId = "user_1",
         assignedUserName = "Test Worker",
         assignedUserEmail = "worker@example.com",
-        status = TaskStatus.PENDING
+        status = TaskStatus.PENDING,
+        isActive = true
       )
     val fakePhotoUri = Uri.parse("content://media/picker/0/survey_screenshot.jpg")
     var submittedText: String? = null
@@ -279,15 +388,17 @@ class ExampleRobolectricTest {
     }
     composeTestRule.waitForIdle()
 
+    // Tap "Submit Proof" button to open the submission modal
+    composeTestRule.onNodeWithTag("open_submit_proof_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+
     composeTestRule
       .onNodeWithTag("task_proof_input")
-      .performScrollTo()
       .performTextInput("Survey completed with confirmation code #9821.")
     composeTestRule.waitForIdle()
 
     composeTestRule
       .onNodeWithTag("submit_proof_button")
-      .performScrollTo()
       .assertIsEnabled()
       .performClick()
     composeTestRule.waitForIdle()
@@ -401,6 +512,71 @@ class ExampleRobolectricTest {
     assertEquals("1. Tap Play Store link\n2. Take screenshot of home screen", createdInstructions)
     assertEquals("Username and home screen screenshot", createdRequiredProof)
     assertEquals("15.00", createdReward)
+  }
+
+  @Test
+  fun `AdminTasksTab allows Admin to Deactivate, Reactivate, and Delete tasks with Confirmation Dialog`() {
+    val activeTask =
+      TaskItem(
+        id = "task_manage_1",
+        title = "Manageable Task",
+        appName = "TaskFlow App",
+        description = "Task with activate/deactivate and delete confirmation",
+        category = "App Install",
+        rewardCents = 2500L,
+        assignedUserId = "admin_1",
+        assignedUserName = "Admin",
+        status = TaskStatus.PENDING,
+        isActive = true
+      )
+
+    var toggledTaskId = ""
+    var toggledActiveState: Boolean? = null
+    var deletedTaskId = ""
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        AdminDashboardScreen(
+          isAdminAuthorized = true,
+          currentUserId = "admin_1",
+          currentUserEmail = BOOTSTRAPPED_ADMIN_EMAIL,
+          currentUserDisplayName = "Primary Admin",
+          activeTab = AdminTab.TASKS,
+          adminTasksState = UiState.Success(listOf(activeTask)),
+          registeredUsersState = UiState.Success(emptyList()),
+          submissionFilter = TaskStatus.SUBMITTED,
+          onSelectSubmissionFilter = {},
+          onCreateTask = { _, _, _, _, _, _, _ -> },
+          onUpdateTask = { _, _, _, _, _, _, _, _ -> },
+          onDeleteTask = { deletedTaskId = it },
+          onReviewSubmission = { _, _, _ -> },
+          onToggleUserStatus = {},
+          onToggleTaskActive = { task, newActive ->
+            toggledTaskId = task.id
+            toggledActiveState = newActive
+          }
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. Verify Active badge and Deactivate button
+    composeTestRule.onNodeWithTag("task_active_badge_task_manage_1").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Active").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("toggle_task_active_task_manage_1").performScrollTo().performClick()
+    assertEquals("task_manage_1", toggledTaskId)
+    assertEquals(false, toggledActiveState)
+
+    // 2. Tap Delete button -> opens Delete Confirmation Dialog before deleting
+    composeTestRule.onNodeWithTag("delete_task_task_manage_1").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("delete_task_confirm_dialog").assertIsDisplayed()
+    assertEquals("", deletedTaskId)
+
+    // Confirm deletion -> triggers onDeleteTask
+    composeTestRule.onNodeWithTag("confirm_delete_task_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("task_manage_1", deletedTaskId)
   }
 
   @Test
@@ -568,7 +744,7 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `UserProfileScreen shows only name and email at top, 5 menu cards in order, hides admin email, and navigates to History and Activity screens`() {
+  fun `UserProfileScreen shows only name and email at top, 5 menu cards in order, hides admin email, and preserves History and Activity when task is deleted`() {
     var signedOut = false
     val adminProfile =
       UserProfile(
@@ -581,15 +757,16 @@ class ExampleRobolectricTest {
         balanceCents = 1500L,
         completedTasksCount = 1L
       )
-    val completedTask =
-      TaskItem(
+    // Simulate a task that was deleted from /tasks (tasksState is empty), but preserved in /submissions (submissionsState)
+    val preservedSubmission =
+      SubmissionItem(
         id = "hist_task_1",
-        title = "Install TaskFlow Partner App",
+        taskId = "hist_task_1",
+        taskTitle = "Install TaskFlow Partner App",
         appName = "Partner App",
-        category = "App Install",
         rewardCents = 5000L,
-        assignedUserId = "admin_1",
-        assignedUserName = "Primary Admin",
+        userId = "admin_1",
+        userName = "Primary Admin",
         status = TaskStatus.APPROVED,
         proofText = "Installed and verified partner app.",
         adminFeedback = "Approved by Admin"
@@ -599,13 +776,14 @@ class ExampleRobolectricTest {
       TaskFlowTheme {
         UserProfileScreen(
           profileState = UiState.Success(adminProfile),
-          tasksState = UiState.Success(listOf(completedTask)),
+          tasksState = UiState.Success(emptyList()),
           userEmail = BOOTSTRAPPED_ADMIN_EMAIL,
           userUid = "admin_1",
           onUpdateDisplayName = {},
           onOpenSecurityInfo = {},
           onSelectTask = {},
-          onSignOut = { signedOut = true }
+          onSignOut = { signedOut = true },
+          submissionsState = UiState.Success(listOf(preservedSubmission))
         )
       }
     }
@@ -624,7 +802,7 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("profile_menu_settings").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("profile_menu_about").performScrollTo().assertIsDisplayed()
 
-    // 3. Open separate History screen and verify compact card & filters (All, Approved, Pending, Rejected)
+    // 3. Open separate History screen and verify preserved submission card & filters (All, Approved, Pending, Rejected)
     composeTestRule.onNodeWithTag("profile_menu_history").performScrollTo().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("user_history_screen").assertIsDisplayed()
@@ -644,7 +822,7 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("history_back_button").performClick()
     composeTestRule.waitForIdle()
 
-    // 4. Open separate Activity screen and verify real user/task activity items
+    // 4. Open separate Activity screen and verify real preserved user/task activity items
     composeTestRule.onNodeWithTag("profile_menu_activity").performScrollTo().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("user_activity_screen").assertIsDisplayed()

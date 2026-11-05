@@ -874,3 +874,178 @@ test("7. Safe Demo Withdrawal Requests (/withdrawal_requests): enforces >= ₹20
   );
 });
 
+test("8. Admin task deactivate/reactivate controls, blocked submissions on deactivated tasks, and preserved /submissions when task is deleted", async () => {
+  const ts = nowTimestamp();
+  const taskId = "task_active_lifecycle_1";
+  const sampleImageUrl =
+    "https://firebasestorage.googleapis.com/v0/b/taskflow-8852d.firebasestorage.app/o/submissions%2Falice_123%2Ftask_active_lifecycle_1%2Fproof_1.jpg?alt=media";
+  const sampleStoragePath =
+    "submissions/alice_123/task_active_lifecycle_1/proof_1.jpg";
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await db.collection("users").doc(ADMIN_UID).set({
+      userId: ADMIN_UID,
+      email: ADMIN_EMAIL,
+      displayName: "Admin",
+      role: "admin",
+      approvalStatus: "approved",
+      balanceCents: 0,
+      completedTasksCount: 0,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      email: ALICE_EMAIL,
+      displayName: "Alice",
+      role: "user",
+      approvalStatus: "approved",
+      balanceCents: 0,
+      completedTasksCount: 0,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+  });
+
+  const adminDb = testEnv
+    .authenticatedContext(ADMIN_UID, {
+      email: ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const aliceDb = testEnv
+    .authenticatedContext(ALICE_UID, {
+      email: ALICE_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  // 1. Admin creates an active task (isActive: true) -> MUST SUCCEED
+  const createBatch = adminDb.batch();
+  createBatch.set(adminDb.collection("tasks").doc(taskId), {
+    title: "Install Partner App",
+    appName: "Partner App",
+    appIconUrl: "https://example.com/icon.png",
+    description: "Install and verify onboarding",
+    instructions: "1. Open link\n2. Screenshot home screen",
+    requiredProof: "Written note and screenshot",
+    taskLink: "https://play.google.com/store/apps/details?id=com.example.partner",
+    category: "App Install",
+    rewardCents: 2000,
+    assignedUserId: ADMIN_UID,
+    assignedUserName: "Admin",
+    assignedUserEmail: ADMIN_EMAIL,
+    status: "pending",
+    isActive: true,
+    proofText: "",
+    proofImageUrl: "",
+    proofStoragePath: "",
+    adminFeedback: "",
+    createdBy: ADMIN_UID,
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  createBatch.update(adminDb.collection("users").doc(ADMIN_UID), {
+    assignedTaskId: taskId,
+    updatedAt: ts,
+  });
+  await assertSucceeds(createBatch.commit());
+
+  // 2. Normal user attempting to deactivate a task -> MUST FAIL
+  await assertFails(
+    aliceDb.collection("tasks").doc(taskId).update({
+      isActive: false,
+      updatedAt: new Date(),
+    })
+  );
+
+  // 3. Admin deactivates the task (isActive: false) -> MUST SUCCEED
+  await assertSucceeds(
+    adminDb.collection("tasks").doc(taskId).update({
+      isActive: false,
+      updatedAt: new Date(),
+    })
+  );
+
+  // 4. User attempting to submit proof on a deactivated task -> MUST FAIL
+  const deactivatedSubmitBatch = aliceDb.batch();
+  deactivatedSubmitBatch.update(aliceDb.collection("tasks").doc(taskId), {
+    assignedUserId: ALICE_UID,
+    assignedUserName: "Alice",
+    assignedUserEmail: ALICE_EMAIL,
+    status: "submitted",
+    proofText: "Attempted submission while deactivated.",
+    proofImageUrl: sampleImageUrl,
+    proofStoragePath: sampleStoragePath,
+    updatedAt: new Date(),
+  });
+  deactivatedSubmitBatch.set(aliceDb.collection("submissions").doc(taskId), {
+    taskId: taskId,
+    taskTitle: "Install Partner App",
+    appName: "Partner App",
+    appIconUrl: "https://example.com/icon.png",
+    rewardCents: 2000,
+    userId: ALICE_UID,
+    userName: "Alice",
+    userEmail: ALICE_EMAIL,
+    proofText: "Attempted submission while deactivated.",
+    proofImageUrl: sampleImageUrl,
+    proofStoragePath: sampleStoragePath,
+    status: "submitted",
+    adminFeedback: "",
+    createdAt: ts,
+    updatedAt: new Date(),
+  });
+  await assertFails(deactivatedSubmitBatch.commit());
+
+  // 5. Admin reactivates the task (isActive: true) -> MUST SUCCEED
+  await assertSucceeds(
+    adminDb.collection("tasks").doc(taskId).update({
+      isActive: true,
+      updatedAt: new Date(),
+    })
+  );
+
+  // 6. User submits proof on reactivated task -> MUST SUCCEED
+  const activeSubmitBatch = aliceDb.batch();
+  activeSubmitBatch.update(aliceDb.collection("tasks").doc(taskId), {
+    assignedUserId: ALICE_UID,
+    assignedUserName: "Alice",
+    assignedUserEmail: ALICE_EMAIL,
+    status: "submitted",
+    proofText: "Completed task after reactivation.",
+    proofImageUrl: sampleImageUrl,
+    proofStoragePath: sampleStoragePath,
+    updatedAt: ts,
+  });
+  activeSubmitBatch.set(aliceDb.collection("submissions").doc(taskId), {
+    taskId: taskId,
+    taskTitle: "Install Partner App",
+    appName: "Partner App",
+    appIconUrl: "https://example.com/icon.png",
+    rewardCents: 2000,
+    userId: ALICE_UID,
+    userName: "Alice",
+    userEmail: ALICE_EMAIL,
+    proofText: "Completed task after reactivation.",
+    proofImageUrl: sampleImageUrl,
+    proofStoragePath: sampleStoragePath,
+    status: "submitted",
+    adminFeedback: "",
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  await assertSucceeds(activeSubmitBatch.commit());
+
+  // 7. Admin deletes the task from /tasks while /submissions/{taskId} remains preserved and cannot be deleted
+  await assertSucceeds(adminDb.collection("tasks").doc(taskId).delete());
+  await assertFails(adminDb.collection("submissions").doc(taskId).delete());
+  await assertSucceeds(aliceDb.collection("submissions").doc(taskId).get());
+  await assertSucceeds(adminDb.collection("submissions").doc(taskId).get());
+});
+
+

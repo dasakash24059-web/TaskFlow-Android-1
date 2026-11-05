@@ -79,6 +79,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
+import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.UserActivityItem
@@ -86,6 +87,7 @@ import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethod
 import com.example.data.model.formatRewardInr
 import com.example.data.model.formatVisibleUserEmail
+import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.ui.components.AppIconThumbnail
 import com.example.ui.components.ProofImageView
 import com.example.ui.components.RewardBadge
@@ -113,6 +115,7 @@ fun UserWalletScreen(
   isBusy: Boolean = false,
   withdrawalValidationError: String? = null,
   onClearValidationError: () -> Unit = {},
+  submissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList()),
   onSubmitDemoWithdrawal: (
     amountInr: String,
     method: String,
@@ -126,7 +129,12 @@ fun UserWalletScreen(
 ) {
   val profile = (profileState as? UiState.Success)?.data
   val availableBalanceCents = profile?.balanceCents ?: 0L
-  val tasks = (tasksState as? UiState.Success)?.data ?: emptyList()
+  val rawTasks = (tasksState as? UiState.Success)?.data ?: emptyList()
+  val submissions = (submissionsState as? UiState.Success)?.data ?: emptyList()
+  val tasks =
+    remember(rawTasks, submissions, currentUserId) {
+      mergeTasksWithPreservedSubmissions(rawTasks, submissions, currentUserId)
+    }
   val withdrawalRequests =
     (withdrawalRequestsState as? UiState.Success)?.data ?: emptyList()
 
@@ -867,6 +875,7 @@ fun UserProfileScreen(
   onSelectTask: (String) -> Unit,
   onSignOut: () -> Unit,
   withdrawalRequestsState: UiState<List<DemoWithdrawalRequest>> = UiState.Success(emptyList()),
+  submissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList()),
   activeSubScreen: ProfileSubScreen = ProfileSubScreen.MAIN,
   onNavigateSubScreen: ((ProfileSubScreen) -> Unit)? = null
 ) {
@@ -882,7 +891,12 @@ fun UserProfileScreen(
   }
 
   val profile = (profileState as? UiState.Success)?.data
-  val tasks = (tasksState as? UiState.Success)?.data ?: emptyList()
+  val rawTasks = (tasksState as? UiState.Success)?.data ?: emptyList()
+  val submissions = (submissionsState as? UiState.Success)?.data ?: emptyList()
+  val tasks =
+    remember(rawTasks, submissions, userUid) {
+      mergeTasksWithPreservedSubmissions(rawTasks, submissions, userUid)
+    }
   val withdrawalRequests =
     (withdrawalRequestsState as? UiState.Success)?.data ?: emptyList()
 
