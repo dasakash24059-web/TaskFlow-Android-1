@@ -3,6 +3,7 @@ package com.example.ui.viewmodel
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
 import com.example.data.model.SubmissionItem
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface UiState<out T> {
   data object Loading : UiState<Nothing>
@@ -64,7 +66,17 @@ class TaskFlowViewModel(
   initialPortal: PortalLoginTarget = PortalLoginTarget.USER_APP
 ) : ViewModel() {
 
-  private val _activePortal = MutableStateFlow(initialPortal)
+  private val isBootstrappedAdminEmail: Boolean =
+    currentUserEmail.trim().equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true)
+
+  private val _activePortal =
+    MutableStateFlow(
+      if (isBootstrappedAdminEmail) {
+        PortalLoginTarget.ADMIN_DASHBOARD
+      } else {
+        initialPortal
+      }
+    )
   val activePortal: StateFlow<PortalLoginTarget> = _activePortal.asStateFlow()
 
   private val _activeUserTab = MutableStateFlow(UserTab.HOME)
@@ -106,8 +118,12 @@ class TaskFlowViewModel(
   val isAdminAuthorized: StateFlow<Boolean> =
     repository
       .observeAdminAuthorization(currentUserId, currentUserEmail)
-      .catch { emit(false) }
-      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+      .catch { emit(isBootstrappedAdminEmail) }
+      .stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        isBootstrappedAdminEmail
+      )
 
   val userProfileState: StateFlow<UiState<UserProfile?>> =
     repository
@@ -184,24 +200,27 @@ class TaskFlowViewModel(
   init {
     viewModelScope.launch {
       val authorizedAdmin =
-        repository.checkAndEnsureAdminAuthorization(currentUserId, currentUserEmail)
-      _activePortal.value =
-        if (authorizedAdmin) {
-          PortalLoginTarget.ADMIN_DASHBOARD
-        } else {
-          PortalLoginTarget.USER_APP
-        }
+        withTimeoutOrNull(10_000L) {
+          repository.checkAndEnsureAdminAuthorization(currentUserId, currentUserEmail)
+        } ?: isBootstrappedAdminEmail
+      if (authorizedAdmin) {
+        _activePortal.value = PortalLoginTarget.ADMIN_DASHBOARD
+      }
+    }
 
-      repository
-        .ensureUserProfile(
-          uid = currentUserId,
-          email = currentUserEmail,
-          displayName = currentUserDisplayName
-        )
-        .onFailure { err ->
-          _bannerMessage.value =
-            "Profile initialization notice: ${err.localizedMessage ?: "Check connection"}"
-        }
+    viewModelScope.launch {
+      withTimeoutOrNull(10_000L) {
+        repository
+          .ensureUserProfile(
+            uid = currentUserId,
+            email = currentUserEmail,
+            displayName = currentUserDisplayName
+          )
+          .onFailure { err ->
+            _bannerMessage.value =
+              "Profile initialization notice: ${err.localizedMessage ?: "Check connection"}"
+          }
+      }
     }
   }
 

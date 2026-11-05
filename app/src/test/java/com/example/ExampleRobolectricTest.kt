@@ -35,7 +35,22 @@ import com.example.ui.user.UserTrackingScreen
 import com.example.ui.user.UserWalletScreen
 import com.example.ui.viewmodel.AdminTab
 import com.example.ui.viewmodel.UiState
+import android.os.Bundle
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialResponse
+import com.example.data.repository.TaskFlowRepository
+import com.example.ui.auth.PortalLoginTarget
+import com.example.ui.auth.VERIFIED_TASKFLOW_WEB_CLIENT_ID
+import com.example.ui.auth.extractGoogleIdToken
+import com.example.ui.auth.handleSignInResult
+import com.example.ui.auth.resolveWebClientId
+import com.example.ui.viewmodel.TaskFlowViewModel
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_SIWG_CREDENTIAL
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -60,11 +75,74 @@ class ExampleRobolectricTest {
     assertEquals("Welcome to TaskFlow", context.getString(R.string.welcome_to_taskflow))
     assertEquals("Sign in to continue", context.getString(R.string.sign_in_to_continue))
     assertEquals("Continue with Google", context.getString(R.string.sign_in_with_google))
-    assertEquals("(default)", context.getString(R.string.firestore_database_id))
-    assertTrue(
-      "Expected default_web_client_id generated from google-services.json",
-      context.getString(R.string.default_web_client_id).endsWith(".apps.googleusercontent.com")
+    assertEquals(
+      "ai-studio-android-taskflow-f47fe501-b47e-4e0e-8222-905e3d5397ff",
+      context.getString(R.string.firestore_database_id)
     )
+    assertEquals(
+      VERIFIED_TASKFLOW_WEB_CLIENT_ID,
+      context.getString(R.string.default_web_client_id)
+    )
+    assertEquals(VERIFIED_TASKFLOW_WEB_CLIENT_ID, resolveWebClientId(context))
+  }
+
+  @Test
+  fun `extractGoogleIdToken and handleSignInResult support both GoogleIdToken and SIWG credentials and always stop loading state`() =
+    runBlocking {
+      val tokenKey = "com.google.android.libraries.identity.googleid.BUNDLE_KEY_ID_TOKEN"
+
+      // 1. Standard TYPE_GOOGLE_ID_TOKEN_CREDENTIAL bundle
+      val standardBundle = Bundle().apply { putString(tokenKey, "sample.jwt.token.standard") }
+      val standardCred = CustomCredential(TYPE_GOOGLE_ID_TOKEN_CREDENTIAL, standardBundle)
+      assertEquals("sample.jwt.token.standard", extractGoogleIdToken(standardCred))
+
+      // 2. Sign-In With Google TYPE_GOOGLE_ID_TOKEN_SIWG_CREDENTIAL bundle
+      val siwgBundle = Bundle().apply { putString(tokenKey, "sample.jwt.token.siwg") }
+      val siwgCred = CustomCredential(TYPE_GOOGLE_ID_TOKEN_SIWG_CREDENTIAL, siwgBundle)
+      assertEquals("sample.jwt.token.siwg", extractGoogleIdToken(siwgCred))
+
+      // 3. Verify handleSignInResult never leaves isLoading stuck on true even when token is empty
+      var isLoading = true
+      var capturedError: String? = null
+      val emptyCred = CustomCredential(TYPE_GOOGLE_ID_TOKEN_CREDENTIAL, Bundle())
+      handleSignInResult(
+        result = GetCredentialResponse(emptyCred),
+        onLoadingChange = { isLoading = it },
+        onError = { capturedError = it }
+      )
+      assertFalse("Expected isLoading to be reset to false", isLoading)
+      assertNotNull("Expected clear error message for empty token", capturedError)
+    }
+
+  @Test
+  fun `TaskFlowViewModel immediately routes Admin Gmail to Admin Dashboard and other Gmail accounts to User Dashboard without blocking`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    ensureFirebaseInitialized(context)
+    val repo = TaskFlowRepository(FirebaseFirestore.getInstance())
+
+    // 1. Bootstrapped Admin Gmail (dasakash24059@gmail.com) -> Immediately opens Admin Dashboard
+    val adminVm =
+      TaskFlowViewModel(
+        repository = repo,
+        currentUserId = "admin_uid_1",
+        currentUserEmail = BOOTSTRAPPED_ADMIN_EMAIL,
+        currentUserDisplayName = "Primary Admin",
+        initialPortal = PortalLoginTarget.USER_APP
+      )
+    assertEquals(PortalLoginTarget.ADMIN_DASHBOARD, adminVm.activePortal.value)
+    assertTrue(adminVm.isAdminAuthorized.value)
+
+    // 2. Any other Gmail account -> Immediately opens User Dashboard
+    val userVm =
+      TaskFlowViewModel(
+        repository = repo,
+        currentUserId = "user_uid_2",
+        currentUserEmail = "member@gmail.com",
+        currentUserDisplayName = "TaskFlow Member",
+        initialPortal = PortalLoginTarget.USER_APP
+      )
+    assertEquals(PortalLoginTarget.USER_APP, userVm.activePortal.value)
+    assertFalse(userVm.isAdminAuthorized.value)
   }
 
   @Test

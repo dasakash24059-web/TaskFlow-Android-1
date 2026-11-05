@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,11 +64,15 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.data.repository.TaskFlowRepository
 import com.example.ui.admin.AdminDashboardScreen
@@ -154,6 +159,7 @@ fun TaskFlowAppRoot(
   initialShowSplash: Boolean = true
 ) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   val resolvedAuth =
     remember(auth, context) {
       auth
@@ -166,16 +172,43 @@ fun TaskFlowAppRoot(
 
   var showSplash by rememberSaveable { mutableStateOf(initialShowSplash) }
   var preferredPortal by rememberSaveable { mutableStateOf(PortalLoginTarget.USER_APP) }
+  var observedUser by remember(resolvedAuth) { mutableStateOf<FirebaseUser?>(resolvedAuth?.currentUser) }
   var manualUserOverride by remember { mutableStateOf<FirebaseUser?>(resolvedAuth?.currentUser) }
 
-  val observedUser =
-    if (resolvedAuth != null) {
-      val authFlow = remember(resolvedAuth) { resolvedAuth.authStateFlow() }
-      val flowUser by authFlow.collectAsStateWithLifecycle(initialValue = resolvedAuth.currentUser)
-      flowUser
+  // Keep AuthStateListener active across the entire composition lifetime (including when
+  // MainActivity is paused/stopped behind the Google Play Services Account Picker overlay).
+  DisposableEffect(resolvedAuth) {
+    val authInstance = resolvedAuth
+    if (authInstance != null) {
+      observedUser = authInstance.currentUser
+      val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+        val latest = firebaseAuth.currentUser
+        observedUser = latest
+        if (latest != null) {
+          manualUserOverride = latest
+        }
+      }
+      authInstance.addAuthStateListener(listener)
+      onDispose { authInstance.removeAuthStateListener(listener) }
     } else {
-      null
+      onDispose {}
     }
+  }
+
+  // Re-sync auth state immediately when MainActivity resumes from the Google Account Picker sheet.
+  DisposableEffect(lifecycleOwner, resolvedAuth) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_RESUME) {
+        val latest = resolvedAuth?.currentUser
+        if (latest != null) {
+          observedUser = latest
+          manualUserOverride = latest
+        }
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
 
   val activeUser = observedUser ?: manualUserOverride
 
@@ -191,15 +224,26 @@ fun TaskFlowAppRoot(
       selectedPortal = preferredPortal,
       onSelectPortal = { preferredPortal = it },
       onAuthSuccess = { signedInUser ->
-        manualUserOverride =
-          signedInUser ?: runCatching { Firebase.auth.currentUser }.getOrNull()
+        val resolvedUser =
+          signedInUser ?: resolvedAuth?.currentUser ?: runCatching { Firebase.auth.currentUser }.getOrNull()
+        observedUser = resolvedUser
+        manualUserOverride = resolvedUser
       }
     )
   } else {
+    val isBootstrappedAdmin =
+      activeUser.email.orEmpty().trim().equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true)
+    val resolvedInitialPortal =
+      if (isBootstrappedAdmin) {
+        PortalLoginTarget.ADMIN_DASHBOARD
+      } else {
+        preferredPortal
+      }
     AuthenticatedWorkspace(
       user = activeUser,
-      initialPortal = preferredPortal,
+      initialPortal = resolvedInitialPortal,
       onSignedOut = {
+        observedUser = null
         manualUserOverride = null
       }
     )
@@ -231,9 +275,16 @@ private fun AuthenticatedWorkspace(
                 "APPLICATION_KEY missing from CreationExtras"
               }
             ensureFirebaseInitialized(app)
+            val dbId =
+              runCatching { app.getString(R.string.firestore_database_id).trim() }
+                .getOrDefault("(default)")
             val db =
               runCatching {
-                  FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
+                  if (dbId.isNotEmpty() && dbId != "(default)") {
+                    FirebaseFirestore.getInstance(dbId)
+                  } else {
+                    FirebaseFirestore.getInstance()
+                  }
                 }
                 .getOrElse { FirebaseFirestore.getInstance() }
             TaskFlowViewModel(
