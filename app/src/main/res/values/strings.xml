@@ -27,6 +27,4 @@
     <string name="approve_submission">Approve &amp; Credit</string>
     <string name="reject_submission">Reject</string>
     <string name="security_info_title">Firebase Config &amp; Security Status</string>
-
-    <string name="default_web_client_id">54814309263-gf2g5te3e12cpuhpdrvu7ash8b5pj9ai.apps.googleusercontent.com</string>
 </resources>
