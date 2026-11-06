@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Timeline
@@ -211,23 +212,33 @@ fun UserHomeScreen(
           Brush.verticalGradient(
             colors =
               listOf(
-                Color(0xFFF8FAFC),
-                Color(0xFFF1F5F9),
-                Color(0xFFEEF2FF)
+                Color(0xFFFAFAFE),
+                Color(0xFFF5F3FF),
+                Color(0xFFF3E8FF)
               )
           )
         )
   ) {
     Canvas(modifier = Modifier.matchParentSize()) {
       drawCircle(
-        color = Color(0xFFC7D2FE).copy(alpha = 0.18f),
+        color = Color(0xFFDDD6FE).copy(alpha = 0.35f),
         radius = size.width * 0.45f,
-        center = Offset(size.width * 0.95f, size.height * 0.05f)
+        center = Offset(size.width * 0.05f, size.height * 0.02f)
       )
       drawCircle(
-        color = Color(0xFFDDD6FE).copy(alpha = 0.15f),
-        radius = size.width * 0.55f,
-        center = Offset(size.width * 0.05f, size.height * 0.45f)
+        color = Color(0xFFC7D2FE).copy(alpha = 0.28f),
+        radius = size.width * 0.5f,
+        center = Offset(size.width * 0.95f, size.height * 0.08f)
+      )
+      drawCircle(
+        color = Color(0xFFE9D5FF).copy(alpha = 0.22f),
+        radius = size.width * 0.35f,
+        center = Offset(-size.width * 0.1f, size.height * 0.45f)
+      )
+      drawCircle(
+        color = Color(0xFFC7D2FE).copy(alpha = 0.25f),
+        radius = size.width * 0.6f,
+        center = Offset(size.width * 0.9f, size.height * 0.9f)
       )
     }
 
@@ -601,7 +612,8 @@ private fun WatchAndEarnCard(
       ) {
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp)
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier = Modifier.weight(1f, false)
         ) {
           Surface(
             shape = CircleShape,
@@ -618,9 +630,10 @@ private fun WatchAndEarnCard(
             }
           }
           Text(
-            text = "Watch & Earn",
+            text = "Watch Ads &\nEarn",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            lineHeight = 18.sp
           )
         }
 
@@ -629,23 +642,28 @@ private fun WatchAndEarnCard(
           color = Color(0xFFEDE9FE),
           modifier = Modifier.testTag("watch_earn_badge")
         ) {
-          Text(
-            text = "Up to ₹25",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF6D28D9),
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-          )
+          Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+          ) {
+            Text(
+              text = "🎁 Up to ₹25",
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.Bold,
+              color = Color(0xFF6D28D9)
+            )
+          }
         }
       }
 
       Button(
         onClick = onWatchAdClicked,
         shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6D28D9)),
         modifier =
           Modifier.fillMaxWidth()
-            .height(40.dp)
+            .height(42.dp)
             .testTag("watch_ad_button")
       ) {
         Icon(
@@ -654,7 +672,7 @@ private fun WatchAndEarnCard(
           modifier = Modifier.size(16.dp)
         )
         Spacer(modifier = Modifier.width(4.dp))
-        Text(text = "Watch Video", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+        Text(text = "Watch Now", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
       }
     }
   }
@@ -665,58 +683,142 @@ private fun WatchAdInfoDialog(onDismiss: () -> Unit) {
   AlertDialog(
     onDismissRequest = onDismiss,
     modifier = Modifier.testTag("watch_earn_dialog"),
+    shape = RoundedCornerShape(26.dp),
+    containerColor = Color(0xFFFAFAFE),
     icon = {
       Surface(
         shape = CircleShape,
         color = Color(0xFFEDE9FE),
-        modifier = Modifier.size(48.dp)
+        modifier = Modifier.size(56.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.PlayArrow,
             contentDescription = null,
-            tint = Color(0xFF7C3AED),
-            modifier = Modifier.size(26.dp)
+            tint = Color(0xFF6D28D9),
+            modifier = Modifier.size(32.dp)
           )
         }
       }
     },
     title = {
-      Text(
-        text = "Watch & Earn Video Rewards",
-        style = MaterialTheme.typography.titleLarge,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center
-      )
+      Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+      ) {
+        Text(
+          text = "Watch Ads & Earn",
+          style = MaterialTheme.typography.headlineSmall,
+          fontWeight = FontWeight.Bold,
+          color = Color(0xFF1E1B4B),
+          textAlign = TextAlign.Center
+        )
+        Surface(
+          shape = RoundedCornerShape(50),
+          color = Color(0xFFEDE9FE)
+        ) {
+          Text(
+            text = "🎁 Reward: Up to ₹25",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF6D28D9),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+          )
+        }
+      }
     },
     text = {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-          text = "Ad Integration Information:",
-          style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.Bold
-        )
-        Text(
-          text = "• Verified Rewards: Watching a full video credits between ₹1.00 and ₹2.00 to your wallet, with occasional bonus drops up to ₹4.00.",
-          style = MaterialTheme.typography.bodyMedium
-        )
-        Text(
-          text = "• Maximum Reward Disclosure: ₹25.00 is the advertised maximum ceiling reward for high-value partner campaigns.",
-          style = MaterialTheme.typography.bodyMedium
-        )
-        Text(
-          text = "• Platform Integrity: In compliance with Google Play and zero billing policies, video inventory is loaded via official ad network SDKs. Real rewards are credited only upon complete, verified video playback.",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+      Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        // Main Description Card
+        Surface(
+          shape = RoundedCornerShape(16.dp),
+          color = Color(0xFFF3E8FF).copy(alpha = 0.6f),
+          modifier = Modifier.fillMaxWidth()
+        ) {
+          Text(
+            text = "Watch genuine advertisements and earn rewards. Follow the instructions carefully and complete eligible advertisements to qualify for rewards.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color(0xFF4C1D95),
+            modifier = Modifier.padding(14.dp),
+            lineHeight = 20.sp
+          )
+        }
+
+        // Important Information Bullet Points
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          Text(
+            text = "Important Information:",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF1E1B4B)
+          )
+          Text(
+            text = "• Rewards depend on the actual advertisement campaign.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+          Text(
+            text = "• Only eligible and successfully completed advertisements qualify.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+          Text(
+            text = "• Watch advertisements properly and follow the advertiser's instructions.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+          Text(
+            text = "• Do not skip advertisements or attempt to manipulate the reward system.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+          Text(
+            text = "• Rewards will be credited only after successful advertisement verification.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+        }
+
+        // Clearly Labelled Coming Soon Message
+        Surface(
+          shape = RoundedCornerShape(14.dp),
+          color = Color(0xFFFEF3C7),
+          modifier = Modifier.fillMaxWidth()
+        ) {
+          Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Icon(
+              imageVector = Icons.Default.Info,
+              contentDescription = null,
+              tint = Color(0xFFB45309),
+              modifier = Modifier.size(20.dp)
+            )
+            Text(
+              text = "Advertisements are coming soon. Stay tuned!",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Bold,
+              color = Color(0xFF78350F)
+            )
+          }
+        }
       }
     },
     confirmButton = {
       Button(
         onClick = onDismiss,
-        modifier = Modifier.testTag("close_watch_dialog_button")
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6D28D9)),
+        modifier =
+          Modifier.fillMaxWidth()
+            .testTag("close_watch_dialog_button")
       ) {
-        Text("Got it")
+        Text("Got it", fontWeight = FontWeight.Bold)
       }
     }
   )
