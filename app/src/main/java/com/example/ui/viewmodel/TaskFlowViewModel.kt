@@ -48,7 +48,8 @@ enum class ProfileSubScreen {
   HISTORY,
   REWARDS,
   SETTINGS,
-  ABOUT
+  ABOUT,
+  SUPPORT
 }
 
 enum class AdminTab {
@@ -618,12 +619,17 @@ class TaskFlowViewModel(
   fun toggleUserApprovalStatus(user: UserProfile) {
     val uid = user.userId.ifBlank { user.id }
     val nextStatus = if (user.approvalStatus == "approved") "suspended" else "approved"
+    updateUserApprovalStatus(user, nextStatus)
+  }
+
+  fun updateUserApprovalStatus(user: UserProfile, targetStatus: String) {
+    val uid = user.userId.ifBlank { user.id }
     viewModelScope.launch {
       _isBusy.value = true
       repository
-        .updateUserApprovalStatus(uid, nextStatus)
+        .updateUserApprovalStatus(uid, targetStatus)
         .onSuccess {
-          _bannerMessage.value = "Updated ${user.displayName} status to $nextStatus."
+          _bannerMessage.value = "Updated ${user.displayName} status to $targetStatus."
         }
         .onFailure {
           _bannerMessage.value = it.localizedMessage ?: "Failed to update user status."

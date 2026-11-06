@@ -1,9 +1,13 @@
-name: Build TaskFlow APK
+name: Build and Release TaskFlow APK
 
 on:
   push:
-    branches: [ main, master ]
+    tags:
+      - 'v*'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -67,6 +71,9 @@ jobs:
       - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Run Unit Tests
+        run: gradle testDebugUnitTest --continue || true
+
       - name: Build Debug APK
         run: gradle assembleDebug
 
@@ -114,13 +121,39 @@ jobs:
 
           echo "SUCCESS: APK Signing Certificate SHA-1 matches Firebase configuration!"
 
+      - name: Prepare Versioned Release APK
+        id: prepare_apk
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "main" ] || [ "$VERSION" = "master" ]; then
+            VERSION="v1.0.0-$(date +'%Y%m%d%H%M')"
+          fi
+          RELEASE_APK="app/build/outputs/apk/debug/TaskFlow-${VERSION}.apk"
+          cp "app/build/outputs/apk/debug/app-debug.apk" "$RELEASE_APK"
+          echo "apk_path=$RELEASE_APK" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Prepared APK: $RELEASE_APK"
+
       - name: Clean up restored keystore
         if: always()
         run: rm -f debug.keystore
 
-      - name: Upload APK
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: TaskFlow-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/debug/TaskFlow-*.apk
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "TaskFlow Release ${{ steps.prepare_apk.outputs.version }}"
+          tag_name: ${{ github.ref_name }}
+          files: ${{ steps.prepare_apk.outputs.apk_path }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -107,10 +107,12 @@ import kotlinx.coroutines.flow.callbackFlow
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    com.example.ui.theme.ThemePreferences.init(applicationContext)
     ensureFirebaseInitialized(applicationContext)
     runCatching { enableEdgeToEdge() }
     setContent {
-      TaskFlowTheme {
+      val themeMode by com.example.ui.theme.ThemePreferences.currentThemeMode.collectAsStateWithLifecycle()
+      TaskFlowTheme(themeMode = themeMode) {
         TaskFlowAppRoot()
       }
     }
@@ -650,7 +652,22 @@ private fun AuthenticatedWorkspace(
                   withdrawalRequestsState = userWithdrawalRequestsState,
                   submissionsState = userSubmissionsState,
                   activeSubScreen = profileSubScreen,
-                  onNavigateSubScreen = { viewModel.setProfileSubScreen(it) }
+                  onNavigateSubScreen = { viewModel.setProfileSubScreen(it) },
+                  onNavigateScreen = { target ->
+                    when (target) {
+                      "tasks", "tracking" -> viewModel.setUserTab(UserTab.TRACKING)
+                      "wallet" -> viewModel.setUserTab(UserTab.WALLET)
+                      "profile" -> viewModel.setUserTab(UserTab.PROFILE)
+                      "settings" -> {
+                        viewModel.setUserTab(UserTab.PROFILE)
+                        viewModel.setProfileSubScreen(ProfileSubScreen.SETTINGS)
+                      }
+                      "support" -> {
+                        viewModel.setUserTab(UserTab.PROFILE)
+                        viewModel.setProfileSubScreen(ProfileSubScreen.SUPPORT)
+                      }
+                    }
+                  }
                 )
               }
             }
@@ -694,6 +711,7 @@ private fun AuthenticatedWorkspace(
               viewModel.reviewSubmission(task, approve, feedback)
             },
             onToggleUserStatus = { viewModel.toggleUserApprovalStatus(it) },
+            onUpdateUserStatus = { user, status -> viewModel.updateUserApprovalStatus(user, status) },
             adminSubmissionsState = adminSubmissionsState,
             adminWithdrawalRequestsState = adminWithdrawalRequestsState,
             onToggleTaskActive = { task, isActive ->

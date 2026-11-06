@@ -1,5 +1,8 @@
 package com.example.ui.theme
 
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -10,6 +13,41 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+enum class AppThemeMode(val title: String, val description: String) {
+  SYSTEM_DEFAULT("System Default", "Follows device appearance settings automatically"),
+  LIGHT("Light Mode", "Clean purple-and-white bright appearance"),
+  DARK("Dark Mode", "Deep violet and dark surface for low-light comfort")
+}
+
+object ThemePreferences {
+  private const val PREFS_NAME = "taskflow_theme_prefs"
+  private const val KEY_THEME_MODE = "app_theme_mode"
+
+  private val _currentThemeMode = MutableStateFlow(AppThemeMode.SYSTEM_DEFAULT)
+  val currentThemeMode: StateFlow<AppThemeMode> = _currentThemeMode.asStateFlow()
+
+  fun init(context: Context) {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val savedName = prefs.getString(KEY_THEME_MODE, AppThemeMode.SYSTEM_DEFAULT.name)
+    val mode =
+      try {
+        AppThemeMode.valueOf(savedName ?: AppThemeMode.SYSTEM_DEFAULT.name)
+      } catch (e: Exception) {
+        AppThemeMode.SYSTEM_DEFAULT
+      }
+    _currentThemeMode.value = mode
+  }
+
+  fun setThemeMode(context: Context, mode: AppThemeMode) {
+    _currentThemeMode.value = mode
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
+  }
+}
 
 // TaskFlow Professional Purple-and-White Palette
 private val LightColorScheme =
@@ -137,10 +175,17 @@ val TaskFlowTypography =
 
 @Composable
 fun TaskFlowTheme(
-  darkTheme: Boolean = false,
+  themeMode: AppThemeMode = AppThemeMode.SYSTEM_DEFAULT,
   content: @Composable () -> Unit
 ) {
-  val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+  val isDark =
+    when (themeMode) {
+      AppThemeMode.LIGHT -> false
+      AppThemeMode.DARK -> true
+      AppThemeMode.SYSTEM_DEFAULT -> isSystemInDarkTheme()
+    }
+
+  val colorScheme = if (isDark) DarkColorScheme else LightColorScheme
   MaterialTheme(
     colorScheme = colorScheme,
     typography = TaskFlowTypography,

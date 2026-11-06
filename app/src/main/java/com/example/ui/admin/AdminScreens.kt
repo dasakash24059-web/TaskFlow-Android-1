@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.RateReview
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Task
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.AlertDialog
@@ -114,6 +115,7 @@ fun AdminDashboardScreen(
   onDeleteTask: (String) -> Unit,
   onReviewSubmission: (TaskItem, Boolean, String) -> Unit,
   onToggleUserStatus: (UserProfile) -> Unit,
+  onUpdateUserStatus: ((UserProfile, String) -> Unit)? = null,
   adminSubmissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList()),
   adminWithdrawalRequestsState: UiState<List<DemoWithdrawalRequest>> = UiState.Success(emptyList()),
   onToggleTaskActive: (TaskItem, Boolean) -> Unit = { _, _ -> },
@@ -374,7 +376,8 @@ fun AdminDashboardScreen(
               preselectedAssignee = user
               showTaskModal = true
             },
-            onToggleUserStatus = onToggleUserStatus
+            onToggleUserStatus = onToggleUserStatus,
+            onUpdateUserStatus = onUpdateUserStatus
           )
         }
         AdminTab.WITHDRAWALS -> {
@@ -444,7 +447,7 @@ private fun AdminMetricCard(
     shape = RoundedCornerShape(16.dp),
     color = MaterialTheme.colorScheme.surface,
     tonalElevation = 2.dp,
-    modifier = modifier
+    modifier = modifier.testTag("admin_metric_${label.lowercase().replace(' ', '_')}")
   ) {
     Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)) {
       Row(
@@ -1264,102 +1267,477 @@ private fun SubmissionReviewCard(
 private fun AdminUsersTabContent(
   users: List<UserProfile>,
   onAssignTaskToUser: (UserProfile) -> Unit,
-  onToggleUserStatus: (UserProfile) -> Unit
+  onToggleUserStatus: (UserProfile) -> Unit,
+  onUpdateUserStatus: ((UserProfile, String) -> Unit)? = null
 ) {
-  LazyColumn(
-    modifier = Modifier.fillMaxSize(),
-    verticalArrangement = Arrangement.spacedBy(12.dp),
-    contentPadding = PaddingValues(bottom = 24.dp)
-  ) {
-    items(users, key = { it.userId.ifBlank { it.id } }) { user ->
-      val uid = user.userId.ifBlank { user.id }
-      Card(
-        modifier = Modifier.fillMaxWidth().testTag("admin_user_card_$uid"),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-      ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
-              modifier = Modifier.weight(1f)
-            ) {
-              Box(
-                modifier =
-                  Modifier.size(44.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-              ) {
-                Text(
-                  text = (user.displayName.firstOrNull() ?: 'U').uppercaseChar().toString(),
-                  style = MaterialTheme.typography.titleLarge,
-                  color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-              }
-              Column {
-                Text(text = user.displayName, style = MaterialTheme.typography.titleMedium)
-                Text(
-                  text = formatVisibleUserEmail(user.email, user.role),
-                  style = MaterialTheme.typography.bodyMedium,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-              }
+  var searchQuery by rememberSaveable { mutableStateOf("") }
+  var selectedFilter by rememberSaveable { mutableStateOf("ALL") }
+  var selectedUserForDetail by remember { mutableStateOf<UserProfile?>(null) }
+  var pendingStatusChange by remember { mutableStateOf<Pair<UserProfile, String>?>(null) }
+
+  val pendingCount = remember(users) {
+    users.count { it.approvalStatus.equals("pending", ignoreCase = true) }
+  }
+  val approvedCount = remember(users) {
+    users.count { it.approvalStatus.equals("approved", ignoreCase = true) }
+  }
+  val suspendedCount = remember(users) {
+    users.count { it.approvalStatus.equals("suspended", ignoreCase = true) }
+  }
+
+  val filteredUsers = remember(users, searchQuery, selectedFilter) {
+    users.filter { user ->
+      val matchesFilter = when (selectedFilter) {
+        "PENDING" -> user.approvalStatus.equals("pending", ignoreCase = true)
+        "APPROVED" -> user.approvalStatus.equals("approved", ignoreCase = true)
+        "SUSPENDED" -> user.approvalStatus.equals("suspended", ignoreCase = true)
+        else -> true
+      }
+      val matchesSearch = if (searchQuery.isBlank()) {
+        true
+      } else {
+        val query = searchQuery.trim().lowercase(Locale.US)
+        user.displayName.lowercase(Locale.US).contains(query) ||
+          user.email.lowercase(Locale.US).contains(query) ||
+          user.userId.lowercase(Locale.US).contains(query)
+      }
+      matchesFilter && matchesSearch
+    }
+  }
+
+  // Confirmation Dialog before modifying user approval status
+  pendingStatusChange?.let { (user, targetStatus) ->
+    AlertDialog(
+      onDismissRequest = { pendingStatusChange = null },
+      modifier = Modifier.testTag("admin_user_confirm_dialog"),
+      title = {
+        Text(
+          text = "Confirm Status Change",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold
+        )
+      },
+      text = {
+        Text(
+          text = "Are you sure you want to change ${user.displayName.ifBlank { "this user" }} status to ${targetStatus.uppercase(Locale.US)}?\n\nEmail: ${user.email}",
+          style = MaterialTheme.typography.bodyMedium
+        )
+      },
+      confirmButton = {
+        Button(
+          onClick = {
+            if (onUpdateUserStatus != null) {
+              onUpdateUserStatus(user, targetStatus)
+            } else {
+              onToggleUserStatus(user)
             }
-            RewardBadge(rewardCents = user.balanceCents)
-          }
+            pendingStatusChange = null
+            if (selectedUserForDetail?.id == user.id || selectedUserForDetail?.userId == user.userId) {
+              selectedUserForDetail = null
+            }
+          },
+          modifier = Modifier.testTag("admin_user_confirm_status_btn")
+        ) {
+          Text("Confirm ${targetStatus.replaceFirstChar { it.uppercase() }}")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { pendingStatusChange = null }) {
+          Text("Cancel")
+        }
+      }
+    )
+  }
 
-          Spacer(modifier = Modifier.height(12.dp))
+  // User Detail Dialog
+  selectedUserForDetail?.let { user ->
+    val uid = user.userId.ifBlank { user.id }
+    val formattedDate =
+      (user.createdAt ?: user.updatedAt)?.toDate()?.let {
+        SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
+      } ?: "Recently registered"
 
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+    AlertDialog(
+      onDismissRequest = { selectedUserForDetail = null },
+      modifier = Modifier.testTag("admin_user_detail_dialog"),
+      title = {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+          Box(
+            modifier =
+              Modifier.size(44.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
           ) {
             Text(
-              text =
-                "Role: ${user.role.uppercase(Locale.US)} • Status: ${user.approvalStatus.uppercase(Locale.US)} • Completed: ${user.completedTasksCount}",
-              style = MaterialTheme.typography.labelSmall,
+              text = (user.displayName.firstOrNull() ?: 'U').uppercaseChar().toString(),
+              style = MaterialTheme.typography.titleLarge,
+              color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+          }
+          Column {
+            Text(
+              text = user.displayName.ifBlank { "User Profile" },
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold
+            )
+            Text(
+              text = user.email,
+              style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
           }
+        }
+      },
+      text = {
+        Column(
+          modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+          verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+          AdminDetailInfoRow(label = "User ID", value = uid)
+          AdminDetailInfoRow(label = "Role", value = user.role.uppercase(Locale.US))
+          AdminDetailInfoRow(label = "Approval Status", value = user.approvalStatus.uppercase(Locale.US))
+          AdminDetailInfoRow(label = "Available Balance", value = formatRewardInr(user.balanceCents))
+          AdminDetailInfoRow(label = "Completed Tasks", value = "${user.completedTasksCount}")
+          if (user.assignedTaskId.isNotBlank()) {
+            AdminDetailInfoRow(label = "Assigned Task ID", value = user.assignedTaskId)
+          }
+          AdminDetailInfoRow(label = "Registered At", value = formattedDate)
 
-          Spacer(modifier = Modifier.height(12.dp))
+          Spacer(modifier = Modifier.height(8.dp))
+
+          Text(
+            text = "Status Actions:",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold
+          )
 
           Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
           ) {
-            OutlinedButton(
-              onClick = { onToggleUserStatus(user) },
-              shape = RoundedCornerShape(10.dp),
-              modifier = Modifier.weight(1f).testTag("toggle_user_status_$uid")
-            ) {
-              Text(if (user.approvalStatus == "approved") "Suspend" else "Approve User")
+            if (user.approvalStatus != "approved") {
+              Button(
+                onClick = { pendingStatusChange = Pair(user, "approved") },
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.weight(1f).testTag("dialog_approve_user_btn")
+              ) {
+                Text("Approve")
+              }
             }
-            Button(
-              onClick = { onAssignTaskToUser(user) },
-              shape = RoundedCornerShape(10.dp),
-              modifier = Modifier.weight(1.2f).testTag("assign_task_to_user_$uid")
+            if (user.approvalStatus != "suspended") {
+              OutlinedButton(
+                onClick = { pendingStatusChange = Pair(user, "suspended") },
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.weight(1f).testTag("dialog_suspend_user_btn")
+              ) {
+                Text("Suspend")
+              }
+            }
+          }
+        }
+      },
+      confirmButton = {
+        TextButton(onClick = { selectedUserForDetail = null }) {
+          Text("Close")
+        }
+      }
+    )
+  }
+
+  LazyColumn(
+    modifier = Modifier.fillMaxSize().testTag("admin_users_tab_content"),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+    contentPadding = PaddingValues(bottom = 24.dp)
+  ) {
+    // 1. Search Bar
+    item {
+      OutlinedTextField(
+        value = searchQuery,
+        onValueChange = { searchQuery = it },
+        placeholder = { Text("Search users by name, email or ID...") },
+        leadingIcon = {
+          Icon(Icons.Default.Search, contentDescription = "Search Users")
+        },
+        trailingIcon = {
+          if (searchQuery.isNotEmpty()) {
+            IconButton(onClick = { searchQuery = "" }) {
+              Icon(Icons.Default.Close, contentDescription = "Clear search")
+            }
+          }
+        },
+        singleLine = true,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth().testTag("admin_user_search_input")
+      )
+    }
+
+    // 2. Filter Tabs (Pending, Approved, Suspended, All)
+    item {
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        FilterChip(
+          selected = selectedFilter == "ALL",
+          onClick = { selectedFilter = "ALL" },
+          label = { Text("All (${users.size})") },
+          modifier = Modifier.testTag("admin_user_filter_all")
+        )
+        FilterChip(
+          selected = selectedFilter == "PENDING",
+          onClick = { selectedFilter = "PENDING" },
+          label = { Text("Pending ($pendingCount)") },
+          modifier = Modifier.testTag("admin_user_filter_pending")
+        )
+        FilterChip(
+          selected = selectedFilter == "APPROVED",
+          onClick = { selectedFilter = "APPROVED" },
+          label = { Text("Approved ($approvedCount)") },
+          modifier = Modifier.testTag("admin_user_filter_approved")
+        )
+        FilterChip(
+          selected = selectedFilter == "SUSPENDED",
+          onClick = { selectedFilter = "SUSPENDED" },
+          label = { Text("Suspended ($suspendedCount)") },
+          modifier = Modifier.testTag("admin_user_filter_suspended")
+        )
+      }
+    }
+
+    // 3. User Cards or Empty State
+    if (filteredUsers.isEmpty()) {
+      item {
+        Card(
+          modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+          shape = RoundedCornerShape(20.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+          )
+        ) {
+          Column(
+            modifier = Modifier.fillMaxWidth().padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Icon(
+              imageVector = Icons.Default.People,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(40.dp)
+            )
+            Text(
+              text = if (searchQuery.isNotBlank()) "No users match '$searchQuery'" else "No users in this category",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold,
+              textAlign = TextAlign.Center
+            )
+            Text(
+              text = "Try switching the filter tab or clearing your search query.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              textAlign = TextAlign.Center
+            )
+          }
+        }
+      }
+    } else {
+      items(filteredUsers, key = { it.userId.ifBlank { it.id } }) { user ->
+        val uid = user.userId.ifBlank { user.id }
+        val statusUpper = user.approvalStatus.uppercase(Locale.US)
+        val statusColor = when (user.approvalStatus.lowercase(Locale.US)) {
+          "approved" -> androidx.compose.ui.graphics.Color(0xFF16A34A)
+          "suspended" -> MaterialTheme.colorScheme.error
+          else -> androidx.compose.ui.graphics.Color(0xFFD97706)
+        }
+        val statusBg = statusColor.copy(alpha = 0.12f)
+
+        Card(
+          modifier =
+            Modifier.fillMaxWidth()
+              .clip(RoundedCornerShape(20.dp))
+              .clickable { selectedUserForDetail = user }
+              .testTag("admin_user_card_$uid"),
+          shape = RoundedCornerShape(20.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+          Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
             ) {
-              Icon(
-                imageVector = Icons.Default.Add,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp)
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f)
+              ) {
+                Box(
+                  modifier =
+                    Modifier.size(44.dp)
+                      .clip(CircleShape)
+                      .background(MaterialTheme.colorScheme.primaryContainer),
+                  contentAlignment = Alignment.Center
+                ) {
+                  Text(
+                    text = (user.displayName.firstOrNull() ?: 'U').uppercaseChar().toString(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                  )
+                }
+                Column {
+                  Text(
+                    text = user.displayName.ifBlank { "User" },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                  )
+                  Text(
+                    text = formatVisibleUserEmail(user.email, user.role),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                }
+              }
+              RewardBadge(rewardCents = user.balanceCents)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Surface(
+                  shape = RoundedCornerShape(50),
+                  color = statusBg
+                ) {
+                  Text(
+                    text = statusUpper,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = statusColor,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                  )
+                }
+                Surface(
+                  shape = RoundedCornerShape(50),
+                  color = MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                  Text(
+                    text = user.role.uppercase(Locale.US),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                  )
+                }
+              }
+
+              Text(
+                text = "Completed: ${user.completedTasksCount}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
               )
-              Spacer(modifier = Modifier.width(6.dp))
-              Text("Assign Task")
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              // Status Toggle Button with Confirmation
+              when (user.approvalStatus.lowercase(Locale.US)) {
+                "approved" -> {
+                  OutlinedButton(
+                    onClick = { pendingStatusChange = Pair(user, "suspended") },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                      contentColor = MaterialTheme.colorScheme.error
+                    ),
+                    modifier = Modifier.weight(1f).testTag("toggle_user_status_$uid")
+                  ) {
+                    Text("Suspend")
+                  }
+                }
+                "suspended" -> {
+                  Button(
+                    onClick = { pendingStatusChange = Pair(user, "approved") },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f).testTag("toggle_user_status_$uid")
+                  ) {
+                    Text("Reactivate")
+                  }
+                }
+                else -> {
+                  // Pending
+                  Button(
+                    onClick = { pendingStatusChange = Pair(user, "approved") },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f).testTag("toggle_user_status_$uid")
+                  ) {
+                    Text("Approve")
+                  }
+                  OutlinedButton(
+                    onClick = { pendingStatusChange = Pair(user, "suspended") },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                      contentColor = MaterialTheme.colorScheme.error
+                    ),
+                    modifier = Modifier.weight(1f).testTag("reject_user_status_$uid")
+                  ) {
+                    Text("Reject")
+                  }
+                }
+              }
+
+              Button(
+                onClick = { onAssignTaskToUser(user) },
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.weight(1.1f).testTag("assign_task_to_user_$uid")
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Add,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Assign Task")
+              }
             }
           }
         }
       }
     }
+  }
+}
+
+@Composable
+private fun AdminDetailInfoRow(label: String, value: String) {
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically
+  ) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(
+      text = value,
+      style = MaterialTheme.typography.bodyMedium,
+      fontWeight = FontWeight.SemiBold
+    )
   }
 }
 

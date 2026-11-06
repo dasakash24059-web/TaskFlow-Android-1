@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccountBalance
@@ -60,6 +61,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -877,7 +879,8 @@ fun UserProfileScreen(
   withdrawalRequestsState: UiState<List<DemoWithdrawalRequest>> = UiState.Success(emptyList()),
   submissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList()),
   activeSubScreen: ProfileSubScreen = ProfileSubScreen.MAIN,
-  onNavigateSubScreen: ((ProfileSubScreen) -> Unit)? = null
+  onNavigateSubScreen: ((ProfileSubScreen) -> Unit)? = null,
+  onNavigateScreen: ((String) -> Unit)? = null
 ) {
   var internalSubScreen by rememberSaveable { mutableStateOf(ProfileSubScreen.MAIN) }
   val currentSubScreen =
@@ -936,7 +939,17 @@ fun UserProfileScreen(
         userEmail = userEmail,
         onUpdateDisplayName = onUpdateDisplayName,
         onOpenSecurityInfo = onOpenSecurityInfo,
+        onOpenSupport = { setSubScreen(ProfileSubScreen.SUPPORT) },
         onBack = { setSubScreen(ProfileSubScreen.MAIN) }
+      )
+      return
+    }
+    ProfileSubScreen.SUPPORT -> {
+      UserSupportScreen(
+        onBack = { setSubScreen(ProfileSubScreen.MAIN) },
+        onNavigateScreen = { target ->
+          onNavigateScreen?.invoke(target)
+        }
       )
       return
     }
@@ -1049,13 +1062,22 @@ fun UserProfileScreen(
     // 4. Settings
     ProfileMenuCard(
       title = "Settings",
-      subtitle = "Update display name and review Firebase security configuration",
+      subtitle = "Update display name, appearance theme, and security configuration",
       icon = Icons.Default.Settings,
       onClick = { setSubScreen(ProfileSubScreen.SETTINGS) },
       testTag = "profile_menu_settings"
     )
 
-    // 5. About TaskFlow
+    // 5. Help & Support
+    ProfileMenuCard(
+      title = "Help & Support",
+      subtitle = "15 FAQ topics and instant interactive TaskFlow assistant",
+      icon = Icons.AutoMirrored.Filled.Help,
+      onClick = { setSubScreen(ProfileSubScreen.SUPPORT) },
+      testTag = "profile_menu_support"
+    )
+
+    // 6. About TaskFlow
     ProfileMenuCard(
       title = "About TaskFlow",
       subtitle = "Platform overview, verification standards, and INR reward policy",
@@ -1882,16 +1904,21 @@ private fun UserSettingsSubScreen(
   userEmail: String,
   onUpdateDisplayName: (String) -> Unit,
   onOpenSecurityInfo: () -> Unit,
+  onOpenSupport: () -> Unit = {},
   onBack: () -> Unit
 ) {
   BackHandler(onBack = onBack)
+  val context = androidx.compose.ui.platform.LocalContext.current
   var editedName by rememberSaveable(profile?.displayName) {
     mutableStateOf(profile?.displayName ?: "")
   }
 
+  val currentTheme by com.example.ui.theme.ThemePreferences.currentThemeMode.collectAsStateWithLifecycle()
+
   Column(
     modifier =
       Modifier.fillMaxSize()
+        .verticalScroll(rememberScrollState())
         .padding(horizontal = 18.dp, vertical = 14.dp)
         .testTag("user_settings_screen"),
     verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -1910,6 +1937,72 @@ private fun UserSettingsSubScreen(
       )
     }
 
+    // App Theme Mode Selection Card
+    Card(
+      modifier = Modifier.fillMaxWidth().testTag("theme_selection_card"),
+      shape = RoundedCornerShape(22.dp),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+      Column(
+        modifier = Modifier.fillMaxWidth().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        Text(
+          text = "App Theme",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.Bold
+        )
+        Text(
+          text = "Choose your preferred appearance mode for all screens",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        com.example.ui.theme.AppThemeMode.entries.forEach { mode ->
+          val isSelected = currentTheme == mode
+          Surface(
+            shape = RoundedCornerShape(14.dp),
+            color =
+              if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+              else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            modifier =
+              Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .clickable {
+                  com.example.ui.theme.ThemePreferences.setThemeMode(context, mode)
+                }
+                .testTag("theme_option_${mode.name.lowercase()}")
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+              RadioButton(
+                selected = isSelected,
+                onClick = { com.example.ui.theme.ThemePreferences.setThemeMode(context, mode) }
+              )
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = mode.title,
+                  style = MaterialTheme.typography.titleSmall,
+                  fontWeight = FontWeight.Bold
+                )
+                Text(
+                  text = mode.description,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Profile Display Name Card
     Card(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(22.dp),
@@ -1939,6 +2032,32 @@ private fun UserSettingsSubScreen(
           Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
           Spacer(modifier = Modifier.width(8.dp))
           Text("Save Display Name")
+        }
+      }
+    }
+
+    // Help & Security Card
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(22.dp),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+      Column(
+        modifier = Modifier.fillMaxWidth().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        Text(
+          text = "Help & Security",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.Bold
+        )
+        OutlinedButton(
+          onClick = onOpenSupport,
+          modifier = Modifier.fillMaxWidth().testTag("settings_open_support_button")
+        ) {
+          Icon(Icons.AutoMirrored.Filled.Help, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("FAQ & Support Assistant")
         }
         OutlinedButton(
           onClick = onOpenSecurityInfo,

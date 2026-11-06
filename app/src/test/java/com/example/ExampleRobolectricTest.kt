@@ -813,10 +813,10 @@ class ExampleRobolectricTest {
       }
     }
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("TOTAL TASKS").assertIsDisplayed()
-    composeTestRule.onNodeWithText("NEEDS REVIEW").assertIsDisplayed()
-    composeTestRule.onNodeWithText("APPROVED").assertIsDisplayed()
-    composeTestRule.onNodeWithText("USERS").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_metric_total_tasks").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_metric_needs_review").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_metric_approved").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_metric_users").assertIsDisplayed()
     composeTestRule.onNodeWithText("Authorized Administrator").assertIsDisplayed()
     composeTestRule.onNodeWithText(BOOTSTRAPPED_ADMIN_EMAIL, substring = true).assertDoesNotExist()
   }
@@ -873,11 +873,12 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithText("Authorized Administrator").assertIsDisplayed()
     composeTestRule.onNodeWithText(BOOTSTRAPPED_ADMIN_EMAIL, substring = true).assertDoesNotExist()
 
-    // 2. Verify all 5 menu cards exist in order: Activity, History, Rewards, Settings, About TaskFlow
+    // 2. Verify all 6 menu cards exist in order: Activity, History, Rewards, Settings, Help & Support, About TaskFlow
     composeTestRule.onNodeWithTag("profile_menu_activity").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("profile_menu_history").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("profile_menu_rewards").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("profile_menu_settings").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("profile_menu_support").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("profile_menu_about").performScrollTo().assertIsDisplayed()
 
     // 3. Open separate History screen and verify preserved submission card & filters (All, Approved, Pending, Rejected)
@@ -1050,4 +1051,173 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("admin_withdrawal_status_req_demo_901").assertIsDisplayed()
     composeTestRule.onNodeWithText("Demo / Pending").assertIsDisplayed()
   }
+
+  @Test
+  fun `ThemePreferences switches and persists System Default, Light Mode, and Dark Mode`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    com.example.ui.theme.ThemePreferences.init(context)
+
+    // Default is SYSTEM_DEFAULT
+    com.example.ui.theme.ThemePreferences.setThemeMode(context, com.example.ui.theme.AppThemeMode.LIGHT)
+    assertEquals(com.example.ui.theme.AppThemeMode.LIGHT, com.example.ui.theme.ThemePreferences.currentThemeMode.value)
+
+    com.example.ui.theme.ThemePreferences.setThemeMode(context, com.example.ui.theme.AppThemeMode.DARK)
+    assertEquals(com.example.ui.theme.AppThemeMode.DARK, com.example.ui.theme.ThemePreferences.currentThemeMode.value)
+
+    com.example.ui.theme.ThemePreferences.setThemeMode(context, com.example.ui.theme.AppThemeMode.SYSTEM_DEFAULT)
+    assertEquals(com.example.ui.theme.AppThemeMode.SYSTEM_DEFAULT, com.example.ui.theme.ThemePreferences.currentThemeMode.value)
+  }
+
+  @Test
+  fun `TaskFlowFaqData contains all 15 topics and accurately answers user inquiries`() {
+    assertEquals(15, com.example.data.model.TaskFlowFaqData.ITEMS.size)
+    assertEquals(5, com.example.data.model.TaskFlowFaqData.COMMON_QUESTIONS.size)
+
+    val withdrawResponse = com.example.data.model.TaskFlowFaqData.findAnswer("What is the minimum withdrawal?")
+    assertNotNull(withdrawResponse)
+    assertTrue(withdrawResponse!!.answer.contains("₹200", ignoreCase = true))
+    assertEquals("wallet", withdrawResponse.targetScreen)
+
+    val darkResponse = com.example.data.model.TaskFlowFaqData.findAnswer("how to enable dark mode?")
+    assertNotNull(darkResponse)
+    assertTrue(darkResponse!!.answer.contains("Dark Mode", ignoreCase = true))
+    assertEquals("settings", darkResponse.targetScreen)
+
+    val proofResponse = com.example.data.model.TaskFlowFaqData.findAnswer("Why are text and photo both mandatory?")
+    assertNotNull(proofResponse)
+    assertTrue(proofResponse!!.answer.contains("written", ignoreCase = true))
+  }
+
+  @Test
+  fun `UserSupportScreen displays FAQ and interactive chat assistant responds with screen navigation`() {
+    var navigatedScreen = ""
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        com.example.ui.user.UserSupportScreen(
+          onBack = {},
+          onNavigateScreen = { navigatedScreen = it }
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("user_support_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tab_faq_browse").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tab_assistant_chat").assertIsDisplayed()
+
+    // 1. Browse FAQ tab is visible with 15 FAQs search and categories
+    composeTestRule.onNodeWithTag("faq_search_input").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("faq_chip_All").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("faq_card_faq_account_signin").assertIsDisplayed().performClick()
+    composeTestRule.waitForIdle()
+
+    // 2. Switch to Ask Assistant chat tab
+    composeTestRule.onNodeWithTag("tab_assistant_chat").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("chat_input_field").performTextInput("How do I find Available Tasks?")
+    composeTestRule.onNodeWithTag("chat_send_button").performClick()
+    composeTestRule.waitForIdle()
+
+    // Assistant provides reply with action button
+    composeTestRule.onNodeWithTag("chat_action_btn").performScrollTo().assertIsDisplayed().performClick()
+    assertEquals("tracking", navigatedScreen)
+  }
+
+  @Test
+  fun `AdminUsersTabContent allows searching by name or email, filtering by Pending, Approved, and Suspended, and opening detail dialog`() {
+    val pendingUser = UserProfile(
+      id = "user_p1",
+      userId = "user_p1",
+      displayName = "Amina Begum",
+      email = "amina@example.com",
+      role = "user",
+      approvalStatus = "pending",
+      balanceCents = 0L
+    )
+    val approvedUser = UserProfile(
+      id = "user_a1",
+      userId = "user_a1",
+      displayName = "Vikram Patel",
+      email = "vikram@example.com",
+      role = "user",
+      approvalStatus = "approved",
+      balanceCents = 1500L
+    )
+    val suspendedUser = UserProfile(
+      id = "user_s1",
+      userId = "user_s1",
+      displayName = "Suresh Kumar",
+      email = "suresh@example.com",
+      role = "user",
+      approvalStatus = "suspended",
+      balanceCents = 500L
+    )
+
+    var toggledUser: UserProfile? = null
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        AdminDashboardScreen(
+          isAdminAuthorized = true,
+          currentUserId = "admin_1",
+          currentUserEmail = BOOTSTRAPPED_ADMIN_EMAIL,
+          currentUserDisplayName = "Primary Admin",
+          activeTab = AdminTab.USERS,
+          adminTasksState = UiState.Success(emptyList()),
+          registeredUsersState = UiState.Success(listOf(pendingUser, approvedUser, suspendedUser)),
+          submissionFilter = "submitted",
+          onSelectSubmissionFilter = {},
+          onCreateTask = { _, _, _, _, _, _, _ -> },
+          onUpdateTask = { _, _, _, _, _, _, _, _ -> },
+          onDeleteTask = {},
+          onReviewSubmission = { _, _, _ -> },
+          onToggleUserStatus = { toggledUser = it }
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("admin_users_tab_content").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_user_search_input").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_user_filter_all").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_user_filter_pending").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_user_filter_approved").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_user_filter_suspended").assertIsDisplayed()
+
+    // Filter by Pending
+    composeTestRule.onNodeWithTag("admin_user_filter_pending").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("admin_user_card_user_p1").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_user_card_user_a1").assertDoesNotExist()
+
+    // Filter by Suspended
+    composeTestRule.onNodeWithTag("admin_user_filter_suspended").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("admin_user_card_user_s1").assertIsDisplayed()
+
+    // Search by email "vikram" with filter All
+    composeTestRule.onNodeWithTag("admin_user_filter_all").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("admin_user_search_input").performTextInput("vikram")
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("admin_user_card_user_a1").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_user_card_user_p1").assertDoesNotExist()
+
+    // Tap card to open user detail dialog
+    composeTestRule.onNodeWithTag("admin_user_card_user_a1").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("admin_user_detail_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Close").performClick()
+    composeTestRule.waitForIdle()
+
+    // Click Suspend on approved user -> opens confirmation dialog
+    composeTestRule.onNodeWithTag("toggle_user_status_user_a1").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("admin_user_confirm_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_user_confirm_status_btn").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(approvedUser.userId, toggledUser?.userId)
+  }
 }
+
