@@ -85,10 +85,21 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.R
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.ReceiptLong
+import com.example.data.model.DailyCheckInConstants
+import com.example.data.model.DailyCheckInState
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
+import com.example.data.model.TransactionRecord
+import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
+import com.example.data.model.calculateDailyCheckInState
 import com.example.data.model.formatRewardInr
 import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.ui.components.AppIconThumbnail
@@ -121,12 +132,21 @@ fun UserHomeScreen(
   onSelectTask: (String) -> Unit,
   onNavigateToTracking: (String) -> Unit,
   onSwitchToAdmin: () -> Unit,
-  submissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList())
+  submissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList()),
+  dailyCheckInState: DailyCheckInState = calculateDailyCheckInState("", 0L),
+  onClaimDailyCheckIn: () -> Unit = {},
+  transactionsState: UiState<List<TransactionRecord>> = UiState.Success(emptyList()),
+  leaderboardState: UiState<List<UserProfile>> = UiState.Success(emptyList())
 ) {
   val profile = (profileState as? UiState.Success)?.data
   val currentUserId = profile?.userId?.ifBlank { profile.id } ?: ""
   val rawTasks = (tasksState as? UiState.Success)?.data ?: emptyList()
   val submissions = (submissionsState as? UiState.Success)?.data ?: emptyList()
+  val transactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
+  val leaderboardUsers = (leaderboardState as? UiState.Success)?.data ?: emptyList()
+
+  var showWatchAdDialog by rememberSaveable { mutableStateOf(false) }
+  var showLeaderboardDialog by rememberSaveable { mutableStateOf(false) }
 
   // Active available tasks (isActive == true and status == PENDING)
   val activeAvailableTasks =
@@ -169,12 +189,23 @@ fun UserHomeScreen(
 
   val displayName = profile?.displayName?.ifBlank { "TaskFlow Member" } ?: "TaskFlow Member"
 
+  if (showWatchAdDialog) {
+    WatchAdInfoDialog(onDismiss = { showWatchAdDialog = false })
+  }
+
+  if (showLeaderboardDialog) {
+    LeaderboardDialog(
+      users = leaderboardUsers,
+      onDismiss = { showLeaderboardDialog = false }
+    )
+  }
+
   LazyColumn(
     modifier = Modifier.fillMaxSize().testTag("user_home_screen"),
     contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
-    verticalArrangement = Arrangement.spacedBy(18.dp)
+    verticalArrangement = Arrangement.spacedBy(16.dp)
   ) {
-    // 1. Welcome Message & Available Balance in INR (₹) Hero Card
+    // 1. Top Welcome Banner with Brand Logo and Compact Balance Indicator
     item {
       Box(
         modifier =
@@ -184,98 +215,110 @@ fun UserHomeScreen(
               Brush.linearGradient(
                 colors =
                   listOf(
-                    Color(0xFF4C1D95),
-                    Color(0xFF6D28D9),
+                    Color(0xFF1E3A8A),
+                    Color(0xFF2563EB),
                     Color(0xFF7C3AED)
                   )
               )
             )
             .border(
               width = 1.dp,
-              color = Color(0xFFC4B5FD).copy(alpha = 0.35f),
+              color = Color(0xFF93C5FD).copy(alpha = 0.35f),
               shape = RoundedCornerShape(26.dp)
             )
       ) {
         Canvas(modifier = Modifier.matchParentSize()) {
           drawCircle(
-            color = Color.White.copy(alpha = 0.10f),
+            color = Color.White.copy(alpha = 0.08f),
             radius = size.height * 0.7f,
             center = Offset(size.width * 0.9f, size.height * 0.15f)
           )
         }
-        Column(modifier = Modifier.fillMaxWidth().padding(22.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+          // Brand Logo, App Name, and Compact Balance Indicator on Right
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
           ) {
             Row(
-              modifier = Modifier.weight(1f),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp)
+              horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-              TaskFlowBrandLogo(size = 44.dp)
-              Column(modifier = Modifier.weight(1f)) {
+              TaskFlowBrandLogo(size = 38.dp)
+              Column {
                 Text(
-                  text = "Welcome back,",
-                  style = MaterialTheme.typography.labelMedium,
-                  color = Color(0xFFEDE9FE),
-                  fontWeight = FontWeight.SemiBold
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                  text = displayName,
-                  style = MaterialTheme.typography.headlineMedium,
+                  text = stringResource(R.string.app_name),
+                  style = MaterialTheme.typography.titleLarge,
                   color = Color.White,
-                  fontWeight = FontWeight.Bold,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                  modifier = Modifier.testTag("home_welcome_message")
+                  fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                  text = "Rewards & Tasks",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFFDBEAFE)
                 )
               }
             }
+
+            // Compact Balance Indicator Pill
             Surface(
-              shape = RoundedCornerShape(16.dp),
-              color = Color.White.copy(alpha = 0.15f),
+              shape = RoundedCornerShape(50),
+              color = Color.White.copy(alpha = 0.18f),
               modifier =
                 Modifier.border(
-                  1.dp,
-                  Color.White.copy(alpha = 0.30f),
-                  RoundedCornerShape(16.dp)
-                )
+                  width = 1.dp,
+                  color = Color.White.copy(alpha = 0.35f),
+                  shape = RoundedCornerShape(50)
+                ).testTag("home_compact_balance")
             ) {
               Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
               ) {
                 Icon(
                   imageVector = Icons.Default.AccountBalanceWallet,
-                  contentDescription = "Available Balance",
-                  tint = Color.White,
-                  modifier = Modifier.size(20.dp)
+                  contentDescription = "Wallet Balance",
+                  tint = Color(0xFFFDE047),
+                  modifier = Modifier.size(16.dp)
                 )
-                Column {
-                  Text(
-                    text = "AVAILABLE BALANCE",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFFEDE9FE)
-                  )
-                  Text(
-                    text = formatRewardInr(profile?.balanceCents ?: 0L),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.testTag("home_available_balance")
-                  )
-                }
+                Text(
+                  text = formatRewardInr(profile?.balanceCents ?: 0L),
+                  style = MaterialTheme.typography.titleMedium,
+                  color = Color.White,
+                  fontWeight = FontWeight.Bold,
+                  modifier = Modifier.testTag("home_available_balance")
+                )
               }
             }
           }
 
-          Spacer(modifier = Modifier.height(18.dp))
+          Spacer(modifier = Modifier.height(14.dp))
 
-          // 4 Status Summary Pills inside Hero
+          // Welcome greeting
+          Column {
+            Text(
+              text = "Welcome back,",
+              style = MaterialTheme.typography.labelMedium,
+              color = Color(0xFFDBEAFE),
+              fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+              text = displayName,
+              style = MaterialTheme.typography.headlineMedium,
+              color = Color.White,
+              fontWeight = FontWeight.Bold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag("home_welcome_message")
+            )
+          }
+
+          Spacer(modifier = Modifier.height(16.dp))
+
+          // 4 Status Summary Pills
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -313,7 +356,35 @@ fun UserHomeScreen(
       }
     }
 
-    // 2. Clearly Visible "Available Tasks" Section & Action Button
+    // 2. Daily Check-in 7-Day Reward Card
+    item {
+      DailyCheckInCard(
+        dailyCheckInState = dailyCheckInState,
+        onClaimDailyCheckIn = onClaimDailyCheckIn
+      )
+    }
+
+    // 3. Watch & Earn Card
+    item {
+      WatchAndEarnCard(
+        onWatchAdClicked = { showWatchAdDialog = true }
+      )
+    }
+
+    // 4. Leaderboard Preview Card (Top 3 Users + View All)
+    item {
+      LeaderboardPreviewCard(
+        users = leaderboardUsers,
+        onViewAllClicked = { showLeaderboardDialog = true }
+      )
+    }
+
+    // 5. Recent Transactions Overview
+    item {
+      RecentTransactionsCard(transactions = transactions)
+    }
+
+    // 6. Available Tasks Section & Action Button
     item {
       Card(
         modifier = Modifier.fillMaxWidth().testTag("home_available_tasks_section"),
@@ -385,7 +456,7 @@ fun UserHomeScreen(
       }
     }
 
-    // 3. Compact Preview of Active Available Tasks (or empty state)
+    // 7. Compact Preview of Active Available Tasks
     when (tasksState) {
       is UiState.Loading -> {
         item {
@@ -432,7 +503,7 @@ fun UserHomeScreen(
       }
     }
 
-    // 4. Compact Summary of Recent Activity
+    // 8. Compact Summary of Recent Activity
     item {
       Card(
         modifier = Modifier.fillMaxWidth().testTag("home_recent_activity_section"),
@@ -499,6 +570,659 @@ fun UserHomeScreen(
                   RewardBadge(rewardCents = actTask.rewardCents)
                 }
               }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun DailyCheckInCard(
+  dailyCheckInState: DailyCheckInState,
+  onClaimDailyCheckIn: () -> Unit
+) {
+  Card(
+    modifier = Modifier.fillMaxWidth().testTag("home_daily_checkin_card"),
+    shape = RoundedCornerShape(22.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+          Surface(
+            shape = CircleShape,
+            color = Color(0xFFF59E0B).copy(alpha = 0.15f),
+            modifier = Modifier.size(38.dp)
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Default.LocalFireDepartment,
+                contentDescription = null,
+                tint = Color(0xFFD97706),
+                modifier = Modifier.size(22.dp)
+              )
+            }
+          }
+          Column {
+            Text(
+              text = "Daily Check-in",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold
+            )
+            Text(
+              text = "₹13 / week • Day 1–6: ₹1 • Day 7: ₹7",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
+
+        Surface(
+          shape = RoundedCornerShape(50),
+          color = Color(0xFFFEF3C7)
+        ) {
+          Text(
+            text = "🔥 Streak: ${dailyCheckInState.currentStreak}d",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFFB45309),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+          )
+        }
+      }
+
+      // 7 Days Grid / Row
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+      ) {
+        for (day in 1..7) {
+          val isClaimed =
+            if (!dailyCheckInState.canCheckInToday) {
+              day <= dailyCheckInState.currentStreak
+            } else {
+              day < dailyCheckInState.nextClaimDay
+            }
+          val isCurrent = dailyCheckInState.canCheckInToday && day == dailyCheckInState.nextClaimDay
+          val isDay7 = day == 7
+
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color =
+              when {
+                isClaimed -> Color(0xFFDCFCE7)
+                isCurrent -> Color(0xFFDBEAFE)
+                isDay7 -> Color(0xFFFEF3C7)
+                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+              },
+            modifier =
+              Modifier.weight(1f)
+                .border(
+                  width = if (isCurrent) 1.5.dp else 1.dp,
+                  color =
+                    when {
+                      isCurrent -> Color(0xFF2563EB)
+                      isClaimed -> Color(0xFF22C55E)
+                      isDay7 -> Color(0xFFF59E0B)
+                      else -> Color.Transparent
+                    },
+                  shape = RoundedCornerShape(12.dp)
+                )
+          ) {
+            Column(
+              modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+              Text(
+                text = "D$day",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color =
+                  if (isCurrent) {
+                    Color(0xFF1D4ED8)
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  }
+              )
+              if (isClaimed) {
+                Icon(
+                  imageVector = Icons.Default.Check,
+                  contentDescription = "Claimed",
+                  tint = Color(0xFF16A34A),
+                  modifier = Modifier.size(14.dp)
+                )
+              } else {
+                Text(
+                  text = if (isDay7) "₹7⭐" else "₹1",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.ExtraBold,
+                  color = if (isDay7) Color(0xFFB45309) else MaterialTheme.colorScheme.onSurface
+                )
+              }
+            }
+          }
+        }
+      }
+
+      // Claim Button
+      Button(
+        onClick = onClaimDailyCheckIn,
+        enabled = dailyCheckInState.canCheckInToday,
+        shape = RoundedCornerShape(12.dp),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = Color(0xFF2563EB),
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
+          ),
+        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("claim_daily_checkin_button")
+      ) {
+        if (dailyCheckInState.canCheckInToday) {
+          Text(
+            text = "Claim Day ${dailyCheckInState.nextClaimDay} (${formatRewardInr(dailyCheckInState.nextRewardCents)})",
+            fontWeight = FontWeight.Bold
+          )
+        } else {
+          Text(
+            text = "Claimed Today ✓ (Next: Day ${dailyCheckInState.nextClaimDay})",
+            fontWeight = FontWeight.SemiBold
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun WatchAndEarnCard(
+  onWatchAdClicked: () -> Unit
+) {
+  Card(
+    modifier = Modifier.fillMaxWidth().testTag("home_watch_earn_card"),
+    shape = RoundedCornerShape(22.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+          Surface(
+            shape = CircleShape,
+            color = Color(0xFF7C3AED).copy(alpha = 0.15f),
+            modifier = Modifier.size(38.dp)
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Default.PlayArrow,
+                contentDescription = null,
+                tint = Color(0xFF7C3AED),
+                modifier = Modifier.size(22.dp)
+              )
+            }
+          }
+          Column {
+            Text(
+              text = "Watch & Earn",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold
+            )
+            Text(
+              text = "Earn rewards by watching videos",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
+
+        Surface(
+          shape = RoundedCornerShape(50),
+          color = Color(0xFFEDE9FE)
+        ) {
+          Text(
+            text = "Up to ₹25",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF6D28D9),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+          )
+        }
+      }
+
+      Text(
+        text = "Standard rewards: ₹1.00 – ₹2.00 (with occasional ₹3.00 – ₹4.00 bonuses). ₹25.00 is the maximum possible reward per video.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+      )
+
+      Button(
+        onClick = onWatchAdClicked,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("watch_ad_button")
+      ) {
+        Icon(
+          imageVector = Icons.Default.PlayArrow,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(text = "Watch Video Ad (Up to ₹25)", fontWeight = FontWeight.Bold)
+      }
+    }
+  }
+}
+
+@Composable
+private fun WatchAdInfoDialog(onDismiss: () -> Unit) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    modifier = Modifier.testTag("watch_earn_dialog"),
+    icon = {
+      Surface(
+        shape = CircleShape,
+        color = Color(0xFFEDE9FE),
+        modifier = Modifier.size(48.dp)
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.PlayArrow,
+            contentDescription = null,
+            tint = Color(0xFF7C3AED),
+            modifier = Modifier.size(26.dp)
+          )
+        }
+      }
+    },
+    title = {
+      Text(
+        text = "Watch & Earn Video Rewards",
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center
+      )
+    },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+          text = "Ad Integration Information:",
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = FontWeight.Bold
+        )
+        Text(
+          text = "• Verified Rewards: Watching a full video credits between ₹1.00 and ₹2.00 to your wallet, with occasional bonus drops up to ₹4.00.",
+          style = MaterialTheme.typography.bodyMedium
+        )
+        Text(
+          text = "• Maximum Reward Disclosure: ₹25.00 is the advertised maximum ceiling reward for high-value partner campaigns.",
+          style = MaterialTheme.typography.bodyMedium
+        )
+        Text(
+          text = "• Platform Integrity: In compliance with Google Play and zero billing policies, video inventory is loaded via official ad network SDKs. Real rewards are credited only upon complete, verified video playback.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = onDismiss,
+        modifier = Modifier.testTag("close_watch_dialog_button")
+      ) {
+        Text("Got it")
+      }
+    }
+  )
+}
+
+@Composable
+private fun LeaderboardPreviewCard(
+  users: List<UserProfile>,
+  onViewAllClicked: () -> Unit
+) {
+  val top3 = remember(users) { users.take(3) }
+
+  Card(
+    modifier = Modifier.fillMaxWidth().testTag("home_leaderboard_section"),
+    shape = RoundedCornerShape(22.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+          Surface(
+            shape = CircleShape,
+            color = Color(0xFFFBBF24).copy(alpha = 0.2f),
+            modifier = Modifier.size(38.dp)
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Default.EmojiEvents,
+                contentDescription = null,
+                tint = Color(0xFFD97706),
+                modifier = Modifier.size(22.dp)
+              )
+            }
+          }
+          Column {
+            Text(
+              text = "Top Earners Leaderboard",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold
+            )
+            Text(
+              text = "Live rankings of top members",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
+
+        TextButton(
+          onClick = onViewAllClicked,
+          modifier = Modifier.testTag("view_all_leaderboard_button")
+        ) {
+          Text("View All")
+        }
+      }
+
+      if (top3.isEmpty()) {
+        Text(
+          text = "No leaderboard data yet. Complete verified tasks to rank at the top!",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(vertical = 4.dp)
+        )
+      } else {
+        top3.forEachIndexed { index, user ->
+          val rank = index + 1
+          val rankBadgeColor = when (rank) {
+            1 -> Color(0xFFFBBF24)
+            2 -> Color(0xFF94A3B8)
+            else -> Color(0xFFB45309)
+          }
+          val rankBadgeText = when (rank) {
+            1 -> "🥇 #1"
+            2 -> "🥈 #2"
+            else -> "🥉 #3"
+          }
+
+          Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f)
+              ) {
+                Surface(
+                  shape = RoundedCornerShape(8.dp),
+                  color = rankBadgeColor.copy(alpha = 0.2f)
+                ) {
+                  Text(
+                    text = rankBadgeText,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = rankBadgeColor,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                  )
+                }
+
+                Surface(
+                  shape = CircleShape,
+                  color = MaterialTheme.colorScheme.primaryContainer,
+                  modifier = Modifier.size(34.dp)
+                ) {
+                  Box(contentAlignment = Alignment.Center) {
+                    Text(
+                      text = (user.displayName.firstOrNull() ?: 'M').uppercaseChar().toString(),
+                      style = MaterialTheme.typography.labelLarge,
+                      fontWeight = FontWeight.Bold,
+                      color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                  }
+                }
+
+                Text(
+                  text = user.displayName.ifBlank { "TaskFlow Member" },
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+              }
+
+              Text(
+                text = formatRewardInr(user.balanceCents),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFF16A34A)
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun LeaderboardDialog(
+  users: List<UserProfile>,
+  onDismiss: () -> Unit
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    modifier = Modifier.testTag("leaderboard_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        Icon(
+          imageVector = Icons.Default.EmojiEvents,
+          contentDescription = null,
+          tint = Color(0xFFD97706),
+          modifier = Modifier.size(24.dp)
+        )
+        Text(
+          text = "TaskFlow Top Earners",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold
+        )
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth().height(360.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        if (users.isEmpty()) {
+          Text(
+            text = "No approved members on leaderboard yet.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+        } else {
+          users.take(50).forEachIndexed { index, user ->
+            val rank = index + 1
+            Surface(
+              shape = RoundedCornerShape(10.dp),
+              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+              modifier = Modifier.fillMaxWidth()
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth().padding(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  modifier = Modifier.weight(1f)
+                ) {
+                  Text(
+                    text = "#$rank",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.width(32.dp)
+                  )
+                  Text(
+                    text = user.displayName.ifBlank { "TaskFlow Member" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                  )
+                }
+                Text(
+                  text = formatRewardInr(user.balanceCents),
+                  style = MaterialTheme.typography.titleMedium,
+                  fontWeight = FontWeight.Bold,
+                  color = Color(0xFF16A34A)
+                )
+              }
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      TextButton(
+        onClick = onDismiss,
+        modifier = Modifier.testTag("close_leaderboard_dialog_button")
+      ) {
+        Text("Close")
+      }
+    }
+  )
+}
+
+@Composable
+private fun RecentTransactionsCard(
+  transactions: List<TransactionRecord>
+) {
+  val recent = remember(transactions) { transactions.take(3) }
+
+  Card(
+    modifier = Modifier.fillMaxWidth().testTag("home_recent_transactions_section"),
+    shape = RoundedCornerShape(22.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        Icon(
+          imageVector = Icons.Default.ReceiptLong,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(20.dp)
+        )
+        Text(
+          text = "Recent Transactions",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.Bold
+        )
+      }
+
+      if (recent.isEmpty()) {
+        Text(
+          text = "No transactions yet. Complete tasks or claim daily rewards to build your history!",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      } else {
+        recent.forEach { tx ->
+          val dateStr =
+            tx.createdAt?.toDate()?.let {
+              SimpleDateFormat("MMM d, yyyy", Locale.US).format(it)
+            } ?: "Today"
+
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = tx.title.ifBlank { "TaskFlow Transaction" },
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                  text = "$dateStr • ${tx.type}",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+              }
+              Text(
+                text = if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
+                  "-${formatRewardInr(tx.amountCents)}"
+                } else {
+                  "+${formatRewardInr(tx.amountCents)}"
+                },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
+                  Color(0xFFDC2626)
+                } else {
+                  Color(0xFF16A34A)
+                }
+              )
             }
           }
         }

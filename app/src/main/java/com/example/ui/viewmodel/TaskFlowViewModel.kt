@@ -4,13 +4,16 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
+import com.example.data.model.DailyCheckInState
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
+import com.example.data.model.TransactionRecord
 import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethod
+import com.example.data.model.calculateDailyCheckInState
 import com.example.data.model.formatRewardInr
 import com.example.data.model.isValidImageUrlOrDataUri
 import com.example.data.model.isValidTaskUrl
@@ -154,6 +157,38 @@ class TaskFlowViewModel(
       .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load withdrawal requests")) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
 
+  val userTransactionsState: StateFlow<UiState<List<TransactionRecord>>> =
+    repository
+      .observeUserTransactions(currentUserId)
+      .map<List<TransactionRecord>, UiState<List<TransactionRecord>>> { UiState.Success(it) }
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load transactions")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  val leaderboardUsersState: StateFlow<UiState<List<UserProfile>>> =
+    repository
+      .observeLeaderboardUsers()
+      .map<List<UserProfile>, UiState<List<UserProfile>>> { UiState.Success(it) }
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load leaderboard")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  val dailyCheckInState: StateFlow<DailyCheckInState> =
+    userProfileState
+      .map { state ->
+        if (state is UiState.Success && state.data != null) {
+          calculateDailyCheckInState(
+            lastDate = state.data.lastCheckInDate,
+            streak = state.data.checkInStreak
+          )
+        } else {
+          calculateDailyCheckInState("", 0L)
+        }
+      }
+      .stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        calculateDailyCheckInState("", 0L)
+      )
+
   @OptIn(ExperimentalCoroutinesApi::class)
   val adminTasksState: StateFlow<UiState<List<TaskItem>>> =
     isAdminAuthorized
@@ -196,6 +231,16 @@ class TaskFlowViewModel(
       }
       .map<List<UserProfile>, UiState<List<UserProfile>>> { UiState.Success(it) }
       .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load users")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  val adminTransactionsState: StateFlow<UiState<List<TransactionRecord>>> =
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        repository.observeAllTransactions(currentUserId, authorized)
+      }
+      .map<List<TransactionRecord>, UiState<List<TransactionRecord>>> { UiState.Success(it) }
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load all transactions")) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
 
   init {
@@ -633,6 +678,62 @@ class TaskFlowViewModel(
         }
         .onFailure {
           _bannerMessage.value = it.localizedMessage ?: "Failed to update user status."
+        }
+      _isBusy.value = false
+    }
+  }
+
+  fun claimDailyCheckIn(onSuccess: (Long) -> Unit = {}) {
+    val profile = (userProfileState.value as? UiState.Success)?.data
+    val currentState = dailyCheckInState.value
+    if (!currentState.canCheckInToday) {
+      _bannerMessage.value = "You have already claimed today's check-in reward! Come back tomorrow."
+      return
+    }
+    val targetStreak = currentState.nextClaimDay
+    val rewardCents = currentState.nextRewardCents
+    val dateKey = currentState.todayDate
+    val resolvedName =
+      profile?.displayName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
+
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository
+        .claimDailyCheckIn(
+          userId = currentUserId,
+          streakDay = targetStreak,
+          rewardCents = rewardCents,
+          dateKey = dateKey,
+          userName = resolvedName
+        )
+        .onSuccess { claimed ->
+          _bannerMessage.value =
+            "Congratulations! Claimed Day $targetStreak reward: ${formatRewardInr(claimed)}."
+          onSuccess(claimed)
+        }
+        .onFailure { err ->
+          _bannerMessage.value = err.localizedMessage ?: "Failed to claim daily check-in reward."
+        }
+      _isBusy.value = false
+    }
+  }
+
+  fun updateUserDisplayNameByAdmin(user: UserProfile, newName: String) {
+    val uid = user.userId.ifBlank { user.id }
+    val cleaned = newName.trim()
+    if (cleaned.isEmpty() || cleaned.length > 100) {
+      _bannerMessage.value = "Display name must be between 1 and 100 characters."
+      return
+    }
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository
+        .updateUserDisplayNameByAdmin(uid, cleaned)
+        .onSuccess {
+          _bannerMessage.value = "User name updated to '$cleaned'."
+        }
+        .onFailure { err ->
+          _bannerMessage.value = err.localizedMessage ?: "Failed to update user name."
         }
       _isBusy.value = false
     }

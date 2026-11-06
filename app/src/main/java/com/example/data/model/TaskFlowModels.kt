@@ -118,6 +118,98 @@ object TaskCategories {
     )
 }
 
+object TransactionType {
+  const val DAILY_CHECKIN = "DAILY_CHECKIN"
+  const val TASK_REWARD = "TASK_REWARD"
+  const val DEMO_WITHDRAWAL = "DEMO_WITHDRAWAL"
+  const val WATCH_EARN = "WATCH_EARN"
+}
+
+data class TransactionRecord(
+  @DocumentId val id: String = "",
+  val userId: String = "",
+  val userName: String = "",
+  val type: String = TransactionType.DAILY_CHECKIN,
+  val title: String = "",
+  val amountCents: Long = 0L,
+  val status: String = "CREDITED",
+  val referenceId: String = "",
+  @ServerTimestamp val createdAt: Timestamp? = null
+)
+
+object DailyCheckInConstants {
+  // 7-Day Reward Structure: Day 1-6: ₹1 (100 paise), Day 7: ₹7 (700 paise). Total = ₹13 (1300 paise).
+  val REWARDS_CENTS = listOf(100L, 100L, 100L, 100L, 100L, 100L, 700L)
+  const val TOTAL_7_DAY_CENTS = 1300L
+
+  fun getRewardForDay(day: Int): Long {
+    val index = (day - 1).coerceIn(0, 6)
+    return REWARDS_CENTS[index]
+  }
+}
+
+data class DailyCheckInState(
+  val currentStreak: Int = 0,
+  val nextClaimDay: Int = 1,
+  val canCheckInToday: Boolean = true,
+  val lastCheckInDate: String = "",
+  val todayDate: String = "",
+  val nextRewardCents: Long = 100L
+)
+
+fun getTodayDateKey(): String {
+  val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+  return sdf.format(java.util.Date())
+}
+
+fun getYesterdayDateKey(): String {
+  val cal = java.util.Calendar.getInstance()
+  cal.add(java.util.Calendar.DATE, -1)
+  val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+  return sdf.format(cal.time)
+}
+
+fun calculateDailyCheckInState(lastDate: String, streak: Long): DailyCheckInState {
+  val today = getTodayDateKey()
+  val yesterday = getYesterdayDateKey()
+  val rawStreak = streak.toInt()
+
+  return if (lastDate == today) {
+    // Already checked in today
+    val streakDay = if (rawStreak in 1..7) rawStreak else 1
+    val nextDay = if (streakDay >= 7) 1 else streakDay + 1
+    DailyCheckInState(
+      currentStreak = streakDay,
+      nextClaimDay = nextDay,
+      canCheckInToday = false,
+      lastCheckInDate = lastDate,
+      todayDate = today,
+      nextRewardCents = DailyCheckInConstants.getRewardForDay(nextDay)
+    )
+  } else if (lastDate == yesterday) {
+    // Consecutive check-in: continuing streak
+    val nextStreak = if (rawStreak >= 7) 1 else rawStreak + 1
+    DailyCheckInState(
+      currentStreak = rawStreak,
+      nextClaimDay = nextStreak,
+      canCheckInToday = true,
+      lastCheckInDate = lastDate,
+      todayDate = today,
+      nextRewardCents = DailyCheckInConstants.getRewardForDay(nextStreak)
+    )
+  } else {
+    // Missed a day or first time -> Reset streak to Day 1
+    DailyCheckInState(
+      currentStreak = 0,
+      nextClaimDay = 1,
+      canCheckInToday = true,
+      lastCheckInDate = lastDate,
+      todayDate = today,
+      nextRewardCents = DailyCheckInConstants.getRewardForDay(1)
+    )
+  }
+}
+
 data class UserProfile(
   @DocumentId val id: String = "",
   val userId: String = "",
@@ -128,6 +220,9 @@ data class UserProfile(
   val balanceCents: Long = 0L,
   val completedTasksCount: Long = 0L,
   val assignedTaskId: String = "",
+  val lastCheckInDate: String = "",
+  val checkInStreak: Long = 0L,
+  @ServerTimestamp val lastCheckInTimestamp: Timestamp? = null,
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
 )

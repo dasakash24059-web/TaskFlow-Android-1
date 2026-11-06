@@ -316,6 +316,9 @@ private fun AuthenticatedWorkspace(
   val adminSubmissionsState by viewModel.adminSubmissionsState.collectAsStateWithLifecycle()
   val adminWithdrawalRequestsState by viewModel.adminWithdrawalRequestsState.collectAsStateWithLifecycle()
   val registeredUsersState by viewModel.registeredUsersState.collectAsStateWithLifecycle()
+  val userTransactionsState by viewModel.userTransactionsState.collectAsStateWithLifecycle()
+  val leaderboardUsersState by viewModel.leaderboardUsersState.collectAsStateWithLifecycle()
+  val dailyCheckInState by viewModel.dailyCheckInState.collectAsStateWithLifecycle()
   val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
   val submissionError by viewModel.submissionError.collectAsStateWithLifecycle()
   val withdrawalValidationError by viewModel.withdrawalValidationError.collectAsStateWithLifecycle()
@@ -588,7 +591,11 @@ private fun AuthenticatedWorkspace(
                   onSwitchToAdmin = {
                     viewModel.setPortal(PortalLoginTarget.ADMIN_DASHBOARD)
                   },
-                  submissionsState = userSubmissionsState
+                  submissionsState = userSubmissionsState,
+                  dailyCheckInState = dailyCheckInState,
+                  onClaimDailyCheckIn = { viewModel.claimDailyCheckIn() },
+                  transactionsState = userTransactionsState,
+                  leaderboardState = leaderboardUsersState
                 )
               }
               UserTab.TRACKING -> {
@@ -610,6 +617,7 @@ private fun AuthenticatedWorkspace(
                   withdrawalValidationError = withdrawalValidationError,
                   onClearValidationError = { viewModel.clearWithdrawalValidationError() },
                   submissionsState = userSubmissionsState,
+                  transactionsState = userTransactionsState,
                   onSubmitDemoWithdrawal = {
                       amountInr,
                       method,
@@ -712,6 +720,7 @@ private fun AuthenticatedWorkspace(
             },
             onToggleUserStatus = { viewModel.toggleUserApprovalStatus(it) },
             onUpdateUserStatus = { user, status -> viewModel.updateUserApprovalStatus(user, status) },
+            onUpdateUserName = { user, newName -> viewModel.updateUserDisplayNameByAdmin(user, newName) },
             adminSubmissionsState = adminSubmissionsState,
             adminWithdrawalRequestsState = adminWithdrawalRequestsState,
             onToggleTaskActive = { task, isActive ->

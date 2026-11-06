@@ -7,11 +7,14 @@ import android.net.Uri
 import android.util.Base64
 import com.example.data.model.AdminRecord
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
+import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
+import com.example.data.model.TransactionRecord
+import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethod
 import com.example.data.model.formatRewardInr
@@ -179,6 +182,7 @@ class TaskFlowRepository(
   private val submissionsCollection = firestore.collection("submissions")
   private val adminsCollection = firestore.collection("admins")
   private val withdrawalRequestsCollection = firestore.collection("withdrawal_requests")
+  private val transactionsCollection = firestore.collection("transactions")
 
   /**
    * Checks if the current user is an authorized administrator via `/admins/{uid}` (and bootstrapped owner).
@@ -1019,6 +1023,23 @@ class TaskFlowRepository(
           "updatedAt" to FieldValue.serverTimestamp()
         )
       )
+      val txRef = transactionsCollection.document()
+      val submittingUserName =
+        (latestSubSnap.getString("userName") ?: task.assignedUserName).ifEmpty { "TaskFlow Member" }
+      val taskTitle = (latestTaskSnap.getString("title") ?: task.title).ifEmpty { "Task" }
+      batch.set(
+        txRef,
+        mapOf(
+          "userId" to submittingUserId,
+          "userName" to submittingUserName,
+          "type" to TransactionType.TASK_REWARD,
+          "title" to "Task Reward: ${taskTitle.take(60)}",
+          "amountCents" to rewardCents,
+          "status" to "CREDITED",
+          "referenceId" to task.id,
+          "createdAt" to FieldValue.serverTimestamp()
+        )
+      )
     }
 
     batch.commit().await()
@@ -1097,7 +1118,23 @@ class TaskFlowRepository(
         "isDemo" to true,
         "createdAt" to FieldValue.serverTimestamp()
       )
-    docRef.set(payload).await()
+    val txRef = transactionsCollection.document()
+    val batch = firestore.batch()
+    batch.set(docRef, payload)
+    batch.set(
+      txRef,
+      mapOf(
+        "userId" to uid,
+        "userName" to resolvedUserName,
+        "type" to TransactionType.DEMO_WITHDRAWAL,
+        "title" to "Demo Withdrawal ($cleanedMethod)",
+        "amountCents" to amountCents,
+        "status" to "PENDING_DEMO",
+        "referenceId" to docRef.id,
+        "createdAt" to FieldValue.serverTimestamp()
+      )
+    )
+    batch.commit().await()
     docRef.id
   }
 
@@ -1175,5 +1212,162 @@ class TaskFlowRepository(
     snap.documents
       .mapNotNull { it.toObject(DemoWithdrawalRequest::class.java) }
       .sortedByDescending { it.createdAt?.seconds ?: 0L }
+  }
+
+  /**
+   * Claims daily check-in reward for the current user and records the transaction atomically.
+   */
+  suspend fun claimDailyCheckIn(
+    userId: String,
+    streakDay: Int,
+    rewardCents: Long,
+    dateKey: String,
+    userName: String
+  ): Result<Long> = runCatching {
+    require(userId.isNotBlank()) { "userId must not be blank" }
+    require(streakDay in 1..7) { "streakDay must be between 1 and 7" }
+    require(rewardCents == 100L || rewardCents == 700L) { "Invalid check-in reward" }
+    require(dateKey.isNotBlank() && dateKey.length == 10) { "Invalid dateKey format" }
+
+    val userRef = usersCollection.document(userId)
+    val checkInDocRef = userRef.collection("check_ins").document(dateKey)
+    val transactionRef = transactionsCollection.document()
+
+    val batch = firestore.batch()
+    batch.set(
+      checkInDocRef,
+      mapOf(
+        "dateKey" to dateKey,
+        "streakDay" to streakDay,
+        "rewardCents" to rewardCents,
+        "claimedAt" to FieldValue.serverTimestamp()
+      )
+    )
+    batch.update(
+      userRef,
+      mapOf(
+        "balanceCents" to FieldValue.increment(rewardCents),
+        "checkInStreak" to streakDay.toLong(),
+        "lastCheckInDate" to dateKey,
+        "lastCheckInTimestamp" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp()
+      )
+    )
+    batch.set(
+      transactionRef,
+      mapOf(
+        "userId" to userId,
+        "userName" to userName.trim().ifEmpty { "TaskFlow Member" },
+        "type" to TransactionType.DAILY_CHECKIN,
+        "title" to "Day $streakDay Daily Check-in Reward",
+        "amountCents" to rewardCents,
+        "status" to "CREDITED",
+        "referenceId" to dateKey,
+        "createdAt" to FieldValue.serverTimestamp()
+      )
+    )
+    batch.commit().await()
+    rewardCents
+  }
+
+  /**
+   * Observes transactions for a specific user in real time.
+   */
+  fun observeUserTransactions(uid: String): Flow<List<TransactionRecord>> = callbackFlow {
+    require(uid.isNotBlank()) { "uid must not be blank" }
+    val listener =
+      transactionsCollection
+        .whereEqualTo("userId", uid)
+        .addSnapshotListener { snapshot, error ->
+          if (error != null) {
+            close(error)
+            return@addSnapshotListener
+          }
+          val items =
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toObject(TransactionRecord::class.java) }
+              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+              ?: emptyList()
+          trySend(items)
+        }
+    awaitClose { listener.remove() }
+  }
+
+  /**
+   * Observes all transactions in real time for authorized Admin.
+   */
+  fun observeAllTransactions(
+    adminUid: String,
+    isAdminAuthorized: Boolean
+  ): Flow<List<TransactionRecord>> = callbackFlow {
+    require(adminUid.isNotBlank()) { "adminUid must not be blank" }
+    if (!isAdminAuthorized) {
+      trySend(emptyList())
+      awaitClose {}
+      return@callbackFlow
+    }
+    val listener =
+      transactionsCollection.addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          close(error)
+          return@addSnapshotListener
+        }
+        val items =
+          snapshot
+            ?.documents
+            ?.mapNotNull { it.toObject(TransactionRecord::class.java) }
+            ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+            ?: emptyList()
+        trySend(items)
+      }
+    awaitClose { listener.remove() }
+  }
+
+  /**
+   * Observes approved users ordered by balance for the Leaderboard.
+   */
+  fun observeLeaderboardUsers(): Flow<List<UserProfile>> = callbackFlow {
+    val listener =
+      usersCollection
+        .whereEqualTo("approvalStatus", "approved")
+        .addSnapshotListener { snapshot, error ->
+          if (error != null) {
+            close(error)
+            return@addSnapshotListener
+          }
+          val items =
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toObject(UserProfile::class.java) }
+              ?.sortedByDescending { it.balanceCents }
+              ?.take(50)
+              ?: emptyList()
+          trySend(items)
+        }
+    awaitClose { listener.remove() }
+  }
+
+  /**
+   * Allows an Admin to update any user's display name.
+   */
+  suspend fun updateUserDisplayNameByAdmin(
+    targetUserId: String,
+    newDisplayName: String
+  ): Result<Unit> = runCatching {
+    require(targetUserId.isNotBlank()) { "targetUserId must not be blank" }
+    val cleaned = newDisplayName.trim()
+    require(cleaned.isNotEmpty() && cleaned.length <= 100) {
+      "Display name must be between 1 and 100 characters."
+    }
+    usersCollection
+      .document(targetUserId)
+      .update(
+        mapOf(
+          "displayName" to cleaned,
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
+      )
+      .await()
   }
 }

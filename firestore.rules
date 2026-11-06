@@ -150,6 +150,9 @@ service cloud.firestore {
              data.balanceCents is int && data.balanceCents >= 0 && data.balanceCents <= 1000000000 &&
              data.completedTasksCount is int && data.completedTasksCount >= 0 && data.completedTasksCount <= 1000000 &&
              (!('assignedTaskId' in data) || data.assignedTaskId == null || (data.assignedTaskId is string && data.assignedTaskId.size() <= 128)) &&
+             (!('lastCheckInDate' in data) || data.lastCheckInDate is string) &&
+             (!('checkInStreak' in data) || data.checkInStreak is int) &&
+             (!('lastCheckInTimestamp' in data) || data.lastCheckInTimestamp == null || data.lastCheckInTimestamp is timestamp) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -349,7 +352,7 @@ service cloud.firestore {
     // 4. Collection Rules: /users/{userId}
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
-      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn();
 
       allow create: if isSignedIn() &&
                        isValidId(userId) &&
@@ -361,7 +364,8 @@ service cloud.firestore {
                        incoming().keys().hasOnly([
                          'userId', 'email', 'displayName', 'role',
                          'approvalStatus', 'balanceCents', 'completedTasksCount',
-                         'assignedTaskId', 'createdAt', 'updatedAt'
+                         'assignedTaskId', 'lastCheckInDate', 'checkInStreak',
+                         'lastCheckInTimestamp', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidUserProfile(incoming()) &&
                        incoming().userId == userId &&
@@ -392,7 +396,16 @@ service cloud.firestore {
                        (
                          (
                            request.auth.uid == userId &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
+                           (
+                             incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']) ||
+                             (
+                               incoming().diff(existing()).affectedKeys().hasOnly([
+                                 'balanceCents', 'lastCheckInDate', 'checkInStreak',
+                                 'lastCheckInTimestamp', 'updatedAt'
+                               ]) &&
+                               (incoming().balanceCents == existing().balanceCents + 100 || incoming().balanceCents == existing().balanceCents + 700)
+                             )
+                           )
                          ) ||
                          (
                            isAdmin() &&
@@ -424,6 +437,28 @@ service cloud.firestore {
                        );
 
       allow delete: if isSignedIn() && isValidId(userId) && isVerifiedAdminEmail();
+
+      match /check_ins/{dateKey} {
+        allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         incoming().userId == userId &&
+                         incoming().dateKey == dateKey &&
+                         (incoming().rewardCents == 100 || incoming().rewardCents == 700);
+        allow update, delete: if false;
+      }
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isSignedIn() &&
+                     (resource == null || resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() &&
+                     (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+                       isValidId(transactionId) &&
+                       incoming().userId is string &&
+                       (request.auth.uid == incoming().userId || isAdmin());
+      allow update, delete: if false;
     }
 
     // 5. Collection Rules: /tasks/{taskId}

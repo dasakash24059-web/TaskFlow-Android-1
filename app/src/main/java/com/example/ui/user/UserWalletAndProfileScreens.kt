@@ -84,6 +84,8 @@ import com.example.data.model.MIN_WITHDRAWAL_CENTS
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
+import com.example.data.model.TransactionRecord
+import com.example.data.model.TransactionType
 import com.example.data.model.UserActivityItem
 import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethod
@@ -118,6 +120,7 @@ fun UserWalletScreen(
   withdrawalValidationError: String? = null,
   onClearValidationError: () -> Unit = {},
   submissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList()),
+  transactionsState: UiState<List<TransactionRecord>> = UiState.Success(emptyList()),
   onSubmitDemoWithdrawal: (
     amountInr: String,
     method: String,
@@ -133,6 +136,7 @@ fun UserWalletScreen(
   val availableBalanceCents = profile?.balanceCents ?: 0L
   val rawTasks = (tasksState as? UiState.Success)?.data ?: emptyList()
   val submissions = (submissionsState as? UiState.Success)?.data ?: emptyList()
+  val transactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
   val tasks =
     remember(rawTasks, submissions, currentUserId) {
       mergeTasksWithPreservedSubmissions(rawTasks, submissions, currentUserId)
@@ -146,6 +150,29 @@ fun UserWalletScreen(
         it.status == TaskStatus.APPROVED &&
           (currentUserId.isBlank() || it.assignedUserId == currentUserId)
       }
+    }
+
+  val totalEarningsCents =
+    remember(approvedUserTasks, transactions, availableBalanceCents) {
+      val txEarnings =
+        transactions
+          .filter { it.type != TransactionType.DEMO_WITHDRAWAL }
+          .sumOf { it.amountCents }
+      if (txEarnings > 0L) {
+        txEarnings
+      } else {
+        approvedUserTasks.sumOf { it.rewardCents } + availableBalanceCents
+      }
+    }
+
+  val pendingRewardsCents =
+    remember(tasks, currentUserId) {
+      tasks
+        .filter {
+          it.status == TaskStatus.SUBMITTED &&
+            (currentUserId.isBlank() || it.assignedUserId == currentUserId)
+        }
+        .sumOf { it.rewardCents }
     }
 
   var showWithdrawMethodDialog by rememberSaveable { mutableStateOf(false) }
@@ -326,7 +353,61 @@ fun UserWalletScreen(
       }
     }
 
-    // 2. Recent Withdrawal Requests Section (Demo / Pending)
+    // 2. Total Earnings and Pending Rewards 2-Column Row
+    item {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        Card(
+          modifier = Modifier.weight(1f).testTag("wallet_total_earnings_card"),
+          shape = RoundedCornerShape(18.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+          Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+              text = "Total Earnings",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = formatRewardInr(totalEarningsCents),
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.ExtraBold,
+              color = Color(0xFF16A34A),
+              modifier = Modifier.testTag("wallet_total_earnings")
+            )
+          }
+        }
+
+        Card(
+          modifier = Modifier.weight(1f).testTag("wallet_pending_rewards_card"),
+          shape = RoundedCornerShape(18.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+          Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+              text = "Pending Rewards",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = formatRewardInr(pendingRewardsCents),
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.ExtraBold,
+              color = Color(0xFFD97706),
+              modifier = Modifier.testTag("wallet_pending_rewards")
+            )
+          }
+        }
+      }
+    }
+
+    // 3. Recent Withdrawal Requests Section (Demo / Pending)
     item {
       Text(
         text = "Withdrawal Requests (${withdrawalRequests.size})",
@@ -488,6 +569,96 @@ fun UserWalletScreen(
               }
             }
             RewardBadge(rewardCents = task.rewardCents)
+          }
+        }
+      }
+    }
+
+    // 4. Transaction History Section
+    item {
+      Text(
+        text = "Transaction History (${transactions.size})",
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.testTag("wallet_transaction_history_section")
+      )
+    }
+
+    if (transactions.isEmpty()) {
+      item {
+        Card(
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(18.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+          Column(
+            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+          ) {
+            Text(
+              text = "No Transactions Recorded",
+              style = MaterialTheme.typography.titleMedium,
+              color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = "Daily check-ins, approved task rewards, and withdrawals will appear here.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              textAlign = TextAlign.Center
+            )
+          }
+        }
+      }
+    } else {
+      items(
+        transactions,
+        key = { it.id.ifBlank { "tx_${it.title}_${it.createdAt?.seconds ?: 0L}_${it.amountCents}" } }
+      ) { tx ->
+        val dateStr =
+          tx.createdAt?.toDate()?.let {
+            SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
+          } ?: "Today"
+        Card(
+          modifier =
+            Modifier.fillMaxWidth().testTag("wallet_transaction_item_${tx.id}"),
+          shape = RoundedCornerShape(16.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = tx.title.ifBlank { "Wallet Transaction" },
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+              )
+              Text(
+                text = "$dateStr • ${tx.type}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+            Text(
+              text =
+                if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
+                  "-${formatRewardInr(tx.amountCents)}"
+                } else {
+                  "+${formatRewardInr(tx.amountCents)}"
+                },
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.ExtraBold,
+              color =
+                if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
+                  Color(0xFFDC2626)
+                } else {
+                  Color(0xFF16A34A)
+                }
+            )
           }
         }
       }

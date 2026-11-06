@@ -124,7 +124,8 @@ fun AdminDashboardScreen(
     null,
   onUpdateTaskExtended:
     ((String, String, String, String, String, UserProfile, String, String, String, String, String) -> Unit)? =
-    null
+    null,
+  onUpdateUserName: ((UserProfile, String) -> Unit)? = null
 ) {
   if (!isAdminAuthorized) {
     UnauthorizedAdminGate(currentUserEmail = currentUserEmail)
@@ -377,7 +378,8 @@ fun AdminDashboardScreen(
               showTaskModal = true
             },
             onToggleUserStatus = onToggleUserStatus,
-            onUpdateUserStatus = onUpdateUserStatus
+            onUpdateUserStatus = onUpdateUserStatus,
+            onUpdateUserName = onUpdateUserName
           )
         }
         AdminTab.WITHDRAWALS -> {
@@ -1268,7 +1270,8 @@ private fun AdminUsersTabContent(
   users: List<UserProfile>,
   onAssignTaskToUser: (UserProfile) -> Unit,
   onToggleUserStatus: (UserProfile) -> Unit,
-  onUpdateUserStatus: ((UserProfile, String) -> Unit)? = null
+  onUpdateUserStatus: ((UserProfile, String) -> Unit)? = null,
+  onUpdateUserName: ((UserProfile, String) -> Unit)? = null
 ) {
   var searchQuery by rememberSaveable { mutableStateOf("") }
   var selectedFilter by rememberSaveable { mutableStateOf("ALL") }
@@ -1357,6 +1360,9 @@ private fun AdminUsersTabContent(
         SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
       } ?: "Recently registered"
 
+    var isEditingName by remember(user) { mutableStateOf(false) }
+    var editedNameInput by remember(user) { mutableStateOf(user.displayName) }
+
     AlertDialog(
       onDismissRequest = { selectedUserForDetail = null },
       modifier = Modifier.testTag("admin_user_detail_dialog"),
@@ -1397,6 +1403,75 @@ private fun AdminUsersTabContent(
           modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
           verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+          // Display Name Editor
+          if (isEditingName) {
+            Column(
+              modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              Text(
+                text = "Edit Display Name",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold
+              )
+              OutlinedTextField(
+                value = editedNameInput,
+                onValueChange = { editedNameInput = it },
+                label = { Text("Display Name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag("admin_edit_user_name_input")
+              )
+              Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Button(
+                  onClick = {
+                    val trimmed = editedNameInput.trim()
+                    if (trimmed.isNotEmpty()) {
+                      onUpdateUserName?.invoke(user, trimmed)
+                      selectedUserForDetail = user.copy(displayName = trimmed)
+                      isEditingName = false
+                    }
+                  },
+                  modifier = Modifier.weight(1f).testTag("admin_save_user_name_btn")
+                ) {
+                  Text("Save")
+                }
+                OutlinedButton(
+                  onClick = {
+                    editedNameInput = user.displayName
+                    isEditingName = false
+                  },
+                  modifier = Modifier.weight(1f)
+                ) {
+                  Text("Cancel")
+                }
+              }
+            }
+          } else {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Column(modifier = Modifier.weight(1f)) {
+                AdminDetailInfoRow(label = "Display Name", value = user.displayName.ifBlank { "Unset" })
+              }
+              IconButton(
+                onClick = { isEditingName = true },
+                modifier = Modifier.testTag("admin_start_edit_user_name_btn")
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Edit,
+                  contentDescription = "Edit User Name",
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(18.dp)
+                )
+              }
+            }
+          }
+
           AdminDetailInfoRow(label = "User ID", value = uid)
           AdminDetailInfoRow(label = "Role", value = user.role.uppercase(Locale.US))
           AdminDetailInfoRow(label = "Approval Status", value = user.approvalStatus.uppercase(Locale.US))
