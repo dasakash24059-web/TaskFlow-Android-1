@@ -309,7 +309,8 @@ fun UserHomeScreen(
                     style = MaterialTheme.typography.titleSmall,
                     fontSize = 11.sp,
                     color = Color.White,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.testTag("home_available_balance")
                   )
                 }
                 Icon(
@@ -379,73 +380,6 @@ fun UserHomeScreen(
               onClick = { onNavigateToTracking(TaskStatus.REJECTED) },
               modifier = Modifier.weight(1f)
             )
-          }
-        }
-      }
-    }
-
-    // 2. Attractive Available Balance Card with Withdraw Button
-    item {
-      Card(
-        modifier = Modifier.fillMaxWidth().testTag("home_available_balance_card"),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(20.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically
-        ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            modifier = Modifier.weight(1f)
-          ) {
-            Surface(
-              shape = CircleShape,
-              color = Color(0xFF2563EB).copy(alpha = 0.12f),
-              modifier = Modifier.size(46.dp)
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                Icon(
-                  imageVector = Icons.Default.AccountBalanceWallet,
-                  contentDescription = null,
-                  tint = Color(0xFF2563EB),
-                  modifier = Modifier.size(24.dp)
-                )
-              }
-            }
-            Column {
-              Text(
-                text = "Available Balance",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-              )
-              Spacer(modifier = Modifier.height(2.dp))
-              Text(
-                text = formatRewardInr(profile?.balanceCents ?: 0L),
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.ExtraBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.testTag("home_available_balance")
-              )
-            }
-          }
-
-          Button(
-            onClick = { onNavigateToWallet(true) },
-            shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
-            modifier = Modifier.testTag("home_withdraw_button")
-          ) {
-            Icon(
-              imageVector = Icons.Default.AccountBalanceWallet,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(text = "Withdraw", fontWeight = FontWeight.Bold)
           }
         }
       }

@@ -442,7 +442,7 @@ service cloud.firestore {
         allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
         allow create: if isSignedIn() &&
                          request.auth.uid == userId &&
-                         incoming().userId == userId &&
+                         (!('userId' in incoming()) || incoming().userId == userId) &&
                          incoming().dateKey == dateKey &&
                          (incoming().rewardCents == 100 || incoming().rewardCents == 700);
         allow update, delete: if false;

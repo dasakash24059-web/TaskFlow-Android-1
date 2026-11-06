@@ -1237,6 +1237,7 @@ class TaskFlowRepository(
     batch.set(
       checkInDocRef,
       mapOf(
+        "userId" to userId,
         "dateKey" to dateKey,
         "streakDay" to streakDay,
         "rewardCents" to rewardCents,
