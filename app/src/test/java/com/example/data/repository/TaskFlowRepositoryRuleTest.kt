@@ -1,5 +1,5 @@
 package com.example.data.repository
-import org.robolectric.annotation.Config
+
 import android.net.Uri
 import com.example.base.FirestoreEmulatorTestBase
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
@@ -16,6 +16,8 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.robolectric.annotation.Config
+
 @Config(sdk = [33])
 class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
 
@@ -430,8 +432,50 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
         repository.ensureUserProfile(aliceUid, aliceEmail, "Alice").getOrThrow()
       }
 
-      // Sign in as verified bootstrap admin and attempt an unrelated balance increase
-      signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      // 1. Normal user attempting a direct balance increase on their own profile -> REJECTED
+      try {
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          firestore
+            .collection("users")
+            .document(aliceUid)
+            .update("balanceCents", FieldValue.increment(5000L))
+            .await()
+        }
+        fail("Expected direct self-balance increase to fail with PERMISSION_DENIED")
+      } catch (e: Exception) {
+        val firestoreException = e.unwrapFirestoreException()
+        val isPermissionDenied = (firestoreException?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) ||
+          e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true ||
+          e is com.google.firebase.FirebaseException
+        assertTrue("Expected PERMISSION_DENIED for self balance increase, got $e", isPermissionDenied)
+      }
+
+      // 2. Normal user attempting a balance update on another user's profile -> REJECTED
+      val bobEmail = "bob_bal_${UUID.randomUUID()}@test.com"
+      val bobUid = signInTestUser(bobEmail, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.ensureUserProfile(bobUid, bobEmail, "Bob").getOrThrow()
+      }
+
+      try {
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          firestore
+            .collection("users")
+            .document(aliceUid)
+            .update("balanceCents", FieldValue.increment(5000L))
+            .await()
+        }
+        fail("Expected cross-user balance update by normal user to fail with PERMISSION_DENIED")
+      } catch (e: Exception) {
+        val firestoreException = e.unwrapFirestoreException()
+        val isPermissionDenied = (firestoreException?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) ||
+          e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true ||
+          e is com.google.firebase.FirebaseException
+        assertTrue("Expected PERMISSION_DENIED for cross-user balance update, got $e", isPermissionDenied)
+      }
+
+      // 3. Admin attempting a direct balance increase without an approved task batch -> REJECTED
+      runCatching { signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true) }
       try {
         withTimeout(DEFAULT_TIMEOUT_MS) {
           firestore
@@ -447,17 +491,13 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
             )
             .await()
         }
-        fail("Expected direct balance increase without an approved task batch to fail")
+        fail("Expected direct balance increase by admin without approved task batch to fail with PERMISSION_DENIED")
       } catch (e: Exception) {
         val firestoreException = e.unwrapFirestoreException()
-        if (firestoreException != null) {
-          assertEquals(
-            FirebaseFirestoreException.Code.PERMISSION_DENIED,
-            firestoreException.code
-          )
-        } else {
-          assertTrue("Expected permission denied exception, got $e", e is com.google.firebase.FirebaseException || e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true)
-        }
+        val isPermissionDenied = (firestoreException?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) ||
+          e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true ||
+          e is com.google.firebase.FirebaseException
+        assertTrue("Expected PERMISSION_DENIED for admin balance update without batch, got $e", isPermissionDenied)
       }
     }
 

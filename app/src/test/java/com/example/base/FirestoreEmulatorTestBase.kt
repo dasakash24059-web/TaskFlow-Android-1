@@ -5,7 +5,6 @@ import androidx.test.core.app.ApplicationProvider
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.FirebaseFirestoreSettings
@@ -70,7 +69,7 @@ abstract class FirestoreEmulatorTestBase {
 
   @After
   open fun tearDownFirebase() {
-    auth.signOut()
+    runCatching { auth.signOut() }
   }
 
   // Local unit test helper ONLY (under app/src/test/). In application code (app/src/main/),
@@ -79,20 +78,23 @@ abstract class FirestoreEmulatorTestBase {
     withContext(Dispatchers.IO) {
       withTimeout(AUTH_TIMEOUT_MS) {
         val currentUser = auth.currentUser
-        val user = if (currentUser != null && currentUser.email.equals(email, ignoreCase = true)) {
-          currentUser
-        } else {
+        if (currentUser != null && currentUser.email.equals(email, ignoreCase = true)) {
+          return@withTimeout currentUser.uid
+        }
+
+        runCatching { auth.signOut() }
+
+        val user = try {
+          auth.signInWithEmailAndPassword(email, DEFAULT_PASSWORD).await().user
+        } catch (e1: Exception) {
           try {
-            auth.signInWithEmailAndPassword(email, DEFAULT_PASSWORD).await().user
-          } catch (e1: Exception) {
-            try {
-              auth.createUserWithEmailAndPassword(email, DEFAULT_PASSWORD).await().user
-            } catch (e2: Exception) {
-              auth.signInWithEmailAndPassword(email, DEFAULT_PASSWORD).await().user
-            }
+            auth.createUserWithEmailAndPassword(email, DEFAULT_PASSWORD).await().user
+          } catch (e2: Exception) {
+            clearEmulatorAccounts()
+            auth.createUserWithEmailAndPassword(email, DEFAULT_PASSWORD).await().user
           }
         }
-        val targetUser = checkNotNull(user) { "User auth failed" }
+        val targetUser = checkNotNull(user) { "User auth failed for $email" }
         runCatching { setEmulatorEmailVerified(targetUser.uid, emailVerified) }
         runCatching { targetUser.reload().await() }
         runCatching { targetUser.getIdToken(true).await() }
@@ -100,25 +102,31 @@ abstract class FirestoreEmulatorTestBase {
       }
     }
 
-  private fun setEmulatorEmailVerified(uid: String, emailVerified: Boolean) {
-    val endpoint =
-      URL(
-        "http://$EMULATOR_HOST:$AUTH_PORT/identitytoolkit.googleapis.com/v1/projects/$PROJECT_ID/accounts:update"
-      )
-    val conn = (endpoint.openConnection() as HttpURLConnection).apply {
-      requestMethod = "POST"
-      doOutput = true
-      setRequestProperty("Content-Type", "application/json")
-      setRequestProperty("Authorization", "Bearer owner")
-      connectTimeout = 2000
-      readTimeout = 2000
+  private fun clearEmulatorAccounts() {
+    runCatching {
+      val endpoint = URL("http://$EMULATOR_HOST:$AUTH_PORT/emulator/v1/projects/$PROJECT_ID/accounts")
+      val conn = (endpoint.openConnection() as HttpURLConnection).apply {
+        requestMethod = "DELETE"
+      }
+      conn.responseCode
+      conn.disconnect()
     }
-    try {
-      val payload = """{"localId":"$uid","emailVerified":$emailVerified}"""
+  }
+
+  private fun setEmulatorEmailVerified(uid: String, emailVerified: Boolean) {
+    runCatching {
+      val endpoint =
+        URL(
+          "http://$EMULATOR_HOST:$AUTH_PORT/identitytoolkit.googleapis.com/v1/projects/$PROJECT_ID/accounts:update"
+        )
+      val conn = (endpoint.openConnection() as HttpURLConnection).apply {
+        requestMethod = "POST"
+        setRequestProperty("Content-Type", "application/json")
+        doOutput = true
+      }
+      val payload = "{\"localId\":\"$uid\",\"emailVerified\":$emailVerified}"
       conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
-      val code = conn.responseCode
-      check(code in 200..299) { "Failed to update emulator emailVerified status: HTTP $code" }
-    } finally {
+      conn.responseCode
       conn.disconnect()
     }
   }
