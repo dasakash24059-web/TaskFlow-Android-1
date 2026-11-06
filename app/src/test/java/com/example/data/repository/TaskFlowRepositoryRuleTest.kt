@@ -1,5 +1,5 @@
 package com.example.data.repository
-
+import org.robolectric.annotation.Config
 import android.net.Uri
 import com.example.base.FirestoreEmulatorTestBase
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
