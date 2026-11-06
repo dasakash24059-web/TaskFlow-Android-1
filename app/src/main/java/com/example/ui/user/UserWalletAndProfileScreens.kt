@@ -130,7 +130,8 @@ fun UserWalletScreen(
     ifscCode: String,
     upiId: String,
     onSuccess: () -> Unit
-  ) -> Unit = { _, _, _, _, _, _, _, _ -> }
+  ) -> Unit = { _, _, _, _, _, _, _, _ -> },
+  initialOpenWithdraw: Boolean = false
 ) {
   val profile = (profileState as? UiState.Success)?.data
   val availableBalanceCents = profile?.balanceCents ?: 0L
@@ -175,7 +176,7 @@ fun UserWalletScreen(
         .sumOf { it.rewardCents }
     }
 
-  var showWithdrawMethodDialog by rememberSaveable { mutableStateOf(false) }
+  var showWithdrawMethodDialog by rememberSaveable { mutableStateOf(initialOpenWithdraw) }
 
   if (showWithdrawMethodDialog) {
     SelectWithdrawalMethodDialog(

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.automirrored.filled.FactCheck
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AccountBalanceWallet
@@ -83,6 +84,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.R
 import androidx.compose.material.icons.filled.Check
@@ -136,7 +138,8 @@ fun UserHomeScreen(
   dailyCheckInState: DailyCheckInState = calculateDailyCheckInState("", 0L),
   onClaimDailyCheckIn: () -> Unit = {},
   transactionsState: UiState<List<TransactionRecord>> = UiState.Success(emptyList()),
-  leaderboardState: UiState<List<UserProfile>> = UiState.Success(emptyList())
+  leaderboardState: UiState<List<UserProfile>> = UiState.Success(emptyList()),
+  onNavigateToWallet: (Boolean) -> Unit = {}
 ) {
   val profile = (profileState as? UiState.Success)?.data
   val currentUserId = profile?.userId?.ifBlank { profile.id } ?: ""
@@ -242,14 +245,15 @@ fun UserHomeScreen(
             verticalAlignment = Alignment.CenterVertically
           ) {
             Row(
+              modifier = Modifier.weight(1f, false),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(10.dp)
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-              TaskFlowBrandLogo(size = 38.dp)
+              TaskFlowBrandLogo(size = 36.dp)
               Column {
                 Text(
                   text = stringResource(R.string.app_name),
-                  style = MaterialTheme.typography.titleLarge,
+                  style = MaterialTheme.typography.titleMedium,
                   color = Color.White,
                   fontWeight = FontWeight.ExtraBold
                 )
@@ -261,34 +265,58 @@ fun UserHomeScreen(
               }
             }
 
-            // Compact Balance Indicator Pill
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Compact Balance Indicator Pill (Deep Indigo + Soft Lavender)
             Surface(
               shape = RoundedCornerShape(50),
-              color = Color.White.copy(alpha = 0.18f),
+              color = Color(0xFF312E81),
               modifier =
-                Modifier.border(
-                  width = 1.dp,
-                  color = Color.White.copy(alpha = 0.35f),
-                  shape = RoundedCornerShape(50)
-                ).testTag("home_compact_balance")
+                Modifier
+                  .clip(RoundedCornerShape(50))
+                  .border(
+                    width = 1.dp,
+                    color = Color(0xFFC4B5FD).copy(alpha = 0.6f),
+                    shape = RoundedCornerShape(50)
+                  )
+                  .clickable { onNavigateToWallet(true) }
+                  .testTag("home_compact_balance")
             ) {
               Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
               ) {
                 Icon(
                   imageVector = Icons.Default.AccountBalanceWallet,
-                  contentDescription = "Wallet Balance",
-                  tint = Color(0xFFFDE047),
-                  modifier = Modifier.size(16.dp)
+                  contentDescription = "Wallet",
+                  tint = Color(0xFFC4B5FD),
+                  modifier = Modifier.size(14.dp)
                 )
-                Text(
-                  text = formatRewardInr(profile?.balanceCents ?: 0L),
-                  style = MaterialTheme.typography.titleMedium,
-                  color = Color.White,
-                  fontWeight = FontWeight.Bold,
-                  modifier = Modifier.testTag("home_available_balance")
+                Column(
+                  verticalArrangement = Arrangement.Center
+                ) {
+                  Text(
+                    text = "MY BALANCE",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 9.sp,
+                    color = Color(0xFFC4B5FD),
+                    fontWeight = FontWeight.Bold
+                  )
+                  Text(
+                    text = formatRewardInr(profile?.balanceCents ?: 0L),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontSize = 11.sp,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.testTag("home_available_balance")
+                  )
+                }
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                  contentDescription = "Open Wallet",
+                  tint = Color(0xFFC4B5FD),
+                  modifier = Modifier.size(14.dp)
                 )
               }
             }
@@ -356,35 +384,32 @@ fun UserHomeScreen(
       }
     }
 
-    // 2. Daily Check-in 7-Day Reward Card
-    item {
-      DailyCheckInCard(
-        dailyCheckInState = dailyCheckInState,
-        onClaimDailyCheckIn = onClaimDailyCheckIn
-      )
-    }
-
-    // 3. Watch & Earn Card
-    item {
-      WatchAndEarnCard(
-        onWatchAdClicked = { showWatchAdDialog = true }
-      )
-    }
-
-    // 4. Leaderboard Preview Card (Top 3 Users + View All)
-    item {
-      LeaderboardPreviewCard(
-        users = leaderboardUsers,
-        onViewAllClicked = { showLeaderboardDialog = true }
-      )
-    }
-
-    // 5. Recent Transactions Overview
+    // 2. Recent Transactions Summary
     item {
       RecentTransactionsCard(transactions = transactions)
     }
 
-    // 6. Available Tasks Section & Action Button
+    // 3. Daily Check-in & Watch & Earn Side-by-Side Two-Column Grid
+    item {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        Box(modifier = Modifier.weight(1f)) {
+          DailyCheckInCard(
+            dailyCheckInState = dailyCheckInState,
+            onClaimDailyCheckIn = onClaimDailyCheckIn
+          )
+        }
+        Box(modifier = Modifier.weight(1f)) {
+          WatchAndEarnCard(
+            onWatchAdClicked = { showWatchAdDialog = true }
+          )
+        }
+      }
+    }
+
+    // 4. Available Tasks Section & Action Button
     item {
       Card(
         modifier = Modifier.fillMaxWidth().testTag("home_available_tasks_section"),
@@ -451,6 +476,67 @@ fun UserHomeScreen(
               contentDescription = null,
               modifier = Modifier.size(16.dp)
             )
+          }
+        }
+      }
+    }
+
+    // 5. Top Earners Leaderboard Preview
+    item {
+      LeaderboardPreviewCard(
+        users = leaderboardUsers,
+        onViewAllClicked = { showLeaderboardDialog = true }
+      )
+    }
+
+    // 6. Wallet Section on Home
+    item {
+      Card(
+        modifier = Modifier.fillMaxWidth().testTag("home_wallet_section"),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(18.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+              Surface(
+                shape = CircleShape,
+                color = Color(0xFF2563EB).copy(alpha = 0.15f),
+                modifier = Modifier.size(38.dp)
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  Icon(
+                    imageVector = Icons.Default.AccountBalanceWallet,
+                    contentDescription = null,
+                    tint = Color(0xFF2563EB),
+                    modifier = Modifier.size(20.dp)
+                  )
+                }
+              }
+              Column {
+                Text(
+                  text = "Wallet & Payouts",
+                  style = MaterialTheme.typography.titleMedium,
+                  fontWeight = FontWeight.Bold
+                )
+                Text(
+                  text = "Available Balance: ${formatRewardInr(profile?.balanceCents ?: 0L)}",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+              }
+            }
           }
         }
       }
@@ -758,7 +844,7 @@ private fun WatchAndEarnCard(
   ) {
     Column(
       modifier = Modifier.fillMaxWidth().padding(18.dp),
-      verticalArrangement = Arrangement.spacedBy(12.dp)
+      verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -799,7 +885,8 @@ private fun WatchAndEarnCard(
 
         Surface(
           shape = RoundedCornerShape(50),
-          color = Color(0xFFEDE9FE)
+          color = Color(0xFFEDE9FE),
+          modifier = Modifier.testTag("watch_earn_badge")
         ) {
           Text(
             text = "Up to ₹25",
@@ -810,12 +897,6 @@ private fun WatchAndEarnCard(
           )
         }
       }
-
-      Text(
-        text = "Standard rewards: ₹1.00 – ₹2.00 (with occasional ₹3.00 – ₹4.00 bonuses). ₹25.00 is the maximum possible reward per video.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-      )
 
       Button(
         onClick = onWatchAdClicked,
@@ -829,7 +910,7 @@ private fun WatchAndEarnCard(
           modifier = Modifier.size(18.dp)
         )
         Spacer(modifier = Modifier.width(6.dp))
-        Text(text = "Watch Video Ad (Up to ₹25)", fontWeight = FontWeight.Bold)
+        Text(text = "Watch Video Ad", fontWeight = FontWeight.Bold)
       }
     }
   }

@@ -379,3 +379,12 @@ fun formatRewardInr(cents: Long): String {
  * Alias retained for compatibility; formats amounts in Indian Rupee (INR ₹).
  */
 fun formatRewardUsd(cents: Long): String = formatRewardInr(cents)
+
+data class AppVersionInfo(
+  val versionCode: Int = 1,
+  val versionName: String = "1.0",
+  val apkUrl: String = "",
+  val releaseNotes: String = "",
+  val forceUpdate: Boolean = false
+)
+

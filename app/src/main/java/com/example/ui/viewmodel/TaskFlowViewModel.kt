@@ -738,4 +738,64 @@ class TaskFlowViewModel(
       _isBusy.value = false
     }
   }
+
+  private val _appUpdateInfo = MutableStateFlow<com.example.data.model.AppVersionInfo?>(null)
+  val appUpdateInfo: StateFlow<com.example.data.model.AppVersionInfo?> = _appUpdateInfo.asStateFlow()
+
+  private val _showUpdateDialog = MutableStateFlow(false)
+  val showUpdateDialog: StateFlow<Boolean> = _showUpdateDialog.asStateFlow()
+
+  private val _isCheckingUpdate = MutableStateFlow(false)
+  val isCheckingUpdate: StateFlow<Boolean> = _isCheckingUpdate.asStateFlow()
+
+  private var hasCheckedUpdateThisSession = false
+
+  fun checkForAppUpdates(context: android.content.Context, forceCheck: Boolean = false) {
+    if (hasCheckedUpdateThisSession && !forceCheck) return
+    hasCheckedUpdateThisSession = true
+    viewModelScope.launch {
+      _isCheckingUpdate.value = true
+      com.example.util.AppUpdateManager.checkForUpdate(context)
+        .onSuccess { updateInfo ->
+          if (updateInfo != null) {
+            _appUpdateInfo.value = updateInfo
+            _showUpdateDialog.value = true
+          }
+        }
+        .onFailure {
+          // Silent failure on network error
+        }
+      _isCheckingUpdate.value = false
+    }
+  }
+
+  fun dismissUpdateDialog() {
+    val info = _appUpdateInfo.value
+    if (info == null || !info.forceUpdate) {
+      _showUpdateDialog.value = false
+    }
+  }
+
+  fun downloadAndInstallUpdate(context: android.content.Context) {
+    val info = _appUpdateInfo.value ?: return
+    if (info.apkUrl.isNotBlank()) {
+      com.example.util.AppUpdateManager.downloadAndInstallApk(context, info.apkUrl)
+      _bannerMessage.value = "Downloading update... You can install once complete."
+    }
+  }
+
+  fun triggerInstalledApkInstall(context: android.content.Context) {
+    val success = com.example.util.AppUpdateManager.installDownloadedApk(context)
+    if (!success) {
+      _bannerMessage.value = "Unable to start installation. Please check unknown app sources permission."
+    }
+  }
+
+  private val _openWithdrawOnWalletNavigation = MutableStateFlow(false)
+  val openWithdrawOnWalletNavigation: StateFlow<Boolean> = _openWithdrawOnWalletNavigation.asStateFlow()
+
+  fun setOpenWithdrawOnWalletNavigation(open: Boolean) {
+    _openWithdrawOnWalletNavigation.value = open
+  }
 }
+

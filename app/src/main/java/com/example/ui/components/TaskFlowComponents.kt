@@ -777,3 +777,102 @@ private fun ConfigSection(title: String, body: String) {
     }
   }
 }
+
+@Composable
+fun AppUpdateDialog(
+  versionInfo: com.example.data.model.AppVersionInfo,
+  onUpdateNow: () -> Unit,
+  onInstallDownloaded: () -> Unit,
+  onDismiss: () -> Unit
+) {
+  AlertDialog(
+    onDismissRequest = {
+      if (!versionInfo.forceUpdate) {
+        onDismiss()
+      }
+    },
+    modifier = Modifier.testTag("update_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        Icon(
+          imageVector = Icons.Default.Info,
+          contentDescription = "New Update",
+          tint = MaterialTheme.colorScheme.primary
+        )
+        Text(text = "New Update Available")
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        Text(
+          text = "Version ${versionInfo.versionName} (Code: ${versionInfo.versionCode}) is available.",
+          style = MaterialTheme.typography.bodyLarge,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onSurface
+        )
+
+        if (versionInfo.releaseNotes.isNotBlank()) {
+          Text(
+            text = "Release Notes:",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary
+          )
+          Text(
+            text = versionInfo.releaseNotes,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+        }
+
+        if (versionInfo.forceUpdate) {
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            text = "This is a required security update. You must update the app to continue using TaskFlow.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            fontWeight = FontWeight.SemiBold
+          )
+        }
+      }
+    },
+    confirmButton = {
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+      ) {
+        Button(
+          onClick = onUpdateNow,
+          modifier = Modifier.fillMaxWidth().testTag("update_now_button"),
+          colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+        ) {
+          Text("Download & Update Now")
+        }
+        TextButton(
+          onClick = onInstallDownloaded,
+          modifier = Modifier.fillMaxWidth().testTag("install_downloaded_button")
+        ) {
+          Text("Install Downloaded APK")
+        }
+      }
+    },
+    dismissButton = {
+      if (!versionInfo.forceUpdate) {
+        TextButton(
+          onClick = onDismiss,
+          modifier = Modifier.testTag("later_update_button")
+        ) {
+          Text("Later")
+        }
+      }
+    }
+  )
+}
+

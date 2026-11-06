@@ -325,6 +325,7 @@ private fun AuthenticatedWorkspace(
   val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
   val uploadProgress by viewModel.uploadProgress.collectAsStateWithLifecycle()
   val showSecuritySheet by viewModel.showSecuritySheet.collectAsStateWithLifecycle()
+  val openWithdrawOnWalletNavigation by viewModel.openWithdrawOnWalletNavigation.collectAsStateWithLifecycle()
 
   BackHandler(
     enabled =
@@ -352,6 +353,28 @@ private fun AuthenticatedWorkspace(
     FirebaseConfigSecurityDialog(
       databaseId = databaseId,
       onDismiss = { viewModel.setShowSecuritySheet(false) }
+    )
+  }
+
+  val showUpdateDialog by viewModel.showUpdateDialog.collectAsStateWithLifecycle()
+  val updateInfo by viewModel.appUpdateInfo.collectAsStateWithLifecycle()
+
+  androidx.compose.runtime.LaunchedEffect(Unit) {
+    viewModel.checkForAppUpdates(context)
+  }
+
+  if (showUpdateDialog && updateInfo != null) {
+    com.example.ui.components.AppUpdateDialog(
+      versionInfo = updateInfo!!,
+      onUpdateNow = {
+        viewModel.downloadAndInstallUpdate(context)
+      },
+      onInstallDownloaded = {
+        viewModel.triggerInstalledApkInstall(context)
+      },
+      onDismiss = {
+        viewModel.dismissUpdateDialog()
+      }
     )
   }
 

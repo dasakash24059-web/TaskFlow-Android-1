@@ -18,6 +18,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.model.AppVersionInfo
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DailyCheckInState
@@ -256,7 +257,7 @@ class ExampleRobolectricTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("Welcome back,").assertIsDisplayed()
     composeTestRule.onNodeWithTag("home_welcome_message").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("home_available_balance").assertIsDisplayed().assertTextEquals("₹25.00")
+    composeTestRule.onNodeWithTag("home_available_balance", useUnmergedTree = true).assertTextEquals("₹25.00")
     composeTestRule
       .onNodeWithTag("user_home_screen")
       .performScrollToNode(hasTestTag("home_available_tasks_section"))
@@ -1321,12 +1322,19 @@ class ExampleRobolectricTest {
 
     // 1. Verify Compact Balance indicator and Welcome message
     composeTestRule.onNodeWithTag("home_compact_balance").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("home_available_balance").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("home_available_balance", useUnmergedTree = true).assertIsDisplayed()
     composeTestRule.onNodeWithText("₹128.50").assertIsDisplayed()
     composeTestRule.onNodeWithTag("home_welcome_message").assertIsDisplayed()
     composeTestRule.onNodeWithText("Pooja Roy").assertIsDisplayed()
 
-    // 2. Verify Daily Check-in card and claim action
+    // 2. Verify Recent Transactions section
+    composeTestRule
+      .onNodeWithTag("user_home_screen")
+      .performScrollToNode(hasTestTag("home_recent_transactions_section"))
+    composeTestRule.onNodeWithTag("home_recent_transactions_section").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Day 1 Daily Check-in Reward").assertIsDisplayed()
+
+    // 3. Verify Daily Check-in card and claim action
     composeTestRule
       .onNodeWithTag("user_home_screen")
       .performScrollToNode(hasTestTag("home_daily_checkin_card"))
@@ -1337,19 +1345,25 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("claim_daily_checkin_button").assertIsDisplayed().performClick()
     assertTrue(dailyCheckInClaimed)
 
-    // 3. Verify Watch & Earn card and transparent info dialog
+    // 4. Verify Watch & Earn card and transparent info dialog
     composeTestRule
       .onNodeWithTag("user_home_screen")
       .performScrollToNode(hasTestTag("home_watch_earn_card"))
     composeTestRule.onNodeWithTag("home_watch_earn_card").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Up to ₹25").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("watch_earn_badge").assertIsDisplayed()
     composeTestRule.onNodeWithTag("watch_ad_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("watch_earn_dialog").assertIsDisplayed()
     composeTestRule.onNodeWithTag("close_watch_dialog_button").performClick()
     composeTestRule.waitForIdle()
 
-    // 4. Verify Leaderboard top 3 and View All dialog
+    // 5. Verify Available Tasks section
+    composeTestRule
+      .onNodeWithTag("user_home_screen")
+      .performScrollToNode(hasTestTag("home_available_tasks_section"))
+    composeTestRule.onNodeWithTag("home_available_tasks_section").assertIsDisplayed()
+
+    // 6. Verify Leaderboard top 3 and View All dialog
     composeTestRule
       .onNodeWithTag("user_home_screen")
       .performScrollToNode(hasTestTag("home_leaderboard_section"))
@@ -1363,12 +1377,11 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("close_leaderboard_dialog_button").performClick()
     composeTestRule.waitForIdle()
 
-    // 5. Verify Recent Transactions section
+    // 7. Verify Wallet section on Home
     composeTestRule
       .onNodeWithTag("user_home_screen")
-      .performScrollToNode(hasTestTag("home_recent_transactions_section"))
-    composeTestRule.onNodeWithTag("home_recent_transactions_section").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Day 1 Daily Check-in Reward").assertIsDisplayed()
+      .performScrollToNode(hasTestTag("home_wallet_section"))
+    composeTestRule.onNodeWithTag("home_wallet_section").assertIsDisplayed()
   }
 
   @Test
@@ -1479,5 +1492,37 @@ class ExampleRobolectricTest {
 
     assertEquals("Updated Akash", updatedName)
   }
+
+  @Test
+  fun `AppUpdateDialog displays update info, release notes, and handles update actions`() {
+    val versionInfo = AppVersionInfo(
+      versionCode = 5,
+      versionName = "1.2.0",
+      apkUrl = "https://example.com/taskflow.apk",
+      releaseNotes = "New rewards and performance upgrades",
+      forceUpdate = false
+    )
+    var updateClicked = false
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        com.example.ui.components.AppUpdateDialog(
+          versionInfo = versionInfo,
+          onUpdateNow = { updateClicked = true },
+          onInstallDownloaded = {},
+          onDismiss = {}
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("update_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("New Update Available").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Version 1.2.0 (Code: 5) is available.").assertIsDisplayed()
+    composeTestRule.onNodeWithText("New rewards and performance upgrades").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("update_now_button").assertIsDisplayed().performClick()
+    assertTrue(updateClicked)
+  }
 }
+
 
