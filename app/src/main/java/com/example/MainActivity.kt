@@ -368,8 +368,17 @@ private fun AuthenticatedWorkspace(
   val showUpdateDialog by viewModel.showUpdateDialog.collectAsStateWithLifecycle()
   val updateInfo by viewModel.appUpdateInfo.collectAsStateWithLifecycle()
 
-  androidx.compose.runtime.LaunchedEffect(Unit) {
-    viewModel.checkForAppUpdates(context)
+  val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+  androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+      if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        viewModel.checkForAppUpdates(context, forceCheck = false)
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
   }
 
   if (showUpdateDialog && updateInfo != null) {

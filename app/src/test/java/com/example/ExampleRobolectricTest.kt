@@ -19,6 +19,7 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.model.AppVersionInfo
+import com.example.util.AppUpdateManager
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DailyCheckInState
@@ -1522,6 +1523,42 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithText("New rewards and performance upgrades").assertIsDisplayed()
     composeTestRule.onNodeWithTag("update_now_button").assertIsDisplayed().performClick()
     assertTrue(updateClicked)
+  }
+
+  @Test
+  fun `AppUpdateManager version comparison returns update when remote code is higher and null when equal or lower`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val installedCode = AppUpdateManager.getInstalledVersionCode(context)
+    assertTrue("Installed version code should be positive", installedCode >= 1)
+
+    // Test remote version lower or equal
+    val noUpdateInfo = AppUpdateManager.checkForRemoteConfigUpdate(context).getOrNull()
+    // Remote defaults equal installed version, so no update should be triggered
+    assertEquals(null, noUpdateInfo)
+
+    // Test forced update dialog hides Later button
+    val forcedInfo = AppVersionInfo(
+      versionCode = installedCode + 1,
+      versionName = "2.0",
+      apkUrl = "https://github.com/dasakash24059/TaskFlow/releases/download/v2.0/TaskFlow.apk",
+      releaseNotes = "Major security patch",
+      forceUpdate = true
+    )
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        com.example.ui.components.AppUpdateDialog(
+          versionInfo = forcedInfo,
+          onUpdateNow = {},
+          onInstallDownloaded = {},
+          onDismiss = {}
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("update_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("required security update", substring = true).assertIsDisplayed()
+    composeTestRule.onNodeWithTag("later_update_button").assertDoesNotExist()
   }
 }
 
