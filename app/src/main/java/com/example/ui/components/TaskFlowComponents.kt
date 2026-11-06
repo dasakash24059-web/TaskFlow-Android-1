@@ -127,64 +127,133 @@ fun resolveAppOrWebsiteLabel(task: TaskItem): String {
 }
 
 /**
- * Clean, modern TaskFlow brand emblem rendered with Jetpack Compose Canvas.
+ * Stylized TaskFlow brand emblem matching the official brand identity:
+ * - Dynamic curved "T" body with smooth gradient
+ * - Ascending golden-amber wing on the right
  */
 @Composable
 fun TaskFlowBrandLogo(
   modifier: Modifier = Modifier,
-  size: Dp = 44.dp
+  size: Dp = 44.dp,
+  isLightMode: Boolean = false
 ) {
   Box(
     modifier =
       modifier
         .size(size)
-        .clip(RoundedCornerShape(size * 0.28f))
-        .background(
-          Brush.linearGradient(
-            colors =
-              listOf(
-                Color(0xFF059669),
-                Color(0xFF0EA5E9),
-                Color(0xFF2563EB)
-              )
-          )
-        )
-        .border(
-          width = 1.dp,
-          color = Color.White.copy(alpha = 0.28f),
-          shape = RoundedCornerShape(size * 0.28f)
-        ),
+        .clip(RoundedCornerShape(size * 0.28f)),
     contentAlignment = Alignment.Center
   ) {
-    Canvas(modifier = Modifier.fillMaxSize().padding(size * 0.2f)) {
+    Canvas(modifier = Modifier.fillMaxSize().padding(size * 0.08f)) {
       val w = this.size.width
       val h = this.size.height
 
-      // Subtle top-left card layer
-      drawRoundRect(
-        color = Color.White.copy(alpha = 0.22f),
-        topLeft = Offset(w * 0.06f, h * 0.08f),
-        size = Size(w * 0.68f, h * 0.68f),
-        cornerRadius = CornerRadius(w * 0.16f, w * 0.16f)
-      )
-
-      // Checkmark + upward flow path
-      val checkPath =
+      // 1. Ascending energetic golden amber wing on the right
+      val amberWingPath =
         Path().apply {
-          moveTo(w * 0.18f, h * 0.54f)
-          lineTo(w * 0.42f, h * 0.78f)
-          lineTo(w * 0.86f, h * 0.24f)
+          moveTo(w * 0.44f, h * 0.38f)
+          cubicTo(
+            w * 0.58f, h * 0.22f,
+            w * 0.78f, h * 0.14f,
+            w * 0.96f, h * 0.14f
+          )
+          cubicTo(
+            w * 0.76f, h * 0.36f,
+            w * 0.58f, h * 0.46f,
+            w * 0.44f, h * 0.50f
+          )
+          close()
         }
       drawPath(
-        path = checkPath,
-        color = Color.White,
-        style =
-          Stroke(
-            width = w * 0.15f,
-            cap = StrokeCap.Round,
-            join = StrokeJoin.Round
+        path = amberWingPath,
+        brush =
+          Brush.linearGradient(
+            colors =
+              listOf(
+                Color(0xFFFBBF24),
+                Color(0xFFF59E0B),
+                Color(0xFFEA580C)
+              ),
+            start = Offset(w * 0.4f, h * 0.4f),
+            end = Offset(w * 0.95f, h * 0.15f)
           )
       )
+
+      // 2. Stylized "T" body (White on dark, or Royal Blue/Indigo on light)
+      val tBodyPath =
+        Path().apply {
+          // Top left curve
+          moveTo(w * 0.10f, h * 0.26f)
+          cubicTo(
+            w * 0.14f, h * 0.18f,
+            w * 0.32f, h * 0.14f,
+            w * 0.66f, h * 0.14f
+          )
+          // Top right curve of T bar
+          cubicTo(
+            w * 0.62f, h * 0.28f,
+            w * 0.52f, h * 0.32f,
+            w * 0.42f, h * 0.32f
+          )
+          // Vertical stem curve down
+          cubicTo(
+            w * 0.38f, h * 0.52f,
+            w * 0.44f, h * 0.68f,
+            w * 0.52f, h * 0.76f
+          )
+          // Bottom hook
+          cubicTo(
+            w * 0.42f, h * 0.88f,
+            w * 0.28f, h * 0.84f,
+            w * 0.22f, h * 0.72f
+          )
+          // Left edge of stem going up
+          cubicTo(
+            w * 0.22f, h * 0.52f,
+            w * 0.26f, h * 0.36f,
+            w * 0.24f, h * 0.34f
+          )
+          // Left tip of T bar
+          cubicTo(
+            w * 0.16f, h * 0.34f,
+            w * 0.10f, h * 0.32f,
+            w * 0.10f, h * 0.26f
+          )
+          close()
+        }
+
+      if (isLightMode) {
+        drawPath(
+          path = tBodyPath,
+          brush =
+            Brush.linearGradient(
+              colors =
+                listOf(
+                  Color(0xFF2563EB),
+                  Color(0xFF1D4ED8),
+                  Color(0xFF4338CA)
+                ),
+              start = Offset(w * 0.1f, h * 0.15f),
+              end = Offset(w * 0.5f, h * 0.85f)
+            )
+        )
+      } else {
+        // Crisp White with soft sky blue gradient & inner depth
+        drawPath(
+          path = tBodyPath,
+          brush =
+            Brush.linearGradient(
+              colors =
+                listOf(
+                  Color.White,
+                  Color(0xFFF0F9FF),
+                  Color(0xFFE0E7FF)
+                ),
+              start = Offset(w * 0.1f, h * 0.15f),
+              end = Offset(w * 0.5f, h * 0.85f)
+            )
+        )
+      }
     }
   }
 }

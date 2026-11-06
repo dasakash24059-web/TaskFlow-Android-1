@@ -1323,7 +1323,7 @@ class ExampleRobolectricTest {
     // 1. Verify Compact Balance indicator and Welcome message
     composeTestRule.onNodeWithTag("home_compact_balance").assertIsDisplayed()
     composeTestRule.onNodeWithTag("home_available_balance", useUnmergedTree = true).assertIsDisplayed()
-    composeTestRule.onNodeWithText("₹128.50").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("home_available_balance", useUnmergedTree = true).assertTextEquals("₹128.50")
     composeTestRule.onNodeWithTag("home_welcome_message").assertIsDisplayed()
     composeTestRule.onNodeWithText("Pooja Roy").assertIsDisplayed()
 

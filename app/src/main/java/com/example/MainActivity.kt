@@ -83,6 +83,7 @@ import com.example.ui.auth.signOutUser
 import com.example.ui.components.FirebaseConfigSecurityDialog
 import com.example.ui.components.TaskFlowBrandLogo
 import com.example.ui.theme.TaskFlowTheme
+import com.example.ui.user.DedicatedDailyCheckInScreen
 import com.example.ui.user.UserHomeScreen
 import com.example.ui.user.UserProfileScreen
 import com.example.ui.user.UserTaskDetailScreen
@@ -326,10 +327,14 @@ private fun AuthenticatedWorkspace(
   val uploadProgress by viewModel.uploadProgress.collectAsStateWithLifecycle()
   val showSecuritySheet by viewModel.showSecuritySheet.collectAsStateWithLifecycle()
   val openWithdrawOnWalletNavigation by viewModel.openWithdrawOnWalletNavigation.collectAsStateWithLifecycle()
+  val isDailyCheckInScreenVisible by viewModel.isDailyCheckInScreenVisible.collectAsStateWithLifecycle()
 
   BackHandler(
     enabled =
       selectedTaskId != null ||
+        (activePortal == PortalLoginTarget.USER_APP &&
+          activeUserTab == UserTab.HOME &&
+          isDailyCheckInScreenVisible) ||
         (activePortal == PortalLoginTarget.USER_APP &&
           activeUserTab == UserTab.PROFILE &&
           profileSubScreen != ProfileSubScreen.MAIN) ||
@@ -338,6 +343,10 @@ private fun AuthenticatedWorkspace(
   ) {
     when {
       selectedTaskId != null -> viewModel.selectTask(null)
+      activePortal == PortalLoginTarget.USER_APP &&
+        activeUserTab == UserTab.HOME &&
+        isDailyCheckInScreenVisible ->
+        viewModel.setDailyCheckInScreenVisible(false)
       activePortal == PortalLoginTarget.USER_APP &&
         activeUserTab == UserTab.PROFILE &&
         profileSubScreen != ProfileSubScreen.MAIN ->
@@ -602,24 +611,43 @@ private fun AuthenticatedWorkspace(
           } else {
             when (activeUserTab) {
               UserTab.HOME -> {
-                UserHomeScreen(
-                  profileState = userProfileState,
-                  tasksState = userTasksState,
-                  isAdminAuthorized = isAdminAuthorized,
-                  onSelectTask = { viewModel.selectTask(it) },
-                  onNavigateToTracking = { filter ->
-                    viewModel.setTrackingStatusFilter(filter)
-                    viewModel.setUserTab(UserTab.TRACKING)
-                  },
-                  onSwitchToAdmin = {
-                    viewModel.setPortal(PortalLoginTarget.ADMIN_DASHBOARD)
-                  },
-                  submissionsState = userSubmissionsState,
-                  dailyCheckInState = dailyCheckInState,
-                  onClaimDailyCheckIn = { viewModel.claimDailyCheckIn() },
-                  transactionsState = userTransactionsState,
-                  leaderboardState = leaderboardUsersState
-                )
+                if (isDailyCheckInScreenVisible) {
+                  DedicatedDailyCheckInScreen(
+                    dailyCheckInState = dailyCheckInState,
+                    approvedEarningsCents = viewModel.getApprovedTaskEarningsCents(),
+                    onClaimDay = { day ->
+                      viewModel.claimDailyCheckIn(day)
+                    },
+                    onBack = { viewModel.setDailyCheckInScreenVisible(false) },
+                    isBusy = isBusy
+                  )
+                } else {
+                  UserHomeScreen(
+                    profileState = userProfileState,
+                    tasksState = userTasksState,
+                    isAdminAuthorized = isAdminAuthorized,
+                    onSelectTask = { viewModel.selectTask(it) },
+                    onNavigateToTracking = { filter ->
+                      viewModel.setTrackingStatusFilter(filter)
+                      viewModel.setUserTab(UserTab.TRACKING)
+                    },
+                    onSwitchToAdmin = {
+                      viewModel.setPortal(PortalLoginTarget.ADMIN_DASHBOARD)
+                    },
+                    submissionsState = userSubmissionsState,
+                    dailyCheckInState = dailyCheckInState,
+                    onClaimDailyCheckIn = { viewModel.claimDailyCheckIn() },
+                    onNavigateToDailyCheckIn = { viewModel.setDailyCheckInScreenVisible(true) },
+                    transactionsState = userTransactionsState,
+                    leaderboardState = leaderboardUsersState,
+                    onNavigateToWallet = { openWithdraw ->
+                      if (openWithdraw) {
+                        viewModel.setOpenWithdrawOnWalletNavigation(true)
+                      }
+                      viewModel.setUserTab(UserTab.WALLET)
+                    }
+                  )
+                }
               }
               UserTab.TRACKING -> {
                 UserTrackingScreen(

@@ -17,6 +17,8 @@ import com.example.data.model.calculateDailyCheckInState
 import com.example.data.model.formatRewardInr
 import com.example.data.model.isValidImageUrlOrDataUri
 import com.example.data.model.isValidTaskUrl
+import com.example.data.model.DailyCheckInConstants
+import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.data.repository.TaskFlowRepository
 import com.example.ui.auth.PortalLoginTarget
 import kotlin.math.roundToLong
@@ -683,15 +685,47 @@ class TaskFlowViewModel(
     }
   }
 
-  fun claimDailyCheckIn(onSuccess: (Long) -> Unit = {}) {
+  fun getApprovedTaskEarningsCents(): Long {
+    val tasks = (userTasksState.value as? UiState.Success)?.data ?: emptyList()
+    val submissions = (userSubmissionsState.value as? UiState.Success)?.data ?: emptyList()
+    val merged = mergeTasksWithPreservedSubmissions(tasks, submissions, currentUserId)
+    return merged
+      .filter { it.status == TaskStatus.APPROVED && (currentUserId.isBlank() || it.assignedUserId == currentUserId) }
+      .sumOf { it.rewardCents }
+  }
+
+  fun claimDailyCheckIn(day: Int = 0, onSuccess: (Long) -> Unit = {}) {
     val profile = (userProfileState.value as? UiState.Success)?.data
     val currentState = dailyCheckInState.value
+    val targetStreak = if (day in 1..7) day else currentState.nextClaimDay
+
     if (!currentState.canCheckInToday) {
       _bannerMessage.value = "You have already claimed today's check-in reward! Come back tomorrow."
       return
     }
-    val targetStreak = currentState.nextClaimDay
-    val rewardCents = currentState.nextRewardCents
+
+    if (targetStreak != currentState.nextClaimDay) {
+      if (targetStreak <= currentState.currentStreak) {
+        _bannerMessage.value = "Day $targetStreak has already been claimed!"
+      } else {
+        _bannerMessage.value = "Day $targetStreak is locked. Please complete Day ${currentState.nextClaimDay} first."
+      }
+      return
+    }
+
+    // Days 5 and 6 task unlock condition: approved task earnings >= ₹20 (2000 cents)
+    if (targetStreak == 5 || targetStreak == 6) {
+      val approvedEarnings = getApprovedTaskEarningsCents()
+      if (approvedEarnings < 2000L) {
+        val neededFormatted = formatRewardInr(2000L)
+        val currentFormatted = formatRewardInr(approvedEarnings)
+        _bannerMessage.value =
+          "Day $targetStreak is locked: Complete approved tasks worth at least $neededFormatted to unlock (Current: $currentFormatted / $neededFormatted)."
+        return
+      }
+    }
+
+    val rewardCents = DailyCheckInConstants.getRewardForDay(targetStreak)
     val dateKey = currentState.todayDate
     val resolvedName =
       profile?.displayName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
@@ -796,6 +830,13 @@ class TaskFlowViewModel(
 
   fun setOpenWithdrawOnWalletNavigation(open: Boolean) {
     _openWithdrawOnWalletNavigation.value = open
+  }
+
+  private val _isDailyCheckInScreenVisible = MutableStateFlow(false)
+  val isDailyCheckInScreenVisible: StateFlow<Boolean> = _isDailyCheckInScreenVisible.asStateFlow()
+
+  fun setDailyCheckInScreenVisible(visible: Boolean) {
+    _isDailyCheckInScreenVisible.value = visible
   }
 }
 

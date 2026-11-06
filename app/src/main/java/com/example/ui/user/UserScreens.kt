@@ -137,6 +137,7 @@ fun UserHomeScreen(
   submissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList()),
   dailyCheckInState: DailyCheckInState = calculateDailyCheckInState("", 0L),
   onClaimDailyCheckIn: () -> Unit = {},
+  onNavigateToDailyCheckIn: () -> Unit = {},
   transactionsState: UiState<List<TransactionRecord>> = UiState.Success(emptyList()),
   leaderboardState: UiState<List<UserProfile>> = UiState.Success(emptyList()),
   onNavigateToWallet: (Boolean) -> Unit = {}
@@ -308,8 +309,7 @@ fun UserHomeScreen(
                     style = MaterialTheme.typography.titleSmall,
                     fontSize = 11.sp,
                     color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.testTag("home_available_balance")
+                    fontWeight = FontWeight.Bold
                   )
                 }
                 Icon(
@@ -384,9 +384,71 @@ fun UserHomeScreen(
       }
     }
 
-    // 2. Recent Transactions Summary
+    // 2. Attractive Available Balance Card with Withdraw Button
     item {
-      RecentTransactionsCard(transactions = transactions)
+      Card(
+        modifier = Modifier.fillMaxWidth().testTag("home_available_balance_card"),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(20.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.weight(1f)
+          ) {
+            Surface(
+              shape = CircleShape,
+              color = Color(0xFF2563EB).copy(alpha = 0.12f),
+              modifier = Modifier.size(46.dp)
+            ) {
+              Box(contentAlignment = Alignment.Center) {
+                Icon(
+                  imageVector = Icons.Default.AccountBalanceWallet,
+                  contentDescription = null,
+                  tint = Color(0xFF2563EB),
+                  modifier = Modifier.size(24.dp)
+                )
+              }
+            }
+            Column {
+              Text(
+                text = "Available Balance",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+              Spacer(modifier = Modifier.height(2.dp))
+              Text(
+                text = formatRewardInr(profile?.balanceCents ?: 0L),
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.testTag("home_available_balance")
+              )
+            }
+          }
+
+          Button(
+            onClick = { onNavigateToWallet(true) },
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+            modifier = Modifier.testTag("home_withdraw_button")
+          ) {
+            Icon(
+              imageVector = Icons.Default.AccountBalanceWallet,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(text = "Withdraw", fontWeight = FontWeight.Bold)
+          }
+        }
+      }
     }
 
     // 3. Daily Check-in & Watch & Earn Side-by-Side Two-Column Grid
@@ -398,7 +460,8 @@ fun UserHomeScreen(
         Box(modifier = Modifier.weight(1f)) {
           DailyCheckInCard(
             dailyCheckInState = dailyCheckInState,
-            onClaimDailyCheckIn = onClaimDailyCheckIn
+            onClaimDailyCheckIn = onClaimDailyCheckIn,
+            onOpenCalendar = onNavigateToDailyCheckIn
           )
         }
         Box(modifier = Modifier.weight(1f)) {
@@ -409,7 +472,7 @@ fun UserHomeScreen(
       }
     }
 
-    // 4. Available Tasks Section & Action Button
+    // 4. Tasks Section: Action Header & Available Tasks
     item {
       Card(
         modifier = Modifier.fillMaxWidth().testTag("home_available_tasks_section"),
@@ -481,7 +544,54 @@ fun UserHomeScreen(
       }
     }
 
-    // 5. Top Earners Leaderboard Preview
+    // Active Task Cards (Part of Tasks Section)
+    when (tasksState) {
+      is UiState.Loading -> {
+        item {
+          Box(
+            modifier = Modifier.fillMaxWidth().padding(36.dp),
+            contentAlignment = Alignment.Center
+          ) {
+            CircularProgressIndicator()
+          }
+        }
+      }
+      is UiState.Error -> {
+        item {
+          Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.errorContainer,
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Text(
+              text = tasksState.message,
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onErrorContainer,
+              modifier = Modifier.padding(16.dp)
+            )
+          }
+        }
+      }
+      is UiState.Success -> {
+        if (activeAvailableTasks.isEmpty()) {
+          item {
+            EmptyAssignedTaskCard(
+              isAdminAuthorized = isAdminAuthorized,
+              onSwitchToAdmin = onSwitchToAdmin
+            )
+          }
+        } else {
+          items(activeAvailableTasks.take(3), key = { "home_avail_${it.id}" }) { task ->
+            TaskItemCard(
+              task = task,
+              onClick = { onSelectTask(task.id) }
+            )
+          }
+        }
+      }
+    }
+
+    // 5. Top Earners Leaderboard Preview (strictly positioned between Tasks and Wallet)
     item {
       LeaderboardPreviewCard(
         users = leaderboardUsers,
@@ -537,56 +647,21 @@ fun UserHomeScreen(
                 )
               }
             }
+
+            OutlinedButton(
+              onClick = { onNavigateToWallet(false) },
+              shape = RoundedCornerShape(12.dp)
+            ) {
+              Text("Go to Wallet")
+            }
           }
         }
       }
     }
 
-    // 7. Compact Preview of Active Available Tasks
-    when (tasksState) {
-      is UiState.Loading -> {
-        item {
-          Box(
-            modifier = Modifier.fillMaxWidth().padding(36.dp),
-            contentAlignment = Alignment.Center
-          ) {
-            CircularProgressIndicator()
-          }
-        }
-      }
-      is UiState.Error -> {
-        item {
-          Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.errorContainer,
-            modifier = Modifier.fillMaxWidth()
-          ) {
-            Text(
-              text = tasksState.message,
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onErrorContainer,
-              modifier = Modifier.padding(16.dp)
-            )
-          }
-        }
-      }
-      is UiState.Success -> {
-        if (activeAvailableTasks.isEmpty()) {
-          item {
-            EmptyAssignedTaskCard(
-              isAdminAuthorized = isAdminAuthorized,
-              onSwitchToAdmin = onSwitchToAdmin
-            )
-          }
-        } else {
-          items(activeAvailableTasks.take(3), key = { "home_avail_${it.id}" }) { task ->
-            TaskItemCard(
-              task = task,
-              onClick = { onSelectTask(task.id) }
-            )
-          }
-        }
-      }
+    // 7. Recent Transactions Summary
+    item {
+      RecentTransactionsCard(transactions = transactions)
     }
 
     // 8. Compact Summary of Recent Activity
@@ -667,10 +742,15 @@ fun UserHomeScreen(
 @Composable
 private fun DailyCheckInCard(
   dailyCheckInState: DailyCheckInState,
-  onClaimDailyCheckIn: () -> Unit
+  onClaimDailyCheckIn: () -> Unit,
+  onOpenCalendar: () -> Unit = {}
 ) {
   Card(
-    modifier = Modifier.fillMaxWidth().testTag("home_daily_checkin_card"),
+    modifier =
+      Modifier.fillMaxWidth()
+        .clip(RoundedCornerShape(22.dp))
+        .clickable { onOpenCalendar() }
+        .testTag("home_daily_checkin_card"),
     shape = RoundedCornerShape(22.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
@@ -730,83 +810,56 @@ private fun DailyCheckInCard(
         }
       }
 
-      // 7 Days Grid / Row
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+      // Minimal, clean status label communicating today's progress & tap to open 7-day screen
+      Surface(
+        shape = RoundedCornerShape(12.dp),
+        color =
+          if (dailyCheckInState.canCheckInToday) {
+            Color(0xFFEFF6FF)
+          } else {
+            Color(0xFFF0FDF4)
+          },
+        modifier = Modifier.fillMaxWidth()
       ) {
-        for (day in 1..7) {
-          val isClaimed =
-            if (!dailyCheckInState.canCheckInToday) {
-              day <= dailyCheckInState.currentStreak
-            } else {
-              day < dailyCheckInState.nextClaimDay
-            }
-          val isCurrent = dailyCheckInState.canCheckInToday && day == dailyCheckInState.nextClaimDay
-          val isDay7 = day == 7
-
-          Surface(
-            shape = RoundedCornerShape(12.dp),
-            color =
-              when {
-                isClaimed -> Color(0xFFDCFCE7)
-                isCurrent -> Color(0xFFDBEAFE)
-                isDay7 -> Color(0xFFFEF3C7)
-                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-              },
-            modifier =
-              Modifier.weight(1f)
-                .border(
-                  width = if (isCurrent) 1.5.dp else 1.dp,
-                  color =
-                    when {
-                      isCurrent -> Color(0xFF2563EB)
-                      isClaimed -> Color(0xFF22C55E)
-                      isDay7 -> Color(0xFFF59E0B)
-                      else -> Color.Transparent
-                    },
-                  shape = RoundedCornerShape(12.dp)
-                )
-          ) {
-            Column(
-              modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp),
-              horizontalAlignment = Alignment.CenterHorizontally,
-              verticalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-              Text(
-                text = "D$day",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color =
-                  if (isCurrent) {
-                    Color(0xFF1D4ED8)
-                  } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                  }
-              )
-              if (isClaimed) {
-                Icon(
-                  imageVector = Icons.Default.Check,
-                  contentDescription = "Claimed",
-                  tint = Color(0xFF16A34A),
-                  modifier = Modifier.size(14.dp)
-                )
+        Row(
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+          Text(
+            text =
+              if (dailyCheckInState.canCheckInToday) {
+                "Day ${dailyCheckInState.nextClaimDay} Ready (${formatRewardInr(dailyCheckInState.nextRewardCents)})"
               } else {
-                Text(
-                  text = if (isDay7) "₹7⭐" else "₹1",
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.ExtraBold,
-                  color = if (isDay7) Color(0xFFB45309) else MaterialTheme.colorScheme.onSurface
-                )
+                "Streak Day ${dailyCheckInState.currentStreak} Claimed ✓"
+              },
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color =
+              if (dailyCheckInState.canCheckInToday) {
+                Color(0xFF1D4ED8)
+              } else {
+                Color(0xFF16A34A)
               }
-            }
-          }
+          )
+          Text(
+            text = "View 7 Days →",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF2563EB)
+          )
         }
       }
 
       // Claim Button
       Button(
-        onClick = onClaimDailyCheckIn,
+        onClick = {
+          if (dailyCheckInState.canCheckInToday) {
+            onClaimDailyCheckIn()
+          } else {
+            onOpenCalendar()
+          }
+        },
         enabled = dailyCheckInState.canCheckInToday,
         shape = RoundedCornerShape(12.dp),
         colors =
