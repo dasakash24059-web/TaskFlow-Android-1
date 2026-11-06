@@ -46,7 +46,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -103,7 +106,46 @@ fun DedicatedDailyCheckInScreen(
     val diff = (cal.timeInMillis - now).coerceAtLeast(0L)
     val hours = diff / (1000 * 60 * 60)
     val minutes = (diff / (1000 * 60)) % 60
-    "${hours}h ${minutes}m"
+    val seconds = (diff / 1000) % 60
+    String.format(java.util.Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+  }
+
+  val currentStageDay = dailyCheckInState.nextClaimDay
+  var showRequirementPopup by remember(currentStageDay) {
+    mutableStateOf((currentStageDay == 5 || currentStageDay == 6) && !isTaskRequirementMet)
+  }
+
+  if ((currentStageDay == 5 || currentStageDay == 6) && !isTaskRequirementMet && showRequirementPopup) {
+    androidx.compose.material3.AlertDialog(
+      onDismissRequest = { showRequirementPopup = false },
+      icon = {
+        Icon(
+          imageVector = Icons.Default.Info,
+          contentDescription = null,
+          tint = Color(0xFFDC2626),
+          modifier = Modifier.size(28.dp)
+        )
+      },
+      title = {
+        Text(
+          text = if (currentStageDay == 5) "Day 5 Requirement" else "Day 6 Requirement",
+          fontWeight = FontWeight.Bold,
+          textAlign = TextAlign.Center
+        )
+      },
+      text = {
+        Text(
+          text = "Complete ₹20 in eligible tasks and wait for approval to unlock today's Daily Check-in reward.",
+          style = MaterialTheme.typography.bodyMedium,
+          textAlign = TextAlign.Center
+        )
+      },
+      confirmButton = {
+        Button(onClick = { showRequirementPopup = false }) {
+          Text("Got it")
+        }
+      }
+    )
   }
 
   Scaffold(
@@ -168,10 +210,9 @@ fun DedicatedDailyCheckInScreen(
       contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-      val currentStageDay = dailyCheckInState.nextClaimDay
       val showWeeklyBanner = currentStageDay >= 5 || dailyCheckInState.currentStreak >= 4
 
-      // 1. Hero Banner: Streak Progress & Weekly Reward Overview (Visible only when reaching weekly reward stage: Day 5+)
+      // 1. Hero Banner: Streak Progress Overview
       if (showWeeklyBanner) {
         item {
           Card(
@@ -219,7 +260,7 @@ fun DedicatedDailyCheckInScreen(
                       fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                      text = "Earn ₹13.00 Every Week",
+                      text = "Earn Daily Rewards Every Week",
                       style = MaterialTheme.typography.titleLarge,
                       color = Color.White,
                       fontWeight = FontWeight.ExtraBold
@@ -231,7 +272,7 @@ fun DedicatedDailyCheckInScreen(
                     modifier = Modifier.padding(start = 8.dp)
                   ) {
                     Text(
-                      text = "₹13 / 7d",
+                      text = "7 Days",
                       style = MaterialTheme.typography.labelSmall,
                       color = Color(0xFF78350F),
                       fontWeight = FontWeight.ExtraBold,

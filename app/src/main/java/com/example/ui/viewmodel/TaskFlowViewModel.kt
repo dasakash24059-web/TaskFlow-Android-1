@@ -742,7 +742,7 @@ class TaskFlowViewModel(
         )
         .onSuccess { claimed ->
           _bannerMessage.value =
-            "Congratulations! Claimed Day $targetStreak reward: ${formatRewardInr(claimed)}."
+            "Day $targetStreak reward claimed successfully: ${formatRewardInr(claimed)}"
           onSuccess(claimed)
         }
         .onFailure { err ->
