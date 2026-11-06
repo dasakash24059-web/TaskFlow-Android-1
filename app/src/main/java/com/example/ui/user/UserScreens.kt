@@ -13,9 +13,11 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -366,30 +368,27 @@ fun UserHomeScreen(
     // 2. Daily Check-in & Watch & Earn Cards Side-by-Side Horizontal Grid
     item {
       Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
       ) {
         Box(
           modifier =
-            Modifier.weight(1f).testTag("home_daily_checkin_card")
+            Modifier.weight(1f).fillMaxHeight().testTag("home_daily_checkin_card")
         ) {
-          Box(
-            modifier =
-              Modifier.fillMaxWidth().testTag("claim_daily_checkin_button")
-          ) {
-            DailyCheckInCard(
-              dailyCheckInState = dailyCheckInState,
-              onClaimDailyCheckIn = onClaimDailyCheckIn,
-              onOpenCalendar = onNavigateToDailyCheckIn
-            )
-          }
+          DailyCheckInCard(
+            dailyCheckInState = dailyCheckInState,
+            onClaimDailyCheckIn = onClaimDailyCheckIn,
+            onOpenCalendar = onNavigateToDailyCheckIn,
+            modifier = Modifier.fillMaxSize().testTag("claim_daily_checkin_button")
+          )
         }
         Box(
           modifier =
-            Modifier.weight(1f).testTag("home_watch_earn_card")
+            Modifier.weight(1f).fillMaxHeight().testTag("home_watch_earn_card")
         ) {
           WatchAndEarnCard(
-            onWatchAdClicked = { showWatchAdDialog = true }
+            onWatchAdClicked = { showWatchAdDialog = true },
+            modifier = Modifier.fillMaxSize()
           )
         }
       }
@@ -540,27 +539,27 @@ fun UserHomeScreen(
 private fun DailyCheckInCard(
   dailyCheckInState: DailyCheckInState,
   onClaimDailyCheckIn: () -> Unit,
-  onOpenCalendar: () -> Unit = {}
+  onOpenCalendar: () -> Unit = {},
+  modifier: Modifier = Modifier
 ) {
   Card(
     modifier =
-      Modifier.fillMaxWidth()
-        .clip(RoundedCornerShape(20.dp))
+      modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(22.dp))
         .clickable {
           onClaimDailyCheckIn()
           onOpenCalendar()
         },
-    shape = RoundedCornerShape(20.dp),
+    shape = RoundedCornerShape(22.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
   ) {
     Box(
-      modifier =
-        Modifier.fillMaxWidth()
-          .testTag("claim_daily_checkin_button")
+      modifier = Modifier.fillMaxSize().padding(16.dp),
+      contentAlignment = Alignment.Center
     ) {
       Column(
-        modifier = Modifier.fillMaxWidth().padding(16.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
       ) {
@@ -592,17 +591,18 @@ private fun DailyCheckInCard(
 
 @Composable
 private fun WatchAndEarnCard(
-  onWatchAdClicked: () -> Unit
+  onWatchAdClicked: () -> Unit,
+  modifier: Modifier = Modifier
 ) {
   Card(
-    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)),
-    shape = RoundedCornerShape(20.dp),
+    modifier = modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)),
+    shape = RoundedCornerShape(22.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
   ) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(16.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
+      modifier = Modifier.fillMaxSize().padding(14.dp),
+      verticalArrangement = Arrangement.SpaceBetween,
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       Row(
@@ -657,13 +657,16 @@ private fun WatchAndEarnCard(
         }
       }
 
+      Spacer(modifier = Modifier.height(10.dp))
+
       Button(
         onClick = onWatchAdClicked,
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6D28D9)),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
         modifier =
           Modifier.fillMaxWidth()
-            .height(42.dp)
+            .height(38.dp)
             .testTag("watch_ad_button")
       ) {
         Icon(
