@@ -787,6 +787,8 @@ class TaskFlowViewModel(
 
   fun checkForAppUpdates(context: android.content.Context, forceCheck: Boolean = false) {
     if (hasCheckedUpdateThisSession && !forceCheck) return
+    val prefs = context.getSharedPreferences("app_update_prefs", android.content.Context.MODE_PRIVATE)
+    dismissedUpdateCode = prefs.getInt("dismissed_update_code", -1)
     hasCheckedUpdateThisSession = true
     viewModelScope.launch {
       _isCheckingUpdate.value = true
@@ -804,8 +806,10 @@ class TaskFlowViewModel(
     }
   }
 
-  fun dismissUpdateDialog() {
+  fun dismissUpdateDialog(context: android.content.Context) {
     val info = _appUpdateInfo.value ?: return
+    val prefs = context.getSharedPreferences("app_update_prefs", android.content.Context.MODE_PRIVATE)
+    prefs.edit().putInt("dismissed_update_code", info.versionCode).apply()
     dismissedUpdateCode = info.versionCode
     _showUpdateDialog.value = false
   }

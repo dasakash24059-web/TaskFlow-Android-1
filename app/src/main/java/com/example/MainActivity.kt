@@ -409,10 +409,10 @@ private fun AuthenticatedWorkspace(
       versionInfo = updateInfo!!,
       onUpdateNow = {
         com.example.util.AppUpdateManager.openDownloadUrl(context, updateInfo!!.apkUrl)
-        viewModel.dismissUpdateDialog()
+        viewModel.dismissUpdateDialog(context)
       },
       onDismiss = {
-        viewModel.dismissUpdateDialog()
+        viewModel.dismissUpdateDialog(context)
       }
     )
   }

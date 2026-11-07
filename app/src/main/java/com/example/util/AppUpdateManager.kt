@@ -87,6 +87,9 @@ object AppUpdateManager {
 
       val latestVersionCode = remoteConfig.getLong(KEY_LATEST_VERSION_CODE).toInt()
       android.util.Log.d("AppUpdateManager", "Latest version code: $latestVersionCode, Installed: $installedCode")
+      if (latestVersionCode <= installedCode) {
+         android.util.Log.d("AppUpdateManager", "No update needed: $latestVersionCode <= $installedCode")
+      }
       val latestVersionName = remoteConfig.getString(KEY_LATEST_VERSION_NAME)
       val downloadUrl = remoteConfig.getString(KEY_DOWNLOAD_URL)
       val releaseNotes = remoteConfig.getString(KEY_RELEASE_NOTES)
