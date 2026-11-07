@@ -368,19 +368,18 @@ fun UserHomeScreen(
     // 2. Daily Check-in & Watch & Earn Cards Side-by-Side Horizontal Grid
     item {
       Row(
-        modifier = Modifier.fillMaxWidth().height(120.dp),
-        horizontalArrangement = Arrangement.Center
+        modifier = Modifier.fillMaxWidth().height(115.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
       ) {
         DailyCheckInCard(
           dailyCheckInState = dailyCheckInState,
           onClaimDailyCheckIn = onClaimDailyCheckIn,
           onOpenCalendar = onNavigateToDailyCheckIn,
-          modifier = Modifier.size(100.dp).testTag("home_daily_checkin_card")
+          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_daily_checkin_card")
         )
-        Spacer(modifier = Modifier.width(12.dp))
         WatchAndEarnCard(
           onWatchAdClicked = { showWatchAdDialog = true },
-          modifier = Modifier.size(100.dp).testTag("home_watch_earn_card")
+          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_watch_earn_card")
         )
       }
     }
@@ -546,30 +545,31 @@ private fun DailyCheckInCard(
     elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
   ) {
     Column(
-      modifier = Modifier.fillMaxSize().padding(8.dp),
+      modifier = Modifier.fillMaxSize().padding(10.dp),
       verticalArrangement = Arrangement.Center,
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       Surface(
         shape = CircleShape,
         color = Color(0xFFFEF3C7),
-        modifier = Modifier.size(32.dp)
+        modifier = Modifier.size(52.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.LocalFireDepartment,
             contentDescription = "Daily Check-in",
             tint = Color(0xFFD97706),
-            modifier = Modifier.size(16.dp)
+            modifier = Modifier.size(26.dp)
           )
         }
       }
-      Spacer(modifier = Modifier.height(6.dp))
+      Spacer(modifier = Modifier.height(8.dp))
       Text(
-        text = "Daily\nCheck-in",
-        style = MaterialTheme.typography.labelSmall,
+        text = "Check-in\nDaily",
+        style = MaterialTheme.typography.labelMedium,
         fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center
+        textAlign = TextAlign.Center,
+        lineHeight = 16.sp
       )
     }
   }
@@ -587,7 +587,7 @@ private fun WatchAndEarnCard(
     elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
   ) {
     Column(
-      modifier = Modifier.fillMaxSize().padding(4.dp),
+      modifier = Modifier.fillMaxSize().padding(10.dp),
       verticalArrangement = Arrangement.SpaceBetween,
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -600,12 +600,12 @@ private fun WatchAndEarnCard(
           imageVector = Icons.Default.PlayArrow,
           contentDescription = null,
           tint = Color(0xFF7C3AED),
-          modifier = Modifier.size(16.dp)
+          modifier = Modifier.size(20.dp)
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
           text = "Earn",
-          style = MaterialTheme.typography.labelMedium,
+          style = MaterialTheme.typography.labelLarge,
           fontWeight = FontWeight.Bold
         )
       }
@@ -633,10 +633,10 @@ private fun WatchAndEarnCard(
         onClick = onWatchAdClicked,
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6D28D9)),
-        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-        modifier = Modifier.fillMaxWidth().height(24.dp).testTag("watch_ad_button")
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+        modifier = Modifier.fillMaxWidth().height(32.dp).testTag("watch_ad_button")
       ) {
-        Text(text = "Watch", style = MaterialTheme.typography.labelSmall)
+        Text(text = "Watch", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
       }
     }
   }
