@@ -375,12 +375,12 @@ fun UserHomeScreen(
           dailyCheckInState = dailyCheckInState,
           onClaimDailyCheckIn = onClaimDailyCheckIn,
           onOpenCalendar = onNavigateToDailyCheckIn,
-          modifier = Modifier.size(95.dp).testTag("home_daily_checkin_card")
+          modifier = Modifier.size(100.dp).testTag("home_daily_checkin_card")
         )
         Spacer(modifier = Modifier.width(12.dp))
         WatchAndEarnCard(
           onWatchAdClicked = { showWatchAdDialog = true },
-          modifier = Modifier.size(95.dp).testTag("home_watch_earn_card")
+          modifier = Modifier.size(100.dp).testTag("home_watch_earn_card")
         )
       }
     }
