@@ -926,7 +926,7 @@ fun AppUpdateDialog(
           onClick = onDismiss,
           modifier = Modifier.testTag("later_update_button")
         ) {
-          Text("Delete")
+          Text("Later")
         }
       }
     }
