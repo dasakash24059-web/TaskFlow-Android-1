@@ -89,18 +89,12 @@ service cloud.firestore {
              (user.approvalStatus == 'approved' || user.approvalStatus == 'pending');
     }
 
-    // Atomic Batch Validator for Task Approval & Reward Credit:
-    function isAtomicTaskApprovalForUser(taskId, userId, beforeBalance, afterBalance, beforeCount, afterCount) {
+    function isAtomicTaskApprovalMatch(taskId, userId, beforeBalance, afterBalance, beforeCount, afterCount) {
       let taskBefore = getTaskData(taskId);
       let taskAfter = getTaskAfterData(taskId);
       let subBefore = getSubmissionData(taskId);
       let subAfter = getSubmissionAfterData(taskId);
-      return isValidId(taskId) &&
-             exists(/databases/$(database)/documents/tasks/$(taskId)) &&
-             exists(/databases/$(database)/documents/submissions/$(taskId)) &&
-             existsAfter(/databases/$(database)/documents/tasks/$(taskId)) &&
-             existsAfter(/databases/$(database)/documents/submissions/$(taskId)) &&
-             taskBefore.assignedUserId == userId &&
+      return taskBefore.assignedUserId == userId &&
              taskAfter.assignedUserId == userId &&
              subBefore.userId == userId &&
              subAfter.userId == userId &&
@@ -116,6 +110,16 @@ service cloud.firestore {
              subAfter.rewardCents == subBefore.rewardCents &&
              afterBalance == beforeBalance + taskBefore.rewardCents &&
              afterCount == beforeCount + 1;
+    }
+
+    // Atomic Batch Validator for Task Approval & Reward Credit:
+    function isAtomicTaskApprovalForUser(taskId, userId, beforeBalance, afterBalance, beforeCount, afterCount) {
+      return isValidId(taskId) &&
+             exists(/databases/$(database)/documents/tasks/$(taskId)) &&
+             exists(/databases/$(database)/documents/submissions/$(taskId)) &&
+             existsAfter(/databases/$(database)/documents/tasks/$(taskId)) &&
+             existsAfter(/databases/$(database)/documents/submissions/$(taskId)) &&
+             isAtomicTaskApprovalMatch(taskId, userId, beforeBalance, afterBalance, beforeCount, afterCount);
     }
 
     // Validates that an admin update to /users/{userId}.assignedTaskId is atomically consistent
@@ -301,16 +305,14 @@ service cloud.firestore {
     function isMatchingRejectionState(taskId, assignedUid) {
       let subBefore = getSubmissionData(taskId);
       let subAfter = getSubmissionAfterData(taskId);
-      let userBefore = getUserData(assignedUid);
-      let userAfter = getUserAfterData(assignedUid);
       return subBefore.status == 'submitted' &&
              subAfter.status == 'rejected' &&
              subAfter.adminFeedback == incoming().adminFeedback &&
              (
                !exists(/databases/$(database)/documents/users/$(assignedUid)) ||
                (
-                 userAfter.balanceCents == userBefore.balanceCents &&
-                 userAfter.completedTasksCount == userBefore.completedTasksCount
+                 getUserAfterData(assignedUid).balanceCents == getUserData(assignedUid).balanceCents &&
+                 getUserAfterData(assignedUid).completedTasksCount == getUserData(assignedUid).completedTasksCount
                )
              );
     }
@@ -324,11 +326,10 @@ service cloud.firestore {
              isMatchingRejectionState(taskId, assignedUid);
     }
 
-    function isConsistentSubmissionCreate(submissionId) {
+    function isConsistentSubmissionCreateMatch(submissionId) {
       let taskBefore = getTaskData(submissionId);
       let taskAfter = getTaskAfterData(submissionId);
-      return exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
-             taskBefore.status == 'pending' &&
+      return taskBefore.status == 'pending' &&
              (!('isActive' in taskBefore) || taskBefore.isActive == true) &&
              taskAfter.assignedUserId == request.auth.uid &&
              incoming().rewardCents == taskBefore.rewardCents &&
@@ -339,14 +340,23 @@ service cloud.firestore {
              taskAfter.proofStoragePath == incoming().proofStoragePath;
     }
 
-    function isConsistentSubmissionUpdate(submissionId) {
+    function isConsistentSubmissionCreate(submissionId) {
+      return exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
+             isConsistentSubmissionCreateMatch(submissionId);
+    }
+
+    function isConsistentSubmissionUpdateMatch(submissionId) {
       let taskBefore = getTaskData(submissionId);
       let taskAfter = getTaskAfterData(submissionId);
-      return exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
-             taskBefore.status == 'submitted' &&
+      return taskBefore.status == 'submitted' &&
              taskAfter.status == incoming().status &&
              taskAfter.adminFeedback == incoming().adminFeedback &&
              taskAfter.assignedUserId == existing().userId;
+    }
+
+    function isConsistentSubmissionUpdate(submissionId) {
+      return exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
+             isConsistentSubmissionUpdateMatch(submissionId);
     }
 
     // 4. Collection Rules: /users/{userId}

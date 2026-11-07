@@ -107,6 +107,7 @@ abstract class FirestoreEmulatorTestBase {
       val endpoint = URL("http://$EMULATOR_HOST:$AUTH_PORT/emulator/v1/projects/$PROJECT_ID/accounts")
       val conn = (endpoint.openConnection() as HttpURLConnection).apply {
         requestMethod = "DELETE"
+        setRequestProperty("Authorization", "Bearer owner")
       }
       conn.responseCode
       conn.disconnect()
@@ -121,6 +122,7 @@ abstract class FirestoreEmulatorTestBase {
         )
       val conn = (endpoint.openConnection() as HttpURLConnection).apply {
         requestMethod = "POST"
+        setRequestProperty("Authorization", "Bearer owner")
         setRequestProperty("Content-Type", "application/json")
         doOutput = true
       }
