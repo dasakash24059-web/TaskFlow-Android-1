@@ -80,11 +80,13 @@ object AppUpdateManager {
             .build()
           remoteConfig.setConfigSettingsAsync(configSettings)
           remoteConfig.setDefaultsAsync(defaults)
-          remoteConfig.fetchAndActivate().await()
+          val isSuccess = remoteConfig.fetchAndActivate().await()
+          android.util.Log.d("AppUpdateManager", "Remote Config fetch success: $isSuccess")
         }
       }
 
       val latestVersionCode = remoteConfig.getLong(KEY_LATEST_VERSION_CODE).toInt()
+      android.util.Log.d("AppUpdateManager", "Latest version code: $latestVersionCode, Installed: $installedCode")
       val latestVersionName = remoteConfig.getString(KEY_LATEST_VERSION_NAME)
       val downloadUrl = remoteConfig.getString(KEY_DOWNLOAD_URL)
       val releaseNotes = remoteConfig.getString(KEY_RELEASE_NOTES)

@@ -368,7 +368,7 @@ fun UserHomeScreen(
     // 2. Daily Check-in & Watch & Earn Cards Side-by-Side Horizontal Grid
     item {
       Row(
-        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+        modifier = Modifier.fillMaxWidth().height(95.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
       ) {
         Box(
