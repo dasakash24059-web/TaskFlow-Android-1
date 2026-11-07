@@ -368,29 +368,20 @@ fun UserHomeScreen(
     // 2. Daily Check-in & Watch & Earn Cards Side-by-Side Horizontal Grid
     item {
       Row(
-        modifier = Modifier.fillMaxWidth().height(95.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        modifier = Modifier.fillMaxWidth().height(120.dp),
+        horizontalArrangement = Arrangement.Center
       ) {
-        Box(
-          modifier =
-            Modifier.weight(1f).fillMaxHeight(1f).testTag("home_daily_checkin_card")
-        ) {
-          DailyCheckInCard(
-            dailyCheckInState = dailyCheckInState,
-            onClaimDailyCheckIn = onClaimDailyCheckIn,
-            onOpenCalendar = onNavigateToDailyCheckIn,
-            modifier = Modifier.fillMaxSize().testTag("claim_daily_checkin_button")
-          )
-        }
-        Box(
-          modifier =
-            Modifier.weight(1f).fillMaxHeight(1f).testTag("home_watch_earn_card")
-        ) {
-          WatchAndEarnCard(
-            onWatchAdClicked = { showWatchAdDialog = true },
-            modifier = Modifier.fillMaxSize()
-          )
-        }
+        DailyCheckInCard(
+          dailyCheckInState = dailyCheckInState,
+          onClaimDailyCheckIn = onClaimDailyCheckIn,
+          onOpenCalendar = onNavigateToDailyCheckIn,
+          modifier = Modifier.size(95.dp).testTag("home_daily_checkin_card")
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        WatchAndEarnCard(
+          onWatchAdClicked = { showWatchAdDialog = true },
+          modifier = Modifier.size(95.dp).testTag("home_watch_earn_card")
+        )
       }
     }
 
@@ -545,7 +536,6 @@ private fun DailyCheckInCard(
   Card(
     modifier =
       modifier
-        .fillMaxWidth()
         .clip(RoundedCornerShape(22.dp))
         .clickable {
           onClaimDailyCheckIn()
@@ -555,36 +545,32 @@ private fun DailyCheckInCard(
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
   ) {
-    Box(
-      modifier = Modifier.fillMaxSize().padding(16.dp),
-      contentAlignment = Alignment.Center
+    Column(
+      modifier = Modifier.fillMaxSize().padding(8.dp),
+      verticalArrangement = Arrangement.Center,
+      horizontalAlignment = Alignment.CenterHorizontally
     ) {
-      Column(
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+      Surface(
+        shape = CircleShape,
+        color = Color(0xFFFEF3C7),
+        modifier = Modifier.size(32.dp)
       ) {
-        Surface(
-          shape = CircleShape,
-          color = Color(0xFFFEF3C7),
-          modifier = Modifier.size(48.dp)
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.Default.LocalFireDepartment,
-              contentDescription = "Daily Check-in",
-              tint = Color(0xFFD97706),
-              modifier = Modifier.size(26.dp)
-            )
-          }
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.LocalFireDepartment,
+            contentDescription = "Daily Check-in",
+            tint = Color(0xFFD97706),
+            modifier = Modifier.size(16.dp)
+          )
         }
-        Spacer(modifier = Modifier.height(10.dp))
-        Text(
-          text = "Daily Check-in",
-          style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold,
-          textAlign = TextAlign.Center
-        )
       }
+      Spacer(modifier = Modifier.height(6.dp))
+      Text(
+        text = "Daily\nCheck-in",
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center
+      )
     }
   }
 }
@@ -595,87 +581,62 @@ private fun WatchAndEarnCard(
   modifier: Modifier = Modifier
 ) {
   Card(
-    modifier = modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)),
+    modifier = modifier.clip(RoundedCornerShape(22.dp)).clickable(onClick = onWatchAdClicked),
     shape = RoundedCornerShape(22.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
   ) {
     Column(
-      modifier = Modifier.fillMaxSize().padding(14.dp),
+      modifier = Modifier.fillMaxSize().padding(4.dp),
       verticalArrangement = Arrangement.SpaceBetween,
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          modifier = Modifier.weight(1f, false)
-        ) {
-          Surface(
-            shape = CircleShape,
-            color = Color(0xFFEDE9FE),
-            modifier = Modifier.size(36.dp)
-          ) {
-            Box(contentAlignment = Alignment.Center) {
-              Icon(
-                imageVector = Icons.Default.PlayArrow,
-                contentDescription = null,
-                tint = Color(0xFF7C3AED),
-                modifier = Modifier.size(20.dp)
-              )
-            }
-          }
-          Text(
-            text = "Watch Ads &\nEarn",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            lineHeight = 18.sp
-          )
-        }
-
-        Surface(
-          shape = RoundedCornerShape(50),
-          color = Color(0xFFEDE9FE),
-          modifier = Modifier.testTag("watch_earn_badge")
-        ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-          ) {
-            Text(
-              text = "🎁 Up to ₹25",
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.Bold,
-              color = Color(0xFF6D28D9)
-            )
-          }
-        }
+        Icon(
+          imageVector = Icons.Default.PlayArrow,
+          contentDescription = null,
+          tint = Color(0xFF7C3AED),
+          modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+          text = "Earn",
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.Bold
+        )
       }
 
-      Spacer(modifier = Modifier.height(10.dp))
+      Surface(
+        shape = RoundedCornerShape(50),
+        color = Color(0xFFEDE9FE),
+        modifier = Modifier.testTag("watch_earn_badge")
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+          Text(
+            text = "🎁 Up to ₹25",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF6D28D9)
+          )
+        }
+      }
 
       Button(
         onClick = onWatchAdClicked,
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6D28D9)),
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-        modifier =
-          Modifier.fillMaxWidth()
-            .height(38.dp)
-            .testTag("watch_ad_button")
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+        modifier = Modifier.fillMaxWidth().height(24.dp).testTag("watch_ad_button")
       ) {
-        Icon(
-          imageVector = Icons.Default.PlayArrow,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp)
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(text = "Watch Now", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+        Text(text = "Watch", style = MaterialTheme.typography.labelSmall)
       }
     }
   }

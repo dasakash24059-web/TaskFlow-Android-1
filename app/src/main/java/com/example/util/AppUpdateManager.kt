@@ -93,6 +93,7 @@ object AppUpdateManager {
       val forceUpdate = remoteConfig.getBoolean(KEY_FORCE_UPDATE)
 
       if (latestVersionCode > installedCode) {
+        println("DEBUG: Update detected: $latestVersionCode > $installedCode")
         val versionInfo = AppVersionInfo(
           versionCode = latestVersionCode,
           versionName = latestVersionName.ifBlank { "1.0" },
@@ -102,6 +103,7 @@ object AppUpdateManager {
         )
         Result.success(versionInfo)
       } else {
+        println("DEBUG: No update: $latestVersionCode <= $installedCode")
         Result.success(null)
       }
     } catch (e: Exception) {

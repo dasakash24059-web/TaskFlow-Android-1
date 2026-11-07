@@ -408,10 +408,8 @@ private fun AuthenticatedWorkspace(
     com.example.ui.components.AppUpdateDialog(
       versionInfo = updateInfo!!,
       onUpdateNow = {
-        viewModel.downloadAndInstallUpdate(context)
-      },
-      onInstallDownloaded = {
-        viewModel.triggerInstalledApkInstall(context)
+        com.example.util.AppUpdateManager.openDownloadUrl(context, updateInfo!!.apkUrl)
+        viewModel.dismissUpdateDialog()
       },
       onDismiss = {
         viewModel.dismissUpdateDialog()

@@ -851,7 +851,6 @@ private fun ConfigSection(title: String, body: String) {
 fun AppUpdateDialog(
   versionInfo: com.example.data.model.AppVersionInfo,
   onUpdateNow: () -> Unit,
-  onInstallDownloaded: () -> Unit,
   onDismiss: () -> Unit
 ) {
   AlertDialog(
@@ -913,24 +912,13 @@ fun AppUpdateDialog(
       }
     },
     confirmButton = {
-      Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-      ) {
         Button(
           onClick = onUpdateNow,
           modifier = Modifier.fillMaxWidth().testTag("update_now_button"),
           colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
         ) {
-          Text("Download & Update Now")
+          Text("Update")
         }
-        TextButton(
-          onClick = onInstallDownloaded,
-          modifier = Modifier.fillMaxWidth().testTag("install_downloaded_button")
-        ) {
-          Text("Install Downloaded APK")
-        }
-      }
     },
     dismissButton = {
       if (!versionInfo.forceUpdate) {
@@ -938,7 +926,7 @@ fun AppUpdateDialog(
           onClick = onDismiss,
           modifier = Modifier.testTag("later_update_button")
         ) {
-          Text("Later")
+          Text("Delete")
         }
       }
     }

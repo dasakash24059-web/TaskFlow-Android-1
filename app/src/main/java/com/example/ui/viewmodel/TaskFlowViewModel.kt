@@ -783,6 +783,7 @@ class TaskFlowViewModel(
   val isCheckingUpdate: StateFlow<Boolean> = _isCheckingUpdate.asStateFlow()
 
   private var hasCheckedUpdateThisSession = false
+  private var dismissedUpdateCode: Int = -1
 
   fun checkForAppUpdates(context: android.content.Context, forceCheck: Boolean = false) {
     if (hasCheckedUpdateThisSession && !forceCheck) return
@@ -791,7 +792,7 @@ class TaskFlowViewModel(
       _isCheckingUpdate.value = true
       com.example.util.AppUpdateManager.checkForUpdate(context)
         .onSuccess { updateInfo ->
-          if (updateInfo != null) {
+          if (updateInfo != null && updateInfo.versionCode != dismissedUpdateCode) {
             _appUpdateInfo.value = updateInfo
             _showUpdateDialog.value = true
           }
@@ -804,10 +805,9 @@ class TaskFlowViewModel(
   }
 
   fun dismissUpdateDialog() {
-    val info = _appUpdateInfo.value
-    if (info == null || !info.forceUpdate) {
-      _showUpdateDialog.value = false
-    }
+    val info = _appUpdateInfo.value ?: return
+    dismissedUpdateCode = info.versionCode
+    _showUpdateDialog.value = false
   }
 
   fun downloadAndInstallUpdate(context: android.content.Context) {
