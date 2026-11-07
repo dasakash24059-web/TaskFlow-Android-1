@@ -172,9 +172,12 @@ object AppUpdateManager {
   }
 
   fun downloadAndInstallApk(context: Context, apkUrl: String): Long {
-    if (apkUrl.isBlank()) return -1L
+    if (apkUrl.isBlank() || !apkUrl.lowercase().startsWith("https://")) {
+      return -1L
+    }
 
-    if (!apkUrl.lowercase().endsWith(".apk") && apkUrl.lowercase().startsWith("https://")) {
+    // Direct install if not a direct APK download
+    if (!apkUrl.lowercase().endsWith(".apk")) {
       openDownloadUrl(context, apkUrl)
       return 1L
     }
@@ -192,11 +195,11 @@ object AppUpdateManager {
         .setDestinationUri(Uri.fromFile(destination))
         .setAllowedOverMetered(true)
         .setAllowedOverRoaming(true)
+        .setMimeType("application/vnd.android.package-archive")
 
       val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
       manager.enqueue(request)
     } catch (e: Exception) {
-      openDownloadUrl(context, apkUrl)
       -1L
     }
   }

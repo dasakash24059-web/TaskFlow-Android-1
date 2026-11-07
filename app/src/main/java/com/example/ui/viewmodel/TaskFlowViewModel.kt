@@ -813,8 +813,12 @@ class TaskFlowViewModel(
   fun downloadAndInstallUpdate(context: android.content.Context) {
     val info = _appUpdateInfo.value ?: return
     if (info.apkUrl.isNotBlank()) {
-      com.example.util.AppUpdateManager.downloadAndInstallApk(context, info.apkUrl)
-      _bannerMessage.value = "Downloading update... You can install once complete."
+      val downloadId = com.example.util.AppUpdateManager.downloadAndInstallApk(context, info.apkUrl)
+      if (downloadId > 0L) {
+        _bannerMessage.value = "Downloading update..."
+      } else {
+        _bannerMessage.value = "Failed to start download. Check URL."
+      }
     }
   }
 
