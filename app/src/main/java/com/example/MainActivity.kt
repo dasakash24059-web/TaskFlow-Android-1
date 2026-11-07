@@ -1,6 +1,10 @@
 package com.example
 
 import android.content.Context
+import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import android.app.DownloadManager
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -106,8 +110,22 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 
 class MainActivity : ComponentActivity() {
+
+  private val downloadReceiver = object : android.content.BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+      if (intent.action == android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE) {
+        val downloadId = intent.getLongExtra(android.app.DownloadManager.EXTRA_DOWNLOAD_ID, -1)
+        if (downloadId != -1L) {
+          android.util.Log.d("AppUpdateManager", "Download complete: $downloadId")
+          com.example.util.AppUpdateManager.installDownloadedApk(context)
+        }
+      }
+    }
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    registerReceiver(downloadReceiver, android.content.IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE), RECEIVER_NOT_EXPORTED)
     com.example.ui.theme.ThemePreferences.init(applicationContext)
     ensureFirebaseInitialized(applicationContext)
     runCatching { enableEdgeToEdge() }
@@ -117,6 +135,11 @@ class MainActivity : ComponentActivity() {
         TaskFlowAppRoot()
       }
     }
+  }
+
+  override fun onDestroy() {
+    super.onDestroy()
+    unregisterReceiver(downloadReceiver)
   }
 }
 

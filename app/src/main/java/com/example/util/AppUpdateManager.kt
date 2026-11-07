@@ -209,6 +209,21 @@ object AppUpdateManager {
   fun installDownloadedApk(context: Context): Boolean {
     val destination = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "TaskFlow_Update.apk")
     if (!destination.exists() || destination.length() == 0L) {
+      android.util.Log.e("AppUpdateManager", "APK file not found: ${destination.absolutePath}")
+      return false
+    }
+
+    val packageManager = context.packageManager
+    val archiveInfo = packageManager.getPackageArchiveInfo(destination.absolutePath, 0)
+    
+    if (archiveInfo == null) {
+      android.util.Log.e("AppUpdateManager", "Failed to parse APK: ${destination.absolutePath}")
+      return false
+    }
+    
+    val expectedPackageName = "com.aistudio.taskflow.kxmpzq"
+    if (archiveInfo.packageName != expectedPackageName) {
+      android.util.Log.e("AppUpdateManager", "Package name mismatch: expected $expectedPackageName, got ${archiveInfo.packageName}")
       return false
     }
 
@@ -228,6 +243,7 @@ object AppUpdateManager {
       context.startActivity(intent)
       true
     } catch (e: Exception) {
+      android.util.Log.e("AppUpdateManager", "Failed to launch installer", e)
       false
     }
   }
