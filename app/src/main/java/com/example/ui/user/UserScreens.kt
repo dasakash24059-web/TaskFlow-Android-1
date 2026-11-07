@@ -373,7 +373,7 @@ fun UserHomeScreen(
       ) {
         Box(
           modifier =
-            Modifier.weight(1f).fillMaxHeight().testTag("home_daily_checkin_card")
+            Modifier.weight(95dp).fillMaxHeight(95dp).testTag("home_daily_checkin_card")
         ) {
           DailyCheckInCard(
             dailyCheckInState = dailyCheckInState,
@@ -384,7 +384,7 @@ fun UserHomeScreen(
         }
         Box(
           modifier =
-            Modifier.weight(1f).fillMaxHeight().testTag("home_watch_earn_card")
+            Modifier.weight(95dp).fillMaxHeight(95dp).testTag("home_watch_earn_card")
         ) {
           WatchAndEarnCard(
             onWatchAdClicked = { showWatchAdDialog = true },
