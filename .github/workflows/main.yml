@@ -153,7 +153,7 @@ jobs:
           "release_notes": "TaskFlow update v${VN:-2.9}: Complete full APK update with updated UI layouts, button sizes, branding assets, colors, and direct Daily Check-in rewards.",
           "force_update": false
           }
-EOF
+          EOF
           echo "apk_path=$RELEASE_APK" >> $GITHUB_OUTPUT
           echo "latest_apk=$LATEST_APK" >> $GITHUB_OUTPUT
           echo "latest_named_apk=$LATEST_NAMED_APK" >> $GITHUB_OUTPUT
