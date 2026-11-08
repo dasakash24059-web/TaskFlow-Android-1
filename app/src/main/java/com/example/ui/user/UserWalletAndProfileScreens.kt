@@ -95,6 +95,7 @@ import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.ui.components.AppIconThumbnail
 import com.example.ui.components.ProofImageView
 import com.example.ui.components.RewardBadge
+import com.example.ui.components.TaskFlowBrandLogo
 import com.example.ui.components.resolveAppOrWebsiteLabel
 import com.example.ui.viewmodel.ProfileSubScreen
 import com.example.ui.viewmodel.UiState
@@ -1200,6 +1201,8 @@ fun UserProfileScreen(
             modifier = Modifier.testTag("profile_email_address")
           )
         }
+
+        TaskFlowBrandLogo(size = 44.dp)
       }
     }
 
@@ -2279,18 +2282,22 @@ private fun UserAboutSubScreen(
     ) {
       Column(
         modifier = Modifier.fillMaxWidth().padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp)
       ) {
+        TaskFlowBrandLogo(size = 80.dp)
         Text(
           text = "TaskFlow Micro-Task & Reward Platform",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.Bold,
+          textAlign = TextAlign.Center
         )
         Text(
           text =
             "TaskFlow connects verified users with curated digital tasks in Indian Rupees (INR ₹). Complete step-by-step instructions, upload mandatory written and screenshot proof, and track Admin approvals in real time.",
           style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          textAlign = TextAlign.Center
         )
         OutlinedButton(
           onClick = onOpenSecurityInfo,

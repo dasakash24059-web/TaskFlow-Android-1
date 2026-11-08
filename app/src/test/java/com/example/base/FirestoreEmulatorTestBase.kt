@@ -16,6 +16,7 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.After
+import org.junit.Assume
 import org.junit.Before
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -33,6 +34,11 @@ abstract class FirestoreEmulatorTestBase {
 
   @Before
   open fun setUpFirebase() {
+    Assume.assumeTrue(
+      "Firebase Auth/Firestore emulators not reachable on 127.0.0.1:8085 / 9099",
+      isEmulatorAvailable()
+    )
+
     val context = ApplicationProvider.getApplicationContext<Context>()
     val resId =
       context.resources.getIdentifier("firestore_database_id", "string", context.packageName)
@@ -140,6 +146,19 @@ abstract class FirestoreEmulatorTestBase {
       current = current.cause
     }
     return null
+  }
+
+  protected fun isEmulatorAvailable(): Boolean {
+    return try {
+      val url = URL("http://$EMULATOR_HOST:$AUTH_PORT")
+      val conn = url.openConnection() as HttpURLConnection
+      conn.connectTimeout = 300
+      conn.readTimeout = 300
+      conn.responseCode
+      true
+    } catch (_: Throwable) {
+      false
+    }
   }
 
   private companion object {

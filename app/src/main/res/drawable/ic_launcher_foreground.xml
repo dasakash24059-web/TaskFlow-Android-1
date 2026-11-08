@@ -1,20 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <!-- Outer Task Card Frame -->
-    <path
-        android:fillColor="#10B981"
-        android:pathData="M34,26h40c4.42,0 8,3.58 8,8v40c0,4.42 -3.58,8 -8,8H34c-4.42,0 -8,-3.58 -8,-8V34c0,-4.42 3.58,-8 8,-8z"
-        android:fillAlpha="0.22" />
-    <!-- Bold Checkmark & Workflow Badge -->
-    <path
-        android:fillColor="#34D399"
-        android:pathData="M47.5,67.5L35.5,55.5L40.2,50.8L47.5,58.1L67.8,37.8L72.5,42.5L47.5,67.5Z" />
-    <!-- Accent Reward Spark Dot -->
-    <path
-        android:fillColor="#38BDF8"
-        android:pathData="M70,30m-5,0a5,5 0,1 1,10 0a5,5 0,1 1,-10 0" />
-</vector>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="66dp"
+        android:height="66dp"
+        android:drawable="@drawable/ic_taskflow_logo"
+        android:gravity="center" />
+</layer-list>

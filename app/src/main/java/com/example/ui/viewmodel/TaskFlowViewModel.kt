@@ -697,14 +697,6 @@ class TaskFlowViewModel(
   }
 
   fun claimDailyCheckIn(day: Int = 0, onSuccess: (Long) -> Unit = {}) {
-    startAdsterraDailyCheckIn(context = null, day = day, onSuccess = onSuccess)
-  }
-
-  fun startAdsterraDailyCheckIn(
-    context: Context?,
-    day: Int = 0,
-    onSuccess: (Long) -> Unit = {}
-  ) {
     val currentState = dailyCheckInState.value
     val targetStreak = if (day in 1..7) day else currentState.nextClaimDay
 
@@ -734,23 +726,9 @@ class TaskFlowViewModel(
       }
     }
 
-    // 1. Direct completion is disabled. Start approved Adsterra advertising flow first.
-    context?.let { ctx ->
-      try {
-        val intent =
-          Intent(Intent.ACTION_VIEW, Uri.parse(DailyCheckInConstants.ADSTERRA_SMARTLINK_URL)).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-          }
-        ctx.startActivity(intent)
-      } catch (e: Exception) {
-        // Handled gracefully if browser intent cannot be started
-      }
-    }
-
-    // 2. Do not mark check-in as complete merely because link opened or user returns.
-    // 3. Since Adsterra Smartlink does not provide an authenticated server-side completion callback for rewarded traffic,
-    // inform the user clearly that verified ad completion is unavailable, keep check-in incomplete, and do not credit rewards.
-    _bannerMessage.value = DailyCheckInConstants.AD_VERIFICATION_UNAVAILABLE_MESSAGE
+    // Direct unverified completion is disabled to protect wallet balance security.
+    // Daily Check-in remains incomplete without authorized ad verification.
+    _bannerMessage.value = DailyCheckInConstants.AD_VERIFICATION_REQUIRED_MESSAGE
   }
 
   fun updateUserDisplayNameByAdmin(user: UserProfile, newName: String) {

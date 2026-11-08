@@ -1271,10 +1271,8 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `Ad-Gated Daily Check-in disables direct completion and explains unverified Adsterra status`() {
+  fun `Ad-Gated Daily Check-in disables direct unverified completion`() {
     runBlocking {
-      assertEquals("https://asiafilm.org/4/de17c323655f0b7afa1bc2c9eaf24028", DailyCheckInConstants.ADSTERRA_SMARTLINK_URL)
-
       val context = ApplicationProvider.getApplicationContext<Context>()
       ensureFirebaseInitialized(context)
       val repository = TaskFlowRepository(FirebaseFirestore.getInstance())

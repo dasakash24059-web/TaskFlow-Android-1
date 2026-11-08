@@ -465,7 +465,7 @@ fun DedicatedDailyCheckInScreen(
               )
               Spacer(modifier = Modifier.height(2.dp))
               Text(
-                text = "Tapping claim opens the Adsterra Smartlink. Note: Adsterra Direct Link does not provide server-verified callbacks for rewarded traffic; check-in remains pending without reward credit until verified.",
+                text = "Daily check-in requires a verified advertisement completion. Direct unverified claims are disabled to protect wallet balance security.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
               )

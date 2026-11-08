@@ -127,6 +127,7 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     registerReceiver(downloadReceiver, android.content.IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE), RECEIVER_NOT_EXPORTED)
     com.example.ui.theme.ThemePreferences.init(applicationContext)
+    com.example.util.TaskFlowNotificationHelper.ensureNotificationChannels(applicationContext)
     ensureFirebaseInitialized(applicationContext)
     runCatching { enableEdgeToEdge() }
     setContent {
@@ -646,7 +647,7 @@ private fun AuthenticatedWorkspace(
                     dailyCheckInState = dailyCheckInState,
                     approvedEarningsCents = viewModel.getApprovedTaskEarningsCents(),
                     onClaimDay = { day ->
-                      viewModel.startAdsterraDailyCheckIn(context, day)
+                      viewModel.claimDailyCheckIn(day)
                     },
                     onBack = { viewModel.setDailyCheckInScreenVisible(false) },
                     isBusy = isBusy
@@ -667,7 +668,7 @@ private fun AuthenticatedWorkspace(
                     submissionsState = userSubmissionsState,
                     dailyCheckInState = dailyCheckInState,
                     onClaimDailyCheckIn = {
-                      viewModel.startAdsterraDailyCheckIn(context)
+                      viewModel.claimDailyCheckIn()
                       viewModel.setDailyCheckInScreenVisible(true)
                     },
                     onNavigateToDailyCheckIn = { viewModel.setDailyCheckInScreenVisible(true) },
