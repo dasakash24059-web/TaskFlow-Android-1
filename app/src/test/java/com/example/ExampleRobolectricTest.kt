@@ -63,6 +63,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -1566,47 +1567,42 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `TestAppUpdateManager comparison`() = kotlinx.coroutines.runBlocking {
-    try {
-      val context = ApplicationProvider.getApplicationContext<Context>()
-      val installedCode = AppUpdateManager.getInstalledVersionCode(context)
-      assertTrue("Installed version code should be >= 0", installedCode >= 0)
+  fun `TestAppUpdateManager comparison`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val installedCode = AppUpdateManager.getInstalledVersionCode(context)
+    assertTrue("Installed version code should be >= 0", installedCode >= 0)
 
-      // Test remote version lower or equal
-      val noUpdateInfo = AppUpdateManager.checkForRemoteConfigUpdate(context).getOrNull()
-      // Remote defaults equal installed version, so no update should be triggered
-      if (noUpdateInfo != null) {
-        println("DEBUG: noUpdateInfo found: $noUpdateInfo")
-        assertTrue("Remote version ${noUpdateInfo.versionCode} should not be greater than installed $installedCode", noUpdateInfo.versionCode <= installedCode)
-      }
-
-      // Test forced update dialog hides Later button
-      val forcedInfo = AppVersionInfo(
-        versionCode = installedCode + 1,
-        versionName = "2.0",
-        apkUrl = "https://github.com/dasakash24059/TaskFlow/releases/download/v2.0/TaskFlow.apk",
-        releaseNotes = "Major security patch",
-        forceUpdate = true
-      )
-      composeTestRule.setContent {
-        TaskFlowTheme {
-          com.example.ui.components.AppUpdateDialog(
-            versionInfo = forcedInfo,
-            onUpdateNow = {},
-            onDismiss = {}
-          )
-        }
-      }
-      composeTestRule.waitForIdle()
-
-      composeTestRule.onNodeWithTag("update_dialog").assertIsDisplayed()
-      composeTestRule.onNodeWithText("required security update", substring = true).assertIsDisplayed()
-      composeTestRule.onNodeWithTag("later_update_button").assertDoesNotExist()
-    } catch (e: Throwable) {
-      System.err.println("DEBUG: Test failed: ${e.message}")
-      e.printStackTrace()
-      throw e
+    // Test update detection when available
+    val updateInfo = kotlinx.coroutines.runBlocking {
+      AppUpdateManager.checkForRemoteConfigUpdate(context).getOrNull()
     }
+    if (updateInfo != null) {
+      println("DEBUG: updateInfo found: $updateInfo")
+      assertTrue("Remote version ${updateInfo.versionCode} should be greater than installed $installedCode", updateInfo.versionCode > installedCode)
+    }
+
+    // Test forced update dialog hides Later button
+    val forcedInfo = AppVersionInfo(
+      versionCode = installedCode + 1,
+      versionName = "2.0",
+      apkUrl = "https://github.com/dasakash24059/TaskFlow/releases/download/v2.0/TaskFlow.apk",
+      releaseNotes = "Major security patch",
+      forceUpdate = true
+    )
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        com.example.ui.components.AppUpdateDialog(
+          versionInfo = forcedInfo,
+          onUpdateNow = {},
+          onDismiss = {}
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("update_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("required update", substring = true).assertIsDisplayed()
+    composeTestRule.onNodeWithTag("later_update_button").assertDoesNotExist()
   }
 
   @Test
@@ -1678,6 +1674,85 @@ class ExampleRobolectricTest {
     val dummyFile = java.io.File(context.cacheDir, "non_existent_update.apk")
     val validationResult = AppUpdateManager.validateDownloadedApk(context, dummyFile)
     assertTrue("Non-existent APK must fail validation", validationResult is com.example.util.ApkValidationResult.Invalid)
+
+    // Normalize download URL tests
+    assertEquals(
+      "https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk",
+      AppUpdateManager.normalizeDownloadUrl("https://github.com/dasakash24059/TaskFlow/releases/latest")
+    )
+    assertEquals(
+      "https://github.com/dasakash24059/TaskFlow/releases/download/v2.8/TaskFlow.apk",
+      AppUpdateManager.normalizeDownloadUrl("https://github.com/dasakash24059/TaskFlow/releases/tag/v2.8")
+    )
+    assertEquals(
+      "https://example.com/custom.apk",
+      AppUpdateManager.normalizeDownloadUrl("https://example.com/custom.apk")
+    )
+  }
+
+  @Test
+  fun `AppUpdateDialog displays Update Completed state with Reopen App button`() {
+    val versionInfo = AppVersionInfo(
+      versionCode = 10,
+      versionName = "2.9",
+      apkUrl = "https://example.com/TaskFlow.apk"
+    )
+
+    val completedProgress = com.example.data.model.UpdateDownloadProgress(
+      status = com.example.data.model.UpdateDownloadStatus.UPDATE_COMPLETED,
+      progressPercent = 100,
+      statusMessage = "Update completed successfully! TaskFlow version 2.9 (Build 10) is now installed.",
+      targetVersionCode = 10,
+      targetVersionName = "2.9"
+    )
+
+    var reopenClicked = false
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        com.example.ui.components.AppUpdateDialog(
+          versionInfo = versionInfo,
+          downloadProgress = completedProgress,
+          onUpdateNow = {},
+          onReopenApp = { reopenClicked = true },
+          onDismiss = {}
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("update_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Update Completed!").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Installation Confirmed ✓").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("reopen_app_button").assertIsDisplayed().performClick()
+    assertTrue(reopenClicked)
+  }
+
+  @Test
+  fun `AppUpdateManager records and verifies pending installation lifecycle`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    
+    // Clear any existing
+    AppUpdateManager.clearPendingInstallation(context)
+    val initial = AppUpdateManager.getPendingInstallation(context)
+    assertNull(initial)
+
+    // Record pending install
+    AppUpdateManager.recordPendingInstallation(context, targetVersionCode = 999, targetVersionName = "99.0")
+    val pending = AppUpdateManager.getPendingInstallation(context)
+    assertNotNull(pending)
+    assertEquals(999, pending?.first)
+    assertEquals("99.0", pending?.second)
+
+    // Verify still pending since installed is < 999
+    val stillPendingResult = AppUpdateManager.verifyInstalledVersionAfterUpdate(context)
+    assertTrue("Should be still pending", stillPendingResult is AppUpdateManager.UpdateVerificationResult.StillPending)
+
+    // Record pending install for current or lower version -> should succeed
+    val currentCode = AppUpdateManager.getInstalledVersionCode(context)
+    AppUpdateManager.recordPendingInstallation(context, targetVersionCode = currentCode, targetVersionName = "Current")
+    val successResult = AppUpdateManager.verifyInstalledVersionAfterUpdate(context)
+    assertTrue("Should succeed when current version >= target", successResult is AppUpdateManager.UpdateVerificationResult.Success)
+    assertNull(AppUpdateManager.getPendingInstallation(context))
   }
 }
 

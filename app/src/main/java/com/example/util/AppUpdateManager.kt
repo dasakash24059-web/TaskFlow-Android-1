@@ -77,6 +77,8 @@ object AppUpdateManager {
   /**
    * Asynchronously fetches version info using Firebase Remote Config.
    * Compares installed BuildConfig.VERSION_CODE with remote "latest_version_code".
+   * Asynchronously fetches version info using Firebase Remote Config.
+   * Compares installed BuildConfig.VERSION_CODE with remote "latest_version_code".
    * Returns AppVersionInfo if remote version code > installed version code, otherwise null.
    */
   suspend fun checkForRemoteConfigUpdate(context: Context): Result<AppVersionInfo?> = withContext(Dispatchers.IO) {
@@ -100,11 +102,11 @@ object AppUpdateManager {
         KEY_FORCE_UPDATE to false
       )
 
-      withTimeoutOrNull(2000L) {
+      withTimeoutOrNull(3500L) {
         runCatching {
           val configSettings = FirebaseRemoteConfigSettings.Builder()
-            .setMinimumFetchIntervalInSeconds(3600L)
-            .setFetchTimeoutInSeconds(2L)
+            .setMinimumFetchIntervalInSeconds(60L)
+            .setFetchTimeoutInSeconds(3L)
             .build()
           remoteConfig.setConfigSettingsAsync(configSettings)
           remoteConfig.setDefaultsAsync(defaults)
@@ -115,15 +117,20 @@ object AppUpdateManager {
 
       val latestVersionCode = remoteConfig.getLong(KEY_LATEST_VERSION_CODE).toInt()
       val latestVersionName = remoteConfig.getString(KEY_LATEST_VERSION_NAME)
-      val downloadUrl = remoteConfig.getString(KEY_DOWNLOAD_URL)
+      val downloadUrl = remoteConfig.getString(KEY_DOWNLOAD_URL).trim()
       val releaseNotes = remoteConfig.getString(KEY_RELEASE_NOTES)
       val forceUpdate = remoteConfig.getBoolean(KEY_FORCE_UPDATE)
+
+      // If Remote Config is unconfigured or missing URL, fallback to repository version.json
+      if (latestVersionCode <= 0 || downloadUrl.isBlank()) {
+        return@withContext checkForUpdateViaFallbackJson(context)
+      }
 
       if (latestVersionCode > installedCode) {
         val versionInfo = AppVersionInfo(
           versionCode = latestVersionCode,
           versionName = latestVersionName.ifBlank { "1.0" },
-          apkUrl = downloadUrl,
+          apkUrl = normalizeDownloadUrl(downloadUrl),
           releaseNotes = releaseNotes,
           forceUpdate = forceUpdate
         )
@@ -141,11 +148,23 @@ object AppUpdateManager {
       if (!versionJsonUrl.lowercase().startsWith("https://")) {
         return@withContext Result.failure(SecurityException("Update URL must use HTTPS"))
       }
-      val url = URL(versionJsonUrl)
+
+      // Append cache-busting timestamp to prevent stale CDN/HTTP 304 caching
+      val cacheBustedUrl = if (versionJsonUrl.contains("?")) {
+        "$versionJsonUrl&_t=${System.currentTimeMillis()}"
+      } else {
+        "$versionJsonUrl?_t=${System.currentTimeMillis()}"
+      }
+
+      val url = URL(cacheBustedUrl)
       val connection = (url.openConnection() as HttpsURLConnection).apply {
-        connectTimeout = 3000
-        readTimeout = 3000
+        connectTimeout = 4000
+        readTimeout = 4000
         requestMethod = "GET"
+        useCaches = false
+        setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
+        setRequestProperty("Pragma", "no-cache")
+        setRequestProperty("Expires", "0")
       }
 
       val responseCode = connection.responseCode
@@ -159,14 +178,16 @@ object AppUpdateManager {
       val json = JSONObject(jsonString)
       val versionCode = json.optInt("latest_version_code", json.optInt("versionCode", 1))
       val versionName = json.optString("latest_version_name", json.optString("versionName", "1.0"))
-      val apkUrl = json.optString("download_url", json.optString("apkUrl", ""))
+      val rawApkUrl = json.optString("download_url", json.optString("apkUrl", "")).trim()
       val releaseNotes = json.optString("release_notes", json.optString("releaseNotes", ""))
       val forceUpdate = json.optBoolean("force_update", json.optBoolean("forceUpdate", false))
+
+      val resolvedApkUrl = normalizeDownloadUrl(rawApkUrl)
 
       val versionInfo = AppVersionInfo(
         versionCode = versionCode,
         versionName = versionName,
-        apkUrl = apkUrl,
+        apkUrl = resolvedApkUrl,
         releaseNotes = releaseNotes,
         forceUpdate = forceUpdate
       )
@@ -182,8 +203,35 @@ object AppUpdateManager {
     }
   }
 
+  /**
+   * Normalizes URLs pointing to GitHub release landing pages into direct APK asset download URLs.
+   */
+  fun normalizeDownloadUrl(url: String): String {
+    val trimmed = url.trim()
+    if (trimmed.isBlank()) return trimmed
+
+    // If it's a GitHub latest releases page e.g. https://github.com/dasakash24059/TaskFlow/releases/latest
+    if (trimmed.contains("github.com") && trimmed.contains("/releases/latest") && !trimmed.endsWith(".apk")) {
+      return "https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk"
+    }
+
+    // If it's a generic GitHub tag release URL like https://github.com/.../releases/tag/v2.8
+    if (trimmed.contains("github.com") && trimmed.contains("/releases/tag/") && !trimmed.endsWith(".apk")) {
+      val tag = trimmed.substringAfterLast("/")
+      val base = trimmed.substringBefore("/releases/tag/")
+      return "$base/releases/download/$tag/TaskFlow.apk"
+    }
+
+    return trimmed
+  }
+
   suspend fun checkForUpdate(context: Context): Result<AppVersionInfo?> {
-    return checkForRemoteConfigUpdate(context)
+    val remoteResult = checkForRemoteConfigUpdate(context)
+    val remoteInfo = remoteResult.getOrNull()
+    if (remoteInfo != null) {
+      return remoteResult
+    }
+    return checkForUpdateViaFallbackJson(context)
   }
 
   fun openDownloadUrl(context: Context, downloadUrl: String): Boolean {
@@ -205,14 +253,14 @@ object AppUpdateManager {
    * Returns downloadId on success, or -1L on error.
    */
   fun downloadAndInstallApk(context: Context, apkUrl: String): Long {
-    val trimmedUrl = apkUrl.trim()
-    if (trimmedUrl.isBlank() || !trimmedUrl.lowercase().startsWith("https://")) {
-      android.util.Log.e("AppUpdateManager", "Refusing insecure or empty download URL: $trimmedUrl")
+    val normalized = normalizeDownloadUrl(apkUrl)
+    if (normalized.isBlank() || !normalized.lowercase().startsWith("https://")) {
+      android.util.Log.e("AppUpdateManager", "Refusing insecure or empty download URL: $normalized")
       return -1L
     }
 
-    if (!trimmedUrl.lowercase().endsWith(".apk")) {
-      openDownloadUrl(context, trimmedUrl)
+    if (!normalized.lowercase().endsWith(".apk")) {
+      openDownloadUrl(context, normalized)
       return 1L
     }
 
@@ -220,9 +268,9 @@ object AppUpdateManager {
     cleanTemporaryApk(context)
 
     return try {
-      val request = DownloadManager.Request(Uri.parse(trimmedUrl))
+      val request = DownloadManager.Request(Uri.parse(normalized))
         .setTitle("TaskFlow Update")
-        .setDescription("Downloading latest application update...")
+        .setDescription("Downloading latest TaskFlow update package...")
         .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
         .setDestinationUri(Uri.fromFile(destination))
         .setAllowedOverMetered(true)
@@ -341,11 +389,17 @@ object AppUpdateManager {
             val destination = getDestinationApkFile(context)
             val validation = validateDownloadedApk(context, destination)
 
+            // Read archive version code and name from destination APK
+            val archiveFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) PackageManager.GET_SIGNING_CERTIFICATES else 0
+            val archive = context.packageManager.getPackageArchiveInfo(destination.absolutePath, archiveFlags)
+            val apkCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) archive?.longVersionCode?.toInt() ?: 0 else archive?.versionCode ?: 0
+            val apkName = archive?.versionName ?: "Update"
+
             when (validation) {
               is ApkValidationResult.Valid -> {
                 val hasPermission = canRequestPackageInstalls(context)
                 val finalStatus = if (hasPermission) {
-                  UpdateDownloadStatus.READY_TO_INSTALL
+                  UpdateDownloadStatus.DOWNLOAD_COMPLETED
                 } else {
                   UpdateDownloadStatus.PERMISSION_REQUIRED
                 }
@@ -356,10 +410,12 @@ object AppUpdateManager {
                     bytesDownloaded = totalBytes,
                     totalBytes = totalBytes,
                     statusMessage = if (hasPermission) {
-                      "Update verified successfully! Ready to install."
+                      "Update downloaded & verified successfully! Ready to install."
                     } else {
                       "Install permission required. Tap to grant permission in Settings."
-                    }
+                    },
+                    targetVersionCode = apkCode,
+                    targetVersionName = apkName
                   )
                 )
               }
@@ -538,11 +594,77 @@ object AppUpdateManager {
     }
   }
 
+  fun recordPendingInstallation(context: Context, targetVersionCode: Int, targetVersionName: String) {
+    val prefs = context.getSharedPreferences("app_update_prefs", Context.MODE_PRIVATE)
+    prefs.edit()
+      .putInt("pending_install_target_version_code", targetVersionCode)
+      .putString("pending_install_target_version_name", targetVersionName)
+      .putLong("pending_install_timestamp", System.currentTimeMillis())
+      .apply()
+  }
+
+  fun getPendingInstallation(context: Context): Pair<Int, String>? {
+    val prefs = context.getSharedPreferences("app_update_prefs", Context.MODE_PRIVATE)
+    val code = prefs.getInt("pending_install_target_version_code", -1)
+    val name = prefs.getString("pending_install_target_version_name", "") ?: ""
+    return if (code > 0) Pair(code, name) else null
+  }
+
+  fun clearPendingInstallation(context: Context) {
+    val prefs = context.getSharedPreferences("app_update_prefs", Context.MODE_PRIVATE)
+    prefs.edit()
+      .remove("pending_install_target_version_code")
+      .remove("pending_install_target_version_name")
+      .remove("pending_install_timestamp")
+      .apply()
+  }
+
+  sealed class UpdateVerificationResult {
+    object NoPendingUpdate : UpdateVerificationResult()
+    data class Success(val installedCode: Int, val installedName: String) : UpdateVerificationResult()
+    data class StillPending(val targetCode: Int, val targetName: String) : UpdateVerificationResult()
+  }
+
+  fun verifyInstalledVersionAfterUpdate(context: Context): UpdateVerificationResult {
+    val pending = getPendingInstallation(context) ?: return UpdateVerificationResult.NoPendingUpdate
+    val targetCode = pending.first
+    val targetName = pending.second
+    val currentCode = getInstalledVersionCode(context)
+
+    return if (currentCode >= targetCode) {
+      cleanTemporaryApk(context)
+      clearPendingInstallation(context)
+      UpdateVerificationResult.Success(installedCode = currentCode, installedName = targetName)
+    } else {
+      UpdateVerificationResult.StillPending(targetCode = targetCode, targetName = targetName)
+    }
+  }
+
+  fun restartApp(context: Context) {
+    try {
+      val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+      }
+      if (intent != null) {
+        context.startActivity(intent)
+        if (context is android.app.Activity) {
+          context.finish()
+        }
+      }
+    } catch (e: Exception) {
+      android.util.Log.e("AppUpdateManager", "Failed to restart app", e)
+    }
+  }
+
   /**
    * Launches Android system Package Installer using secure FileProvider content URI.
    * Prompts the user to review and confirm installation; never performs silent install.
    */
-  fun installDownloadedApk(context: Context): Boolean {
+  fun installDownloadedApk(
+    context: Context,
+    targetCode: Int = -1,
+    targetName: String = ""
+  ): Boolean {
     val destination = getDestinationApkFile(context)
     val validation = validateDownloadedApk(context, destination)
 
@@ -566,6 +688,25 @@ object AppUpdateManager {
       android.util.Log.e("AppUpdateManager", "FileProvider getUriForFile failed", e)
       return false
     }
+
+    // Determine target version code and name from APK archive
+    val finalTargetCode = if (targetCode > 0) targetCode else {
+      val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) PackageManager.GET_SIGNING_CERTIFICATES else 0
+      val archive = context.packageManager.getPackageArchiveInfo(destination.absolutePath, flags)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        archive?.longVersionCode?.toInt() ?: -1
+      } else {
+        @Suppress("DEPRECATION")
+        archive?.versionCode ?: -1
+      }
+    }
+    val finalTargetName = if (targetName.isNotBlank()) targetName else {
+      val archive = context.packageManager.getPackageArchiveInfo(destination.absolutePath, 0)
+      archive?.versionName ?: "Latest"
+    }
+
+    // Record pending installation in SharedPreferences before launching installer
+    recordPendingInstallation(context, finalTargetCode, finalTargetName)
 
     val intent = Intent(Intent.ACTION_VIEW).apply {
       setDataAndType(uri, "application/vnd.android.package-archive")

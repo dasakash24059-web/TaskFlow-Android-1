@@ -77,6 +77,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -752,12 +753,18 @@ fun AppUpdateDialog(
   onDismiss: () -> Unit,
   downloadProgress: com.example.data.model.UpdateDownloadProgress? = null,
   onInstallNow: (() -> Unit)? = null,
-  onOpenSettings: (() -> Unit)? = null
+  onOpenSettings: (() -> Unit)? = null,
+  onReopenApp: (() -> Unit)? = null
 ) {
+  val isChecking = downloadProgress?.isChecking == true
   val isDownloading = downloadProgress?.isDownloading == true
   val isVerifying = downloadProgress?.isVerifying == true
+  val isDownloadCompleted = downloadProgress?.isDownloadCompleted == true
   val isReadyToInstall = downloadProgress?.isReadyToInstall == true
   val isPermissionRequired = downloadProgress?.isPermissionRequired == true
+  val isWaitingForInstallConfirmation = downloadProgress?.isWaitingForInstallConfirmation == true
+  val isInstallationStarted = downloadProgress?.isInstallationStarted == true
+  val isUpdateCompleted = downloadProgress?.isUpdateCompleted == true
   val hasFailed = downloadProgress?.hasFailed == true
 
   AlertDialog(
@@ -774,26 +781,34 @@ fun AppUpdateDialog(
       ) {
         Icon(
           imageVector = when {
+            isUpdateCompleted -> Icons.Default.CheckCircle
             hasFailed -> Icons.Default.Cancel
-            isReadyToInstall -> Icons.Default.CheckCircle
-            isDownloading || isVerifying -> Icons.Default.HourglassEmpty
+            isInstallationStarted || isWaitingForInstallConfirmation -> Icons.Default.HourglassEmpty
+            isDownloadCompleted || isReadyToInstall -> Icons.Default.CheckCircle
+            isDownloading || isVerifying || isChecking -> Icons.Default.HourglassEmpty
             else -> Icons.Default.Info
           },
           contentDescription = "Update Status",
           tint = when {
+            isUpdateCompleted -> Color(0xFF059669)
             hasFailed -> MaterialTheme.colorScheme.error
-            isReadyToInstall -> Color(0xFF059669)
-            isDownloading || isVerifying -> MaterialTheme.colorScheme.primary
+            isInstallationStarted || isWaitingForInstallConfirmation -> MaterialTheme.colorScheme.primary
+            isDownloadCompleted || isReadyToInstall -> Color(0xFF059669)
+            isDownloading || isVerifying || isChecking -> MaterialTheme.colorScheme.primary
             else -> MaterialTheme.colorScheme.primary
           }
         )
         Text(
           text = when {
+            isUpdateCompleted -> "Update Completed!"
+            isInstallationStarted -> "Installing Update..."
+            isWaitingForInstallConfirmation -> "Installation Pending"
             isDownloading -> "Downloading Update..."
             isVerifying -> "Verifying Update..."
-            isReadyToInstall -> "Update Ready to Install"
+            isReadyToInstall || isDownloadCompleted -> "Update Ready to Install"
             isPermissionRequired -> "Permission Required"
-            hasFailed -> "Update Download Failed"
+            hasFailed -> "Update Failed"
+            isChecking -> "Checking for Updates..."
             else -> "New Update Available"
           }
         )
@@ -806,114 +821,184 @@ fun AppUpdateDialog(
           .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp)
       ) {
-        Text(
-          text = "Version ${versionInfo.versionName} (Code: ${versionInfo.versionCode}) is available.",
-          style = MaterialTheme.typography.bodyLarge,
-          fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.onSurface
-        )
-
-        if (versionInfo.releaseNotes.isNotBlank()) {
-          Text(
-            text = "Release Notes:",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary
-          )
-          Text(
-            text = versionInfo.releaseNotes,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-          )
-        }
-
-        // Live Download Progress Section
-        if (downloadProgress != null && downloadProgress.status != com.example.data.model.UpdateDownloadStatus.IDLE) {
+        if (isUpdateCompleted) {
           Surface(
             shape = RoundedCornerShape(16.dp),
-            color = when {
-              hasFailed -> Color(0xFFFEF2F2)
-              isReadyToInstall -> Color(0xFFECFDF5)
-              isPermissionRequired -> Color(0xFFFFFBEB)
-              else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            },
+            color = Color(0xFFECFDF5),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA7F3D0)),
             modifier = Modifier.fillMaxWidth()
           ) {
             Column(
-              modifier = Modifier.fillMaxWidth().padding(14.dp),
-              verticalArrangement = Arrangement.spacedBy(8.dp)
+              modifier = Modifier.fillMaxWidth().padding(16.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+              horizontalAlignment = Alignment.CenterHorizontally
             ) {
-              if (isDownloading) {
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                  verticalAlignment = Alignment.CenterVertically
-                ) {
-                  Text(
-                    text = "${downloadProgress.progressPercent}%",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                  )
-                  val formattedSize = downloadProgress.getFormattedSize()
-                  if (formattedSize.isNotEmpty()) {
-                    Text(
-                      text = formattedSize,
-                      style = MaterialTheme.typography.bodySmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                  }
-                }
-                LinearProgressIndicator(
-                  progress = { downloadProgress.progressPercent / 100f },
-                  modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-                  color = MaterialTheme.colorScheme.primary
-                )
-              } else if (isVerifying) {
-                LinearProgressIndicator(
-                  modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                  color = MaterialTheme.colorScheme.primary
-                )
-              }
-
+              Icon(
+                imageVector = Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = Color(0xFF059669),
+                modifier = Modifier.size(48.dp)
+              )
+              Text(
+                text = "Installation Confirmed ✓",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF065F46)
+              )
               Text(
                 text = downloadProgress.statusMessage.ifBlank {
-                  downloadProgress.errorMessage ?: ""
+                  "TaskFlow has been updated successfully with all latest features and UI enhancements."
                 },
-                style = MaterialTheme.typography.bodySmall,
-                color = when {
-                  hasFailed -> MaterialTheme.colorScheme.error
-                  isReadyToInstall -> Color(0xFF047857)
-                  isPermissionRequired -> Color(0xFFB45309)
-                  else -> MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                fontWeight = if (hasFailed || isReadyToInstall) FontWeight.SemiBold else FontWeight.Normal
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFF047857),
+                textAlign = TextAlign.Center
               )
+            }
+          }
+        } else {
+          Text(
+            text = "Version ${versionInfo.versionName} (Code: ${versionInfo.versionCode}) is available.",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+          )
 
-              if (isPermissionRequired) {
+          if (versionInfo.releaseNotes.isNotBlank()) {
+            Text(
+              text = "Release Notes:",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+              text = versionInfo.releaseNotes,
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+
+          // Live Progress / Status Section
+          if (downloadProgress != null && downloadProgress.status != com.example.data.model.UpdateDownloadStatus.IDLE) {
+            Surface(
+              shape = RoundedCornerShape(16.dp),
+              color = when {
+                hasFailed -> Color(0xFFFEF2F2)
+                isDownloadCompleted || isReadyToInstall -> Color(0xFFECFDF5)
+                isPermissionRequired -> Color(0xFFFFFBEB)
+                isInstallationStarted || isWaitingForInstallConfirmation -> Color(0xFFEFF6FF)
+                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+              },
+              modifier = Modifier.fillMaxWidth()
+            ) {
+              Column(
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                if (isDownloading) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Text(
+                      text = "${downloadProgress.progressPercent}%",
+                      style = MaterialTheme.typography.titleMedium,
+                      fontWeight = FontWeight.Bold,
+                      color = MaterialTheme.colorScheme.primary
+                    )
+                    val formattedSize = downloadProgress.getFormattedSize()
+                    if (formattedSize.isNotEmpty()) {
+                      Text(
+                        text = formattedSize,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                      )
+                    }
+                  }
+                  LinearProgressIndicator(
+                    progress = { downloadProgress.progressPercent / 100f },
+                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                    color = MaterialTheme.colorScheme.primary
+                  )
+                } else if (isVerifying) {
+                  LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                    color = MaterialTheme.colorScheme.primary
+                  )
+                }
+
                 Text(
-                  text = "Android requires explicit authorization to allow TaskFlow to install updates. Tap 'Grant Permission' below to open Settings, enable 'Allow from this source', and return here.",
+                  text = downloadProgress.statusMessage.ifBlank {
+                    downloadProgress.errorMessage ?: ""
+                  },
                   style = MaterialTheme.typography.bodySmall,
-                  color = Color(0xFF78350F)
+                  color = when {
+                    hasFailed -> MaterialTheme.colorScheme.error
+                    isDownloadCompleted || isReadyToInstall -> Color(0xFF047857)
+                    isPermissionRequired -> Color(0xFFB45309)
+                    isInstallationStarted || isWaitingForInstallConfirmation -> Color(0xFF1D4ED8)
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                  fontWeight = if (hasFailed || isReadyToInstall || isDownloadCompleted) FontWeight.SemiBold else FontWeight.Normal
                 )
+
+                if (isPermissionRequired) {
+                  Text(
+                    text = "Android requires explicit authorization to allow TaskFlow to install updates. Tap 'Grant Permission' below to open Settings, enable 'Allow from this source', and return here.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF78350F)
+                  )
+                }
+
+                if (isInstallationStarted || isWaitingForInstallConfirmation) {
+                  Text(
+                    text = "The Android Package Installer has been launched. Please review the installation prompt and tap 'Update' in the system dialog to complete full APK replacement.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF1E40AF)
+                  )
+                }
               }
             }
           }
-        }
 
-        if (versionInfo.forceUpdate) {
-          Spacer(modifier = Modifier.height(4.dp))
-          Text(
-            text = "This is a required security update. You must update the app to continue using TaskFlow.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-            fontWeight = FontWeight.SemiBold
-          )
+          if (versionInfo.forceUpdate) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = "This is a required update. You must install the latest APK to continue using TaskFlow.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.error,
+              fontWeight = FontWeight.SemiBold
+            )
+          }
         }
       }
     },
     confirmButton = {
       when {
-        isReadyToInstall -> {
+        isUpdateCompleted -> {
+          Button(
+            onClick = {
+              if (onReopenApp != null) {
+                onReopenApp()
+              } else {
+                onDismiss()
+              }
+            },
+            modifier = Modifier.fillMaxWidth().testTag("reopen_app_button"),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
+          ) {
+            Text("Reopen App", fontWeight = FontWeight.Bold)
+          }
+        }
+        isInstallationStarted || isWaitingForInstallConfirmation -> {
+          Button(
+            onClick = { onInstallNow?.invoke() },
+            modifier = Modifier.fillMaxWidth().testTag("install_now_button"),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB))
+          ) {
+            Text("Launch Installer Again", fontWeight = FontWeight.Bold)
+          }
+        }
+        isDownloadCompleted || isReadyToInstall -> {
           Button(
             onClick = { onInstallNow?.invoke() },
             modifier = Modifier.fillMaxWidth().testTag("install_now_button"),
@@ -931,7 +1016,7 @@ fun AppUpdateDialog(
             Text("Grant Permission in Settings", fontWeight = FontWeight.Bold)
           }
         }
-        isDownloading || isVerifying -> {
+        isDownloading || isVerifying || isChecking -> {
           Button(
             onClick = {},
             enabled = false,
@@ -950,7 +1035,13 @@ fun AppUpdateDialog(
                 strokeWidth = 2.dp,
                 color = MaterialTheme.colorScheme.primary
               )
-              Text(if (isVerifying) "Verifying APK..." else "Downloading (${downloadProgress.progressPercent}%)...")
+              Text(
+                when {
+                  isChecking -> "Checking for updates..."
+                  isVerifying -> "Verifying APK..."
+                  else -> "Downloading (${downloadProgress?.progressPercent ?: 0}%)..."
+                }
+              )
             }
           }
         }
@@ -975,7 +1066,7 @@ fun AppUpdateDialog(
       }
     },
     dismissButton = {
-      if (!versionInfo.forceUpdate && !isDownloading && !isVerifying) {
+      if (!versionInfo.forceUpdate && !isDownloading && !isVerifying && !isUpdateCompleted) {
         TextButton(
           onClick = onDismiss,
           modifier = Modifier.testTag("later_update_button")

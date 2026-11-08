@@ -396,6 +396,7 @@ private fun AuthenticatedWorkspace(
   androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
     val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
       if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        viewModel.verifyPostInstallation(context)
         viewModel.checkForAppUpdates(context, forceCheck = false)
       }
     }
@@ -419,6 +420,9 @@ private fun AuthenticatedWorkspace(
       },
       onOpenSettings = {
         viewModel.requestUnknownAppSourcesPermission(context)
+      },
+      onReopenApp = {
+        com.example.util.AppUpdateManager.restartApp(context)
       },
       onDismiss = {
         viewModel.dismissUpdateDialog(context)

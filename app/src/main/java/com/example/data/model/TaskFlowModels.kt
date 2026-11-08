@@ -393,10 +393,16 @@ data class AppVersionInfo(
 
 enum class UpdateDownloadStatus {
   IDLE,
+  CHECKING,
+  UPDATE_AVAILABLE,
   DOWNLOADING,
   VERIFYING,
+  DOWNLOAD_COMPLETED,
   READY_TO_INSTALL,
   PERMISSION_REQUIRED,
+  WAITING_FOR_INSTALL_CONFIRMATION,
+  INSTALLATION_STARTED,
+  UPDATE_COMPLETED,
   FAILED
 }
 
@@ -406,12 +412,20 @@ data class UpdateDownloadProgress(
   val bytesDownloaded: Long = 0L,
   val totalBytes: Long = 0L,
   val statusMessage: String = "",
-  val errorMessage: String? = null
+  val errorMessage: String? = null,
+  val targetVersionCode: Int = 0,
+  val targetVersionName: String = ""
 ) {
+  val isChecking: Boolean get() = status == UpdateDownloadStatus.CHECKING
+  val isUpdateAvailable: Boolean get() = status == UpdateDownloadStatus.UPDATE_AVAILABLE
   val isDownloading: Boolean get() = status == UpdateDownloadStatus.DOWNLOADING
   val isVerifying: Boolean get() = status == UpdateDownloadStatus.VERIFYING
-  val isReadyToInstall: Boolean get() = status == UpdateDownloadStatus.READY_TO_INSTALL
+  val isDownloadCompleted: Boolean get() = status == UpdateDownloadStatus.DOWNLOAD_COMPLETED || status == UpdateDownloadStatus.READY_TO_INSTALL
+  val isReadyToInstall: Boolean get() = isDownloadCompleted
   val isPermissionRequired: Boolean get() = status == UpdateDownloadStatus.PERMISSION_REQUIRED
+  val isWaitingForInstallConfirmation: Boolean get() = status == UpdateDownloadStatus.WAITING_FOR_INSTALL_CONFIRMATION
+  val isInstallationStarted: Boolean get() = status == UpdateDownloadStatus.INSTALLATION_STARTED
+  val isUpdateCompleted: Boolean get() = status == UpdateDownloadStatus.UPDATE_COMPLETED
   val hasFailed: Boolean get() = status == UpdateDownloadStatus.FAILED
 
   fun getFormattedSize(): String {

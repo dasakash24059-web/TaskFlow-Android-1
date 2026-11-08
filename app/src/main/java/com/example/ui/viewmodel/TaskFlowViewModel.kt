@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DailyCheckInState
@@ -790,13 +791,24 @@ class TaskFlowViewModel(
       _isCheckingUpdate.value = true
       com.example.util.AppUpdateManager.checkForUpdate(context)
         .onSuccess { updateInfo ->
-          if (updateInfo != null && updateInfo.versionCode != dismissedUpdateCode) {
+          if (updateInfo != null && (forceCheck || updateInfo.versionCode != dismissedUpdateCode)) {
             _appUpdateInfo.value = updateInfo
             _showUpdateDialog.value = true
+            if (_updateDownloadProgress.value.status == UpdateDownloadStatus.IDLE) {
+              _updateDownloadProgress.value = UpdateDownloadProgress(
+                status = UpdateDownloadStatus.UPDATE_AVAILABLE,
+                targetVersionCode = updateInfo.versionCode,
+                targetVersionName = updateInfo.versionName
+              )
+            }
+          } else if (forceCheck) {
+            _bannerMessage.value = "TaskFlow is up to date (Version ${BuildConfig.VERSION_NAME})."
           }
         }
-        .onFailure {
-          // Silent failure on network error
+        .onFailure { err ->
+          if (forceCheck) {
+            _bannerMessage.value = "Update check failed: ${err.localizedMessage ?: "Network error"}"
+          }
         }
       _isCheckingUpdate.value = false
     }
@@ -806,10 +818,12 @@ class TaskFlowViewModel(
   val updateDownloadProgress: StateFlow<UpdateDownloadProgress> = _updateDownloadProgress.asStateFlow()
 
   fun dismissUpdateDialog(context: android.content.Context) {
-    val info = _appUpdateInfo.value ?: return
-    val prefs = context.getSharedPreferences("app_update_prefs", android.content.Context.MODE_PRIVATE)
-    prefs.edit().putInt("dismissed_update_code", info.versionCode).apply()
-    dismissedUpdateCode = info.versionCode
+    val info = _appUpdateInfo.value
+    if (info != null) {
+      val prefs = context.getSharedPreferences("app_update_prefs", android.content.Context.MODE_PRIVATE)
+      prefs.edit().putInt("dismissed_update_code", info.versionCode).apply()
+      dismissedUpdateCode = info.versionCode
+    }
     _showUpdateDialog.value = false
     _updateDownloadProgress.value = UpdateDownloadProgress()
   }
@@ -833,17 +847,22 @@ class TaskFlowViewModel(
       return
     }
 
+    _showUpdateDialog.value = true
     _updateDownloadProgress.value = UpdateDownloadProgress(
       status = UpdateDownloadStatus.DOWNLOADING,
       progressPercent = 0,
-      statusMessage = "Starting background download..."
+      statusMessage = "Connecting and starting download...",
+      targetVersionCode = info.versionCode,
+      targetVersionName = info.versionName
     )
 
     val downloadId = com.example.util.AppUpdateManager.downloadAndInstallApk(context, trimmedUrl)
     if (downloadId <= 0L) {
       _updateDownloadProgress.value = UpdateDownloadProgress(
         status = UpdateDownloadStatus.FAILED,
-        errorMessage = "Unable to start download. Check storage permissions and network."
+        errorMessage = "Unable to start download. Check network and storage.",
+        targetVersionCode = info.versionCode,
+        targetVersionName = info.versionName
       )
       _bannerMessage.value = "Failed to start download."
       return
@@ -854,8 +873,11 @@ class TaskFlowViewModel(
         context = context,
         downloadId = downloadId,
         onProgress = { progress ->
-          _updateDownloadProgress.value = progress
-          if (progress.status == UpdateDownloadStatus.READY_TO_INSTALL) {
+          _updateDownloadProgress.value = progress.copy(
+            targetVersionCode = info.versionCode,
+            targetVersionName = info.versionName
+          )
+          if (progress.status == UpdateDownloadStatus.DOWNLOAD_COMPLETED || progress.status == UpdateDownloadStatus.READY_TO_INSTALL) {
             triggerInstalledApkInstall(context)
           }
         }
@@ -864,7 +886,19 @@ class TaskFlowViewModel(
   }
 
   fun triggerInstalledApkInstall(context: android.content.Context) {
-    val success = com.example.util.AppUpdateManager.installDownloadedApk(context)
+    val info = _appUpdateInfo.value
+    val targetCode = info?.versionCode ?: _updateDownloadProgress.value.targetVersionCode
+    val targetName = info?.versionName ?: _updateDownloadProgress.value.targetVersionName
+
+    _showUpdateDialog.value = true
+    _updateDownloadProgress.value = _updateDownloadProgress.value.copy(
+      status = UpdateDownloadStatus.INSTALLATION_STARTED,
+      statusMessage = "Android Package Installer launched. Please tap 'Update' in the system dialog to complete installation.",
+      targetVersionCode = targetCode,
+      targetVersionName = targetName
+    )
+
+    val success = com.example.util.AppUpdateManager.installDownloadedApk(context, targetCode, targetName)
     if (!success) {
       if (!com.example.util.AppUpdateManager.canRequestPackageInstalls(context)) {
         _updateDownloadProgress.value = _updateDownloadProgress.value.copy(
@@ -873,7 +907,48 @@ class TaskFlowViewModel(
         )
         _bannerMessage.value = "Please allow installation of unknown apps for TaskFlow in Settings."
       } else {
-        _bannerMessage.value = "Unable to start installation. Verification or FileProvider error."
+        _updateDownloadProgress.value = _updateDownloadProgress.value.copy(
+          status = UpdateDownloadStatus.FAILED,
+          errorMessage = "Unable to start installation. Verification or FileProvider error."
+        )
+        _bannerMessage.value = "Unable to start installation. Verification error."
+      }
+    }
+  }
+
+  fun verifyPostInstallation(context: android.content.Context) {
+    val result = com.example.util.AppUpdateManager.verifyInstalledVersionAfterUpdate(context)
+    when (result) {
+      is com.example.util.AppUpdateManager.UpdateVerificationResult.Success -> {
+        _showUpdateDialog.value = true
+        _updateDownloadProgress.value = UpdateDownloadProgress(
+          status = UpdateDownloadStatus.UPDATE_COMPLETED,
+          progressPercent = 100,
+          statusMessage = "Update completed successfully! TaskFlow version ${result.installedName} (Build ${result.installedCode}) is now installed with all latest features and UI enhancements.",
+          targetVersionCode = result.installedCode,
+          targetVersionName = result.installedName
+        )
+        _bannerMessage.value = "TaskFlow updated to version ${result.installedName}!"
+      }
+      is com.example.util.AppUpdateManager.UpdateVerificationResult.StillPending -> {
+        val currentProgress = _updateDownloadProgress.value
+        if (currentProgress.isInstallationStarted || currentProgress.isWaitingForInstallConfirmation) {
+          val dest = com.example.util.AppUpdateManager.getDestinationApkFile(context)
+          val isApkReady = dest.exists() && dest.length() > 0L
+          _updateDownloadProgress.value = currentProgress.copy(
+            status = if (isApkReady) UpdateDownloadStatus.DOWNLOAD_COMPLETED else UpdateDownloadStatus.FAILED,
+            statusMessage = "Installation was not completed. Android Package Installer was cancelled or interrupted. Tap 'Install Now' to proceed with installation.",
+            errorMessage = if (!isApkReady) "Installation cancelled and package file missing. Please retry update." else null
+          )
+        }
+      }
+      is com.example.util.AppUpdateManager.UpdateVerificationResult.NoPendingUpdate -> {
+        val currentCode = com.example.util.AppUpdateManager.getInstalledVersionCode(context)
+        val prefs = context.getSharedPreferences("app_update_prefs", android.content.Context.MODE_PRIVATE)
+        val lastKnownCode = prefs.getInt("last_known_installed_code", currentCode)
+        if (currentCode > lastKnownCode) {
+          prefs.edit().putInt("last_known_installed_code", currentCode).apply()
+        }
       }
     }
   }
