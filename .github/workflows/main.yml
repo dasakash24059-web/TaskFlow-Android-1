@@ -146,13 +146,13 @@ jobs:
           cp "app/build/outputs/apk/debug/app-debug.apk" "$LATEST_NAMED_APK"
 
           cat <<EOF > version.json
-{
-  "latest_version_code": ${VC:-10},
-  "latest_version_name": "${VN:-2.9}",
-  "download_url": "https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk",
-  "release_notes": "TaskFlow update v${VN:-2.9}: Complete full APK update with updated UI layouts, button sizes, branding assets, colors, and direct Daily Check-in rewards.",
-  "force_update": false
-}
+          {
+          "latest_version_code": ${VC:-10},
+          "latest_version_name": "${VN:-2.9}",
+          "download_url": "https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk",
+          "release_notes": "TaskFlow update v${VN:-2.9}: Complete full APK update with updated UI layouts, button sizes, branding assets, colors, and direct Daily Check-in rewards.",
+          "force_update": false
+          }
 EOF
           echo "apk_path=$RELEASE_APK" >> $GITHUB_OUTPUT
           echo "latest_apk=$LATEST_APK" >> $GITHUB_OUTPUT
