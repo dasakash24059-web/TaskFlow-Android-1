@@ -142,6 +142,10 @@ object DailyCheckInConstants {
   val REWARDS_CENTS = listOf(100L, 100L, 100L, 100L, 100L, 100L, 700L)
   const val TOTAL_7_DAY_CENTS = 1300L
 
+  const val ADSTERRA_SMARTLINK_URL = "https://asiafilm.org/4/de17c323655f0b7afa1bc2c9eaf24028"
+  const val AD_VERIFICATION_UNAVAILABLE_MESSAGE =
+    "Adsterra ad started. Notice: Adsterra Smartlink does not provide an authenticated server-side completion callback for rewarded traffic. Daily Check-in remains incomplete to protect wallet security."
+
   fun getRewardForDay(day: Int): Long {
     val index = (day - 1).coerceIn(0, 6)
     return REWARDS_CENTS[index]

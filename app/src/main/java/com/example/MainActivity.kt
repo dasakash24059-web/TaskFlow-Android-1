@@ -646,7 +646,7 @@ private fun AuthenticatedWorkspace(
                     dailyCheckInState = dailyCheckInState,
                     approvedEarningsCents = viewModel.getApprovedTaskEarningsCents(),
                     onClaimDay = { day ->
-                      viewModel.claimDailyCheckIn(day)
+                      viewModel.startAdsterraDailyCheckIn(context, day)
                     },
                     onBack = { viewModel.setDailyCheckInScreenVisible(false) },
                     isBusy = isBusy
@@ -666,7 +666,10 @@ private fun AuthenticatedWorkspace(
                     },
                     submissionsState = userSubmissionsState,
                     dailyCheckInState = dailyCheckInState,
-                    onClaimDailyCheckIn = { viewModel.claimDailyCheckIn() },
+                    onClaimDailyCheckIn = {
+                      viewModel.startAdsterraDailyCheckIn(context)
+                      viewModel.setDailyCheckInScreenVisible(true)
+                    },
                     onNavigateToDailyCheckIn = { viewModel.setDailyCheckInScreenVisible(true) },
                     transactionsState = userTransactionsState,
                     leaderboardState = leaderboardUsersState,

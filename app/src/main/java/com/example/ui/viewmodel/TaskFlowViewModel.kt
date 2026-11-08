@@ -1,5 +1,7 @@
 package com.example.ui.viewmodel
 
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -695,7 +697,14 @@ class TaskFlowViewModel(
   }
 
   fun claimDailyCheckIn(day: Int = 0, onSuccess: (Long) -> Unit = {}) {
-    val profile = (userProfileState.value as? UiState.Success)?.data
+    startAdsterraDailyCheckIn(context = null, day = day, onSuccess = onSuccess)
+  }
+
+  fun startAdsterraDailyCheckIn(
+    context: Context?,
+    day: Int = 0,
+    onSuccess: (Long) -> Unit = {}
+  ) {
     val currentState = dailyCheckInState.value
     val targetStreak = if (day in 1..7) day else currentState.nextClaimDay
 
@@ -725,31 +734,23 @@ class TaskFlowViewModel(
       }
     }
 
-    val rewardCents = DailyCheckInConstants.getRewardForDay(targetStreak)
-    val dateKey = currentState.todayDate
-    val resolvedName =
-      profile?.displayName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
-
-    viewModelScope.launch {
-      _isBusy.value = true
-      repository
-        .claimDailyCheckIn(
-          userId = currentUserId,
-          streakDay = targetStreak,
-          rewardCents = rewardCents,
-          dateKey = dateKey,
-          userName = resolvedName
-        )
-        .onSuccess { claimed ->
-          _bannerMessage.value =
-            "Day $targetStreak reward claimed successfully: ${formatRewardInr(claimed)}"
-          onSuccess(claimed)
-        }
-        .onFailure { err ->
-          _bannerMessage.value = err.localizedMessage ?: "Failed to claim daily check-in reward."
-        }
-      _isBusy.value = false
+    // 1. Direct completion is disabled. Start approved Adsterra advertising flow first.
+    context?.let { ctx ->
+      try {
+        val intent =
+          Intent(Intent.ACTION_VIEW, Uri.parse(DailyCheckInConstants.ADSTERRA_SMARTLINK_URL)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          }
+        ctx.startActivity(intent)
+      } catch (e: Exception) {
+        // Handled gracefully if browser intent cannot be started
+      }
     }
+
+    // 2. Do not mark check-in as complete merely because link opened or user returns.
+    // 3. Since Adsterra Smartlink does not provide an authenticated server-side completion callback for rewarded traffic,
+    // inform the user clearly that verified ad completion is unavailable, keep check-in incomplete, and do not credit rewards.
+    _bannerMessage.value = DailyCheckInConstants.AD_VERIFICATION_UNAVAILABLE_MESSAGE
   }
 
   fun updateUserDisplayNameByAdmin(user: UserProfile, newName: String) {

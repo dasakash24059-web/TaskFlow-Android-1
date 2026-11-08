@@ -430,6 +430,50 @@ fun DedicatedDailyCheckInScreen(
         }
       }
 
+      // 1b. Ad-Gate Verification Notice Card
+      item {
+        Card(
+          shape = RoundedCornerShape(20.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+          modifier = Modifier.fillMaxWidth().testTag("daily_checkin_ad_gate_notice")
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+          ) {
+            Surface(
+              shape = CircleShape,
+              color = Color(0xFFFEF3C7),
+              modifier = Modifier.size(40.dp)
+            ) {
+              Box(contentAlignment = Alignment.Center) {
+                Icon(
+                  imageVector = Icons.Default.Info,
+                  contentDescription = "Ad Gate Notice",
+                  tint = Color(0xFFD97706),
+                  modifier = Modifier.size(22.dp)
+                )
+              }
+            }
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Ad-Gated Daily Rewards",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+              )
+              Spacer(modifier = Modifier.height(2.dp))
+              Text(
+                text = "Tapping claim opens the Adsterra Smartlink. Note: Adsterra Direct Link does not provide server-verified callbacks for rewarded traffic; check-in remains pending without reward credit until verified.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+          }
+        }
+      }
+
       // 2. Day 5 and Day 6 Task Requirement Card (Hidden during Days 1–4, shown specifically when reaching Day 5 or Day 6)
       if (currentStageDay == 5 || currentStageDay == 6) {
         item {

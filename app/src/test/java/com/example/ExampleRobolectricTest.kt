@@ -38,6 +38,7 @@ import com.example.ui.admin.AdminDashboardScreen
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.TaskFlowSplashScreen
 import com.example.ui.theme.TaskFlowTheme
+import com.example.ui.user.DedicatedDailyCheckInScreen
 import com.example.ui.user.UserHomeScreen
 import com.example.ui.user.UserProfileScreen
 import com.example.ui.user.UserTaskDetailScreen
@@ -1267,6 +1268,42 @@ class ExampleRobolectricTest {
     assertTrue(missedDayState.canCheckInToday)
     assertEquals(1, missedDayState.nextClaimDay)
     assertEquals(100L, missedDayState.nextRewardCents)
+  }
+
+  @Test
+  fun `Ad-Gated Daily Check-in disables direct completion and explains unverified Adsterra status`() {
+    runBlocking {
+      assertEquals("https://asiafilm.org/4/de17c323655f0b7afa1bc2c9eaf24028", DailyCheckInConstants.ADSTERRA_SMARTLINK_URL)
+
+      val context = ApplicationProvider.getApplicationContext<Context>()
+      ensureFirebaseInitialized(context)
+      val repository = TaskFlowRepository(FirebaseFirestore.getInstance())
+      val directResult = repository.claimDailyCheckIn(
+        userId = "user_test_ad_gate",
+        streakDay = 1,
+        rewardCents = 100L,
+        dateKey = getTodayDateKey(),
+        userName = "Tester"
+      )
+      assertTrue("Expected direct check-in without verified token to fail", directResult.isFailure)
+      assertTrue(
+        directResult.exceptionOrNull()?.message?.contains("Direct Daily Check-in completion is disabled") == true
+      )
+
+      // DedicatedDailyCheckInScreen displays Ad Gate Notice
+      composeTestRule.setContent {
+        TaskFlowTheme {
+          DedicatedDailyCheckInScreen(
+            dailyCheckInState = DailyCheckInState(canCheckInToday = true, nextClaimDay = 1),
+            approvedEarningsCents = 0L,
+            onClaimDay = {},
+            onBack = {}
+          )
+        }
+      }
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("daily_checkin_ad_gate_notice").assertIsDisplayed()
+    }
   }
 
   @Test
