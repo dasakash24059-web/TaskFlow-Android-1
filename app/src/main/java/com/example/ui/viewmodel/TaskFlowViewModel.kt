@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
+import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DailyCheckInState
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
@@ -13,13 +14,14 @@ import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TransactionRecord
+import com.example.data.model.UpdateDownloadProgress
+import com.example.data.model.UpdateDownloadStatus
 import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethod
 import com.example.data.model.calculateDailyCheckInState
 import com.example.data.model.formatRewardInr
 import com.example.data.model.isValidImageUrlOrDataUri
 import com.example.data.model.isValidTaskUrl
-import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.data.repository.TaskFlowRepository
 import com.example.ui.auth.PortalLoginTarget
@@ -714,21 +716,36 @@ class TaskFlowViewModel(
       return
     }
 
-    // Days 5 and 6 task unlock condition: approved task earnings >= ₹20 (2000 cents)
-    if (targetStreak == 5 || targetStreak == 6) {
-      val approvedEarnings = getApprovedTaskEarningsCents()
-      if (approvedEarnings < 2000L) {
-        val neededFormatted = formatRewardInr(2000L)
-        val currentFormatted = formatRewardInr(approvedEarnings)
-        _bannerMessage.value =
-          "Day $targetStreak is locked: Complete approved tasks worth at least $neededFormatted to unlock (Current: $currentFormatted / $neededFormatted)."
-        return
-      }
+
+    val rewardCents = DailyCheckInConstants.getRewardForDay(targetStreak)
+    val todayKey = com.example.data.model.getTodayDateKey()
+    val uid = currentUserId
+    val name = (userProfileState.value as? UiState.Success)?.data?.displayName ?: "TaskFlow Member"
+
+    if (uid.isBlank()) {
+      _bannerMessage.value = "Please sign in to claim daily check-in rewards."
+      return
     }
 
-    // Direct unverified completion is disabled to protect wallet balance security.
-    // Daily Check-in remains incomplete without authorized ad verification.
-    _bannerMessage.value = DailyCheckInConstants.AD_VERIFICATION_REQUIRED_MESSAGE
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository
+        .claimDailyCheckIn(
+          userId = uid,
+          streakDay = targetStreak,
+          rewardCents = rewardCents,
+          dateKey = todayKey,
+          userName = name
+        )
+        .onSuccess { earned ->
+          _bannerMessage.value = "Success! Day $targetStreak check-in claimed: +${formatRewardInr(earned)}"
+          onSuccess(earned)
+        }
+        .onFailure { error ->
+          _bannerMessage.value = error.localizedMessage ?: "Failed to claim check-in reward."
+        }
+      _isBusy.value = false
+    }
   }
 
   fun updateUserDisplayNameByAdmin(user: UserProfile, newName: String) {
@@ -785,31 +802,88 @@ class TaskFlowViewModel(
     }
   }
 
+  private val _updateDownloadProgress = MutableStateFlow(UpdateDownloadProgress())
+  val updateDownloadProgress: StateFlow<UpdateDownloadProgress> = _updateDownloadProgress.asStateFlow()
+
   fun dismissUpdateDialog(context: android.content.Context) {
     val info = _appUpdateInfo.value ?: return
     val prefs = context.getSharedPreferences("app_update_prefs", android.content.Context.MODE_PRIVATE)
     prefs.edit().putInt("dismissed_update_code", info.versionCode).apply()
     dismissedUpdateCode = info.versionCode
     _showUpdateDialog.value = false
+    _updateDownloadProgress.value = UpdateDownloadProgress()
   }
 
   fun downloadAndInstallUpdate(context: android.content.Context) {
     val info = _appUpdateInfo.value ?: return
-    if (info.apkUrl.isNotBlank()) {
-      val downloadId = com.example.util.AppUpdateManager.downloadAndInstallApk(context, info.apkUrl)
-      if (downloadId > 0L) {
-        _bannerMessage.value = "Downloading update..."
-      } else {
-        _bannerMessage.value = "Failed to start download. Check URL."
-      }
+    val trimmedUrl = info.apkUrl.trim()
+    if (trimmedUrl.isBlank()) {
+      _bannerMessage.value = "Update download URL is missing."
+      return
+    }
+
+    if (!trimmedUrl.lowercase().startsWith("https://")) {
+      _bannerMessage.value = "Insecure download URL: HTTPS is required."
+      return
+    }
+
+    // Prevent duplicate downloads when already downloading or verifying
+    if (_updateDownloadProgress.value.isDownloading || _updateDownloadProgress.value.isVerifying) {
+      _bannerMessage.value = "Download is already in progress..."
+      return
+    }
+
+    _updateDownloadProgress.value = UpdateDownloadProgress(
+      status = UpdateDownloadStatus.DOWNLOADING,
+      progressPercent = 0,
+      statusMessage = "Starting background download..."
+    )
+
+    val downloadId = com.example.util.AppUpdateManager.downloadAndInstallApk(context, trimmedUrl)
+    if (downloadId <= 0L) {
+      _updateDownloadProgress.value = UpdateDownloadProgress(
+        status = UpdateDownloadStatus.FAILED,
+        errorMessage = "Unable to start download. Check storage permissions and network."
+      )
+      _bannerMessage.value = "Failed to start download."
+      return
+    }
+
+    viewModelScope.launch {
+      com.example.util.AppUpdateManager.pollDownloadProgress(
+        context = context,
+        downloadId = downloadId,
+        onProgress = { progress ->
+          _updateDownloadProgress.value = progress
+          if (progress.status == UpdateDownloadStatus.READY_TO_INSTALL) {
+            triggerInstalledApkInstall(context)
+          }
+        }
+      )
     }
   }
 
   fun triggerInstalledApkInstall(context: android.content.Context) {
     val success = com.example.util.AppUpdateManager.installDownloadedApk(context)
     if (!success) {
-      _bannerMessage.value = "Unable to start installation. Please check unknown app sources permission."
+      if (!com.example.util.AppUpdateManager.canRequestPackageInstalls(context)) {
+        _updateDownloadProgress.value = _updateDownloadProgress.value.copy(
+          status = UpdateDownloadStatus.PERMISSION_REQUIRED,
+          statusMessage = "Install permission required. Please allow 'Install unknown apps' in Settings."
+        )
+        _bannerMessage.value = "Please allow installation of unknown apps for TaskFlow in Settings."
+      } else {
+        _bannerMessage.value = "Unable to start installation. Verification or FileProvider error."
+      }
     }
+  }
+
+  fun requestUnknownAppSourcesPermission(context: android.content.Context) {
+    com.example.util.AppUpdateManager.openUnknownAppSourcesSettings(context)
+  }
+
+  fun resetUpdateDownloadProgress() {
+    _updateDownloadProgress.value = UpdateDownloadProgress()
   }
 
   private val _openWithdrawOnWalletNavigation = MutableStateFlow(false)

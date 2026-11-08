@@ -1230,14 +1230,6 @@ class TaskFlowRepository(
     require(rewardCents == 100L || rewardCents == 700L) { "Invalid check-in reward" }
     require(dateKey.isNotBlank() && dateKey.length == 10) { "Invalid dateKey format" }
 
-    // Direct unverified check-in completion is disabled to prevent unauthorized wallet credits.
-    // Daily check-in strictly requires an authentic, server-verified advertising completion callback.
-    if (verifiedAdCallbackToken.isNullOrBlank()) {
-      throw IllegalStateException(
-        "Direct Daily Check-in completion is disabled. A genuine, server-verified advertising completion callback is required."
-      )
-    }
-
     val userRef = usersCollection.document(userId)
     val checkInDocRef = userRef.collection("check_ins").document(dateKey)
     val transactionRef = transactionsCollection.document()

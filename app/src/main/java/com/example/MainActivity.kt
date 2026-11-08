@@ -405,12 +405,20 @@ private fun AuthenticatedWorkspace(
     }
   }
 
+  val downloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
+
   if (showUpdateDialog && updateInfo != null) {
     com.example.ui.components.AppUpdateDialog(
       versionInfo = updateInfo!!,
+      downloadProgress = downloadProgress,
       onUpdateNow = {
-        com.example.util.AppUpdateManager.openDownloadUrl(context, updateInfo!!.apkUrl)
-        viewModel.dismissUpdateDialog(context)
+        viewModel.downloadAndInstallUpdate(context)
+      },
+      onInstallNow = {
+        viewModel.triggerInstalledApkInstall(context)
+      },
+      onOpenSettings = {
+        viewModel.requestUnknownAppSourcesPermission(context)
       },
       onDismiss = {
         viewModel.dismissUpdateDialog(context)

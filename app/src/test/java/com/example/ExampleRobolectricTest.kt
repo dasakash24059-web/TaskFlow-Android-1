@@ -1271,36 +1271,42 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `Ad-Gated Daily Check-in disables direct unverified completion`() {
+  fun `Direct Daily Check-in claims reward directly without advertising requirements`() {
     runBlocking {
       val context = ApplicationProvider.getApplicationContext<Context>()
       ensureFirebaseInitialized(context)
       val repository = TaskFlowRepository(FirebaseFirestore.getInstance())
-      val directResult = repository.claimDailyCheckIn(
-        userId = "user_test_ad_gate",
+      
+      // Input validation test
+      val blankResult = repository.claimDailyCheckIn(
+        userId = "",
         streakDay = 1,
         rewardCents = 100L,
         dateKey = getTodayDateKey(),
         userName = "Tester"
       )
-      assertTrue("Expected direct check-in without verified token to fail", directResult.isFailure)
-      assertTrue(
-        directResult.exceptionOrNull()?.message?.contains("Direct Daily Check-in completion is disabled") == true
-      )
+      assertTrue("Expected blank userId to fail validation", blankResult.isFailure)
 
-      // DedicatedDailyCheckInScreen displays Ad Gate Notice
+      var claimedDay = 0
+      // DedicatedDailyCheckInScreen allows direct claim
       composeTestRule.setContent {
         TaskFlowTheme {
           DedicatedDailyCheckInScreen(
             dailyCheckInState = DailyCheckInState(canCheckInToday = true, nextClaimDay = 1),
             approvedEarningsCents = 0L,
-            onClaimDay = {},
+            onClaimDay = { day -> claimedDay = day },
             onBack = {}
           )
         }
       }
       composeTestRule.waitForIdle()
-      composeTestRule.onNodeWithTag("daily_checkin_ad_gate_notice").assertIsDisplayed()
+      // Ad gate notice should no longer exist
+      composeTestRule.onNodeWithTag("daily_checkin_ad_gate_notice").assertDoesNotExist()
+      // Day 1 claim button should be visible and clickable directly
+      composeTestRule.onNodeWithTag("claim_daily_checkin_button")
+        .assertIsDisplayed()
+        .performClick()
+      assertEquals(1, claimedDay)
     }
   }
 
@@ -1601,6 +1607,77 @@ class ExampleRobolectricTest {
       e.printStackTrace()
       throw e
     }
+  }
+
+  @Test
+  fun `AppUpdateDialog displays download progress, percentage, verifying, and install now button`() {
+    val versionInfo = AppVersionInfo(
+      versionCode = 10,
+      versionName = "2.5.0",
+      apkUrl = "https://example.com/TaskFlow_Update.apk",
+      releaseNotes = "Automated in-app updates with FileProvider installer",
+      forceUpdate = false
+    )
+
+    val downloadingProgress = com.example.data.model.UpdateDownloadProgress(
+      status = com.example.data.model.UpdateDownloadStatus.DOWNLOADING,
+      progressPercent = 65,
+      bytesDownloaded = 15 * 1024 * 1024L,
+      totalBytes = 23 * 1024 * 1024L,
+      statusMessage = "Downloading TaskFlow update (65%)..."
+    )
+
+    var installClicked = false
+    val currentProgress = androidx.compose.runtime.mutableStateOf(downloadingProgress)
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        com.example.ui.components.AppUpdateDialog(
+          versionInfo = versionInfo,
+          downloadProgress = currentProgress.value,
+          onUpdateNow = {},
+          onInstallNow = { installClicked = true },
+          onDismiss = {}
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("update_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Downloading Update...").assertIsDisplayed()
+    composeTestRule.onNodeWithText("65%").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Downloading TaskFlow update (65%)...").assertIsDisplayed()
+
+    // Transition state to Ready to Install
+    currentProgress.value = com.example.data.model.UpdateDownloadProgress(
+      status = com.example.data.model.UpdateDownloadStatus.READY_TO_INSTALL,
+      progressPercent = 100,
+      statusMessage = "Update verified successfully! Ready to install."
+    )
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("Update Ready to Install").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Update verified successfully! Ready to install.").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("install_now_button").assertIsDisplayed().performClick()
+    assertTrue(installClicked)
+  }
+
+  @Test
+  fun `AppUpdateManager validateDownloadedApk and URL security checks`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+
+    // Insecure HTTP URL must be rejected
+    val insecureResult = AppUpdateManager.downloadAndInstallApk(context, "http://example.com/update.apk")
+    assertEquals(-1L, insecureResult)
+
+    // Empty URL must be rejected
+    val emptyResult = AppUpdateManager.downloadAndInstallApk(context, "")
+    assertEquals(-1L, emptyResult)
+
+    // Non-existent APK file must be rejected by validation
+    val dummyFile = java.io.File(context.cacheDir, "non_existent_update.apk")
+    val validationResult = AppUpdateManager.validateDownloadedApk(context, dummyFile)
+    assertTrue("Non-existent APK must fail validation", validationResult is com.example.util.ApkValidationResult.Invalid)
   }
 }
 

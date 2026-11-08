@@ -19,17 +19,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -111,42 +115,8 @@ fun DedicatedDailyCheckInScreen(
   }
 
   val currentStageDay = dailyCheckInState.nextClaimDay
-  var showRequirementPopup by remember(currentStageDay) {
-    mutableStateOf((currentStageDay == 5 || currentStageDay == 6) && !isTaskRequirementMet)
-  }
 
-  if ((currentStageDay == 5 || currentStageDay == 6) && !isTaskRequirementMet && showRequirementPopup) {
-    androidx.compose.material3.AlertDialog(
-      onDismissRequest = { showRequirementPopup = false },
-      icon = {
-        Icon(
-          imageVector = Icons.Default.Info,
-          contentDescription = null,
-          tint = Color(0xFFDC2626),
-          modifier = Modifier.size(28.dp)
-        )
-      },
-      title = {
-        Text(
-          text = if (currentStageDay == 5) "Day 5 Requirement" else "Day 6 Requirement",
-          fontWeight = FontWeight.Bold,
-          textAlign = TextAlign.Center
-        )
-      },
-      text = {
-        Text(
-          text = "Complete ₹20 in eligible tasks and wait for approval to unlock today's Daily Check-in reward.",
-          style = MaterialTheme.typography.bodyMedium,
-          textAlign = TextAlign.Center
-        )
-      },
-      confirmButton = {
-        Button(onClick = { showRequirementPopup = false }) {
-          Text("Got it")
-        }
-      }
-    )
-  }
+
 
   Scaffold(
     topBar = {
@@ -430,49 +400,6 @@ fun DedicatedDailyCheckInScreen(
         }
       }
 
-      // 1b. Ad-Gate Verification Notice Card
-      item {
-        Card(
-          shape = RoundedCornerShape(20.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-          modifier = Modifier.fillMaxWidth().testTag("daily_checkin_ad_gate_notice")
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-          ) {
-            Surface(
-              shape = CircleShape,
-              color = Color(0xFFFEF3C7),
-              modifier = Modifier.size(40.dp)
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                Icon(
-                  imageVector = Icons.Default.Info,
-                  contentDescription = "Ad Gate Notice",
-                  tint = Color(0xFFD97706),
-                  modifier = Modifier.size(22.dp)
-                )
-              }
-            }
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = "Ad-Gated Daily Rewards",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
-              )
-              Spacer(modifier = Modifier.height(2.dp))
-              Text(
-                text = "Daily check-in requires a verified advertisement completion. Direct unverified claims are disabled to protect wallet balance security.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-              )
-            }
-          }
-        }
-      }
 
       // 2. Day 5 and Day 6 Task Requirement Card (Hidden during Days 1–4, shown specifically when reaching Day 5 or Day 6)
       if (currentStageDay == 5 || currentStageDay == 6) {
@@ -585,8 +512,8 @@ fun DedicatedDailyCheckInScreen(
             day < dailyCheckInState.nextClaimDay
           }
         val isCurrent = dailyCheckInState.canCheckInToday && day == dailyCheckInState.nextClaimDay
-        val isDayTaskLocked = isDay5or6 && !isTaskRequirementMet
-        val isAvailable = isCurrent && !isDayTaskLocked
+        val isDayTaskLocked = false
+        val isAvailable = isCurrent
 
         item(key = "day_card_$day") {
           IndividualDayCard(
@@ -599,7 +526,9 @@ fun DedicatedDailyCheckInScreen(
             canCheckInToday = dailyCheckInState.canCheckInToday,
             nextClaimDay = dailyCheckInState.nextClaimDay,
             isBusy = isBusy,
-            onClaimClicked = { onClaimDay(day) }
+            onClaimClicked = {
+              onClaimDay(day)
+            }
           )
         }
       }
@@ -781,7 +710,7 @@ private fun IndividualDayCard(
           val explanation =
             when {
               isClaimed -> "Reward credited to wallet"
-              isAvailable -> "Ready to claim today!"
+              isAvailable -> "Pending advertisement completion"
               isDayTaskLocked -> "Requires ₹20 in approved tasks"
               day == nextClaimDay && !canCheckInToday -> "Unlocks tomorrow"
               else -> "Locked (Complete previous days)"
@@ -790,10 +719,10 @@ private fun IndividualDayCard(
             text = explanation,
             style = MaterialTheme.typography.labelSmall,
             color =
-              if (isDayTaskLocked) {
-                Color(0xFFDC2626)
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
+              when {
+                isDayTaskLocked -> Color(0xFFDC2626)
+                isAvailable -> Color(0xFFB45309)
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
               }
           )
         }
@@ -806,7 +735,7 @@ private fun IndividualDayCard(
         shape = RoundedCornerShape(12.dp),
         colors =
           ButtonDefaults.buttonColors(
-            containerColor = if (isDay7Bonus) Color(0xFFD97706) else Color(0xFF2563EB),
+            containerColor = if (isDay7Bonus) Color(0xFFD97706) else Color(0xFFF59E0B),
             disabledContainerColor =
               if (isClaimed) Color(0xFFD1FAE5) else MaterialTheme.colorScheme.surfaceVariant,
             disabledContentColor =
@@ -838,4 +767,114 @@ private fun IndividualDayCard(
       }
     }
   }
+}
+
+/**
+ * Explains that Daily Check-in is pending advertisement completion before rewards can be credited.
+ */
+@Composable
+fun DailyCheckInPendingDialog(
+  streakDay: Int,
+  rewardCents: Long,
+  onDismiss: () -> Unit
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    icon = {
+      Surface(
+        shape = CircleShape,
+        color = Color(0xFFFEF3C7),
+        modifier = Modifier.size(54.dp)
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.HourglassEmpty,
+            contentDescription = null,
+            tint = Color(0xFFD97706),
+            modifier = Modifier.size(30.dp)
+          )
+        }
+      }
+    },
+    title = {
+      Text(
+        text = "Daily Check-in is Pending",
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center
+      )
+    },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        Surface(
+          shape = RoundedCornerShape(16.dp),
+          color = Color(0xFFFFFBEB),
+          border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFDE68A)),
+          modifier = Modifier.fillMaxWidth()
+        ) {
+          Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              Text(
+                text = "Day $streakDay Reward:",
+                style = MaterialTheme.typography.labelLarge,
+                color = Color(0xFF92400E)
+              )
+              Text(
+                text = formatRewardInr(rewardCents),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFFB45309)
+              )
+            }
+            Text(
+              text = "Advertisement completion is required after which rewards can be credited.",
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = Color(0xFF78350F)
+            )
+          }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          Text(
+            text = "Important Information:",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+          )
+          Text(
+            text = "• To protect wallet balance security, rewards cannot be credited directly without genuine advertisement verification.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+          Text(
+            text = "• The unverified ad integration has been removed, and verified ad campaigns will open automatically once connected.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+          Text(
+            text = "• Your streak progress is fully preserved and safe.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+        modifier = Modifier.testTag("dismiss_pending_dialog_button")
+      ) {
+        Text("Understood", fontWeight = FontWeight.Bold)
+      }
+    }
+  )
 }

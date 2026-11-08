@@ -143,7 +143,7 @@ object DailyCheckInConstants {
   const val TOTAL_7_DAY_CENTS = 1300L
 
   const val AD_VERIFICATION_REQUIRED_MESSAGE =
-    "Daily Check-in is pending. A verified advertisement completion is required before rewards can be credited."
+    "Daily Check-in is pending. Advertisement completion is required after which rewards can be credited."
 
   fun getRewardForDay(day: Int): Long {
     val index = (day - 1).coerceIn(0, 6)
@@ -390,4 +390,36 @@ data class AppVersionInfo(
   val releaseNotes: String = "",
   val forceUpdate: Boolean = false
 )
+
+enum class UpdateDownloadStatus {
+  IDLE,
+  DOWNLOADING,
+  VERIFYING,
+  READY_TO_INSTALL,
+  PERMISSION_REQUIRED,
+  FAILED
+}
+
+data class UpdateDownloadProgress(
+  val status: UpdateDownloadStatus = UpdateDownloadStatus.IDLE,
+  val progressPercent: Int = 0,
+  val bytesDownloaded: Long = 0L,
+  val totalBytes: Long = 0L,
+  val statusMessage: String = "",
+  val errorMessage: String? = null
+) {
+  val isDownloading: Boolean get() = status == UpdateDownloadStatus.DOWNLOADING
+  val isVerifying: Boolean get() = status == UpdateDownloadStatus.VERIFYING
+  val isReadyToInstall: Boolean get() = status == UpdateDownloadStatus.READY_TO_INSTALL
+  val isPermissionRequired: Boolean get() = status == UpdateDownloadStatus.PERMISSION_REQUIRED
+  val hasFailed: Boolean get() = status == UpdateDownloadStatus.FAILED
+
+  fun getFormattedSize(): String {
+    if (totalBytes <= 0L) return ""
+    val mbDownloaded = bytesDownloaded / (1024.0 * 1024.0)
+    val mbTotal = totalBytes / (1024.0 * 1024.0)
+    return String.format(Locale.US, "%.1f MB / %.1f MB", mbDownloaded, mbTotal)
+  }
+}
+
 

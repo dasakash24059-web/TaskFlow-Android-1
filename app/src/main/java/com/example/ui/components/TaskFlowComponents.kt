@@ -50,7 +50,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -747,11 +749,20 @@ private fun ConfigSection(title: String, body: String) {
 fun AppUpdateDialog(
   versionInfo: com.example.data.model.AppVersionInfo,
   onUpdateNow: () -> Unit,
-  onDismiss: () -> Unit
+  onDismiss: () -> Unit,
+  downloadProgress: com.example.data.model.UpdateDownloadProgress? = null,
+  onInstallNow: (() -> Unit)? = null,
+  onOpenSettings: (() -> Unit)? = null
 ) {
+  val isDownloading = downloadProgress?.isDownloading == true
+  val isVerifying = downloadProgress?.isVerifying == true
+  val isReadyToInstall = downloadProgress?.isReadyToInstall == true
+  val isPermissionRequired = downloadProgress?.isPermissionRequired == true
+  val hasFailed = downloadProgress?.hasFailed == true
+
   AlertDialog(
     onDismissRequest = {
-      if (!versionInfo.forceUpdate) {
+      if (!versionInfo.forceUpdate && !isDownloading && !isVerifying) {
         onDismiss()
       }
     },
@@ -762,11 +773,30 @@ fun AppUpdateDialog(
         horizontalArrangement = Arrangement.spacedBy(10.dp)
       ) {
         Icon(
-          imageVector = Icons.Default.Info,
-          contentDescription = "New Update",
-          tint = MaterialTheme.colorScheme.primary
+          imageVector = when {
+            hasFailed -> Icons.Default.Cancel
+            isReadyToInstall -> Icons.Default.CheckCircle
+            isDownloading || isVerifying -> Icons.Default.HourglassEmpty
+            else -> Icons.Default.Info
+          },
+          contentDescription = "Update Status",
+          tint = when {
+            hasFailed -> MaterialTheme.colorScheme.error
+            isReadyToInstall -> Color(0xFF059669)
+            isDownloading || isVerifying -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.colorScheme.primary
+          }
         )
-        Text(text = "New Update Available")
+        Text(
+          text = when {
+            isDownloading -> "Downloading Update..."
+            isVerifying -> "Verifying Update..."
+            isReadyToInstall -> "Update Ready to Install"
+            isPermissionRequired -> "Permission Required"
+            hasFailed -> "Update Download Failed"
+            else -> "New Update Available"
+          }
+        )
       }
     },
     text = {
@@ -796,6 +826,80 @@ fun AppUpdateDialog(
           )
         }
 
+        // Live Download Progress Section
+        if (downloadProgress != null && downloadProgress.status != com.example.data.model.UpdateDownloadStatus.IDLE) {
+          Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = when {
+              hasFailed -> Color(0xFFFEF2F2)
+              isReadyToInstall -> Color(0xFFECFDF5)
+              isPermissionRequired -> Color(0xFFFFFBEB)
+              else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            },
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Column(
+              modifier = Modifier.fillMaxWidth().padding(14.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              if (isDownloading) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Text(
+                    text = "${downloadProgress.progressPercent}%",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                  )
+                  val formattedSize = downloadProgress.getFormattedSize()
+                  if (formattedSize.isNotEmpty()) {
+                    Text(
+                      text = formattedSize,
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                  }
+                }
+                LinearProgressIndicator(
+                  progress = { downloadProgress.progressPercent / 100f },
+                  modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                  color = MaterialTheme.colorScheme.primary
+                )
+              } else if (isVerifying) {
+                LinearProgressIndicator(
+                  modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                  color = MaterialTheme.colorScheme.primary
+                )
+              }
+
+              Text(
+                text = downloadProgress.statusMessage.ifBlank {
+                  downloadProgress.errorMessage ?: ""
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = when {
+                  hasFailed -> MaterialTheme.colorScheme.error
+                  isReadyToInstall -> Color(0xFF047857)
+                  isPermissionRequired -> Color(0xFFB45309)
+                  else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                fontWeight = if (hasFailed || isReadyToInstall) FontWeight.SemiBold else FontWeight.Normal
+              )
+
+              if (isPermissionRequired) {
+                Text(
+                  text = "Android requires explicit authorization to allow TaskFlow to install updates. Tap 'Grant Permission' below to open Settings, enable 'Allow from this source', and return here.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = Color(0xFF78350F)
+                )
+              }
+            }
+          }
+        }
+
         if (versionInfo.forceUpdate) {
           Spacer(modifier = Modifier.height(4.dp))
           Text(
@@ -808,16 +912,70 @@ fun AppUpdateDialog(
       }
     },
     confirmButton = {
-        Button(
-          onClick = onUpdateNow,
-          modifier = Modifier.fillMaxWidth().testTag("update_now_button"),
-          colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-        ) {
-          Text("Update")
+      when {
+        isReadyToInstall -> {
+          Button(
+            onClick = { onInstallNow?.invoke() },
+            modifier = Modifier.fillMaxWidth().testTag("install_now_button"),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
+          ) {
+            Text("Install Now", fontWeight = FontWeight.Bold)
+          }
         }
+        isPermissionRequired -> {
+          Button(
+            onClick = { onOpenSettings?.invoke() },
+            modifier = Modifier.fillMaxWidth().testTag("grant_permission_button"),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706))
+          ) {
+            Text("Grant Permission in Settings", fontWeight = FontWeight.Bold)
+          }
+        }
+        isDownloading || isVerifying -> {
+          Button(
+            onClick = {},
+            enabled = false,
+            modifier = Modifier.fillMaxWidth().testTag("update_now_button"),
+            colors = ButtonDefaults.buttonColors(
+              disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+              disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary
+              )
+              Text(if (isVerifying) "Verifying APK..." else "Downloading (${downloadProgress.progressPercent}%)...")
+            }
+          }
+        }
+        hasFailed -> {
+          Button(
+            onClick = onUpdateNow,
+            modifier = Modifier.fillMaxWidth().testTag("update_now_button"),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+          ) {
+            Text("Retry Update")
+          }
+        }
+        else -> {
+          Button(
+            onClick = onUpdateNow,
+            modifier = Modifier.fillMaxWidth().testTag("update_now_button"),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+          ) {
+            Text("Update")
+          }
+        }
+      }
     },
     dismissButton = {
-      if (!versionInfo.forceUpdate) {
+      if (!versionInfo.forceUpdate && !isDownloading && !isVerifying) {
         TextButton(
           onClick = onDismiss,
           modifier = Modifier.testTag("later_update_button")
