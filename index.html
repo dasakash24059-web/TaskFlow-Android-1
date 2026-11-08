@@ -1,0 +1,2036 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="TaskFlow - Complete Tasks, Track Progress, and Earn Rewards on Android. Download the official TaskFlow APK.">
+  <meta name="theme-color" content="#0d0b1d">
+  <title>TaskFlow - Complete Tasks. Track Progress. Earn Rewards.</title>
+  
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    /* ==========================================================================
+       TaskFlow Modern Landing Page Styles
+       Brand Palette: Deep Navy/Violet, Vibrant Indigo, Amber Gold & Emerald
+       ========================================================================== */
+    :root {
+      --bg-dark: #0a0818;
+      --bg-card: rgba(22, 17, 44, 0.7);
+      --bg-card-hover: rgba(32, 25, 62, 0.85);
+      --bg-glass: rgba(255, 255, 255, 0.04);
+      --border-glass: rgba(255, 255, 255, 0.08);
+      --border-accent: rgba(139, 92, 246, 0.35);
+
+      --color-primary: #7c3aed;
+      --color-primary-light: #9061f9;
+      --color-primary-glow: rgba(124, 58, 237, 0.35);
+      --color-accent-amber: #f59e0b;
+      --color-accent-gold: #fbbf24;
+      --color-accent-cyan: #06b6d4;
+      --color-success: #10b981;
+      
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      
+      --font-heading: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
+      --radius-xl: 28px;
+      --radius-full: 9999px;
+
+      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+      --shadow-md: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+      --shadow-glow: 0 0 40px rgba(124, 58, 237, 0.25);
+      --shadow-amber: 0 0 30px rgba(245, 158, 11, 0.2);
+
+      --transition-fast: 0.2s ease;
+      --transition-normal: 0.3s ease;
+      --transition-spring: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* Reset & Base */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      font-size: 16px;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: var(--font-body);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      min-height: 100vh;
+      line-height: 1.6;
+      overflow-x: hidden;
+      background: radial-gradient(circle at 15% 15%, #181033 0%, transparent 45%),
+                  radial-gradient(circle at 85% 60%, #150d30 0%, transparent 40%),
+                  radial-gradient(circle at 50% 90%, #100b26 0%, transparent 50%),
+                  var(--bg-dark);
+      background-attachment: fixed;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+
+    /* ==========================================================================
+       Header & Navigation
+       ========================================================================== */
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      background: rgba(10, 8, 24, 0.8);
+      border-bottom: 1px solid var(--border-glass);
+      transition: all var(--transition-normal);
+    }
+
+    .nav-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 72px;
+    }
+
+    .brand-logo {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      font-family: var(--font-heading);
+      font-size: 1.45rem;
+      font-weight: 700;
+      color: var(--text-main);
+      letter-spacing: -0.02em;
+    }
+
+    .brand-logo-img {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius-md);
+      object-fit: cover;
+      box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35);
+      border: 1.5px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .brand-logo-text span {
+      background: linear-gradient(135deg, #a78bfa 0%, #fbbf24 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      list-style: none;
+    }
+
+    .nav-link {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      transition: color var(--transition-fast);
+      position: relative;
+    }
+
+    .nav-link:hover {
+      color: var(--text-main);
+    }
+
+    .nav-link::after {
+      content: '';
+      position: absolute;
+      bottom: -6px;
+      left: 0;
+      width: 0;
+      height: 2px;
+      background: var(--color-primary-light);
+      transition: width var(--transition-normal);
+    }
+
+    .nav-link:hover::after {
+      width: 100%;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .btn-nav-download {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+      color: #ffffff;
+      padding: 0.6rem 1.25rem;
+      border-radius: var(--radius-full);
+      font-size: 0.875rem;
+      font-weight: 600;
+      box-shadow: 0 4px 15px rgba(124, 58, 237, 0.4);
+      transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .btn-nav-download:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(124, 58, 237, 0.6);
+    }
+
+    .mobile-menu-btn {
+      display: none;
+      background: transparent;
+      border: none;
+      color: var(--text-main);
+      cursor: pointer;
+      padding: 0.5rem;
+    }
+
+    /* ==========================================================================
+       Hero Section
+       ========================================================================== */
+    .hero-section {
+      padding: 5rem 0 4rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 3.5rem;
+      align-items: center;
+    }
+
+    .hero-content {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .badge-pill {
+      align-self: flex-start;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(124, 58, 237, 0.15);
+      border: 1px solid rgba(139, 92, 246, 0.35);
+      padding: 0.4rem 1rem;
+      border-radius: var(--radius-full);
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #c4b5fd;
+    }
+
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--color-success);
+      box-shadow: 0 0 10px var(--color-success);
+    }
+
+    .hero-title {
+      font-family: var(--font-heading);
+      font-size: clamp(2.4rem, 5vw, 3.75rem);
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.03em;
+      color: #ffffff;
+    }
+
+    .hero-title .gradient-text {
+      background: linear-gradient(135deg, #a78bfa 10%, #fbbf24 60%, #f59e0b 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-tagline {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #e2e8f0;
+      letter-spacing: -0.01em;
+    }
+
+    .hero-description {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      max-width: 540px;
+      line-height: 1.7;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1.25rem;
+      margin-top: 0.5rem;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.85rem;
+      background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
+      color: #ffffff;
+      padding: 0.95rem 1.85rem;
+      border-radius: var(--radius-lg);
+      font-size: 1.05rem;
+      font-weight: 700;
+      box-shadow: 0 10px 25px -5px rgba(124, 58, 237, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      transition: all var(--transition-normal);
+      cursor: pointer;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 15px 35px -5px rgba(124, 58, 237, 0.7);
+    }
+
+    .btn-primary svg {
+      transition: transform var(--transition-fast);
+    }
+
+    .btn-primary:hover svg {
+      transform: translateY(2px);
+    }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.65rem;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-main);
+      padding: 0.95rem 1.65rem;
+      border-radius: var(--radius-lg);
+      font-size: 1rem;
+      font-weight: 600;
+      border: 1px solid var(--border-glass);
+      transition: all var(--transition-fast);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+
+    .hero-meta {
+      display: flex;
+      align-items: center;
+      gap: 1.75rem;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      margin-top: 0.5rem;
+    }
+
+    .hero-meta-item {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .hero-meta-item svg {
+      color: var(--color-primary-light);
+    }
+
+    /* Hero Visual / Mockup */
+    .hero-visual {
+      position: relative;
+      display: flex;
+      justify-content: center;
+    }
+
+    .mockup-container {
+      position: relative;
+      width: 100%;
+      max-width: 380px;
+      perspective: 1000px;
+    }
+
+    .phone-card {
+      background: linear-gradient(180deg, #181236 0%, #110d28 100%);
+      border: 2px solid rgba(139, 92, 246, 0.3);
+      border-radius: 36px;
+      padding: 1.25rem;
+      box-shadow: var(--shadow-glow), 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      position: relative;
+    }
+
+    .phone-speaker {
+      width: 60px;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: var(--radius-full);
+      margin: 0.25rem auto 0.5rem;
+    }
+
+    .phone-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border-glass);
+    }
+
+    .user-mini-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .user-avatar-mini {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #7c3aed, #fbbf24);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.85rem;
+      color: #fff;
+    }
+
+    .user-text-mini {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .user-name-mini {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .user-status-mini {
+      font-size: 0.7rem;
+      color: var(--color-success);
+    }
+
+    .balance-badge-mini {
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      padding: 0.35rem 0.75rem;
+      border-radius: var(--radius-full);
+      color: #fbbf24;
+      font-size: 0.85rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    /* Dual Action Cards from app */
+    .mockup-dual-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .mockup-action-card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: var(--radius-lg);
+      padding: 1rem 0.75rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 0.5rem;
+    }
+
+    .mockup-action-card.checkin {
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(217, 119, 6, 0.05) 100%);
+      border-color: rgba(245, 158, 11, 0.3);
+    }
+
+    .mockup-action-card.earn {
+      background: linear-gradient(135deg, rgba(124, 58, 237, 0.15) 0%, rgba(99, 102, 241, 0.05) 100%);
+      border-color: rgba(139, 92, 246, 0.35);
+    }
+
+    .mockup-card-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+    }
+
+    .checkin .mockup-card-icon {
+      background: rgba(245, 158, 11, 0.2);
+      color: #fbbf24;
+    }
+
+    .earn .mockup-card-icon {
+      background: rgba(124, 58, 237, 0.25);
+      color: #c4b5fd;
+    }
+
+    .mockup-card-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .mockup-pill {
+      font-size: 0.725rem;
+      font-weight: 600;
+      padding: 0.2rem 0.5rem;
+      border-radius: var(--radius-full);
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+    }
+
+    /* Mockup Task Item */
+    .mockup-task-item {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-glass);
+      border-radius: var(--radius-md);
+      padding: 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .mockup-task-left {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+
+    .task-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--color-primary-light);
+    }
+
+    .task-meta-text {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .task-meta-sub {
+      font-size: 0.68rem;
+      color: var(--text-dim);
+    }
+
+    .task-reward-badge {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #34d399;
+      background: rgba(16, 185, 129, 0.15);
+      padding: 0.2rem 0.5rem;
+      border-radius: var(--radius-sm);
+    }
+
+    /* Floating Decorative Elements */
+    .floating-card-1 {
+      position: absolute;
+      top: -15px;
+      right: -25px;
+      background: rgba(26, 20, 52, 0.95);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      padding: 0.6rem 1rem;
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-amber);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #fbbf24;
+      animation: float 4s ease-in-out infinite;
+    }
+
+    .floating-card-2 {
+      position: absolute;
+      bottom: -15px;
+      left: -25px;
+      background: rgba(26, 20, 52, 0.95);
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      padding: 0.6rem 1rem;
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-glow);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #c4b5fd;
+      animation: float 4s ease-in-out infinite 2s;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-8px); }
+    }
+
+    /* ==========================================================================
+       Features Section
+       ========================================================================== */
+    .section {
+      padding: 5.5rem 0;
+      position: relative;
+    }
+
+    .section-header {
+      text-align: center;
+      max-width: 680px;
+      margin: 0 auto 3.5rem;
+    }
+
+    .section-subtitle {
+      font-size: 0.875rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--color-primary-light);
+      margin-bottom: 0.75rem;
+      display: inline-block;
+    }
+
+    .section-title {
+      font-family: var(--font-heading);
+      font-size: clamp(2rem, 3.5vw, 2.75rem);
+      font-weight: 700;
+      color: #ffffff;
+      line-height: 1.25;
+      letter-spacing: -0.02em;
+      margin-bottom: 1rem;
+    }
+
+    .section-desc {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.75rem;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-glass);
+      border-radius: var(--radius-xl);
+      padding: 2rem 1.75rem;
+      transition: all var(--transition-normal);
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 3px;
+      background: linear-gradient(90deg, transparent, var(--color-primary-light), transparent);
+      opacity: 0;
+      transition: opacity var(--transition-normal);
+    }
+
+    .feature-card:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-accent);
+      transform: translateY(-6px);
+      box-shadow: var(--shadow-glow);
+    }
+
+    .feature-card:hover::before {
+      opacity: 1;
+    }
+
+    .feature-icon-wrapper {
+      width: 56px;
+      height: 56px;
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 0.5rem;
+      transition: transform var(--transition-normal);
+    }
+
+    .feature-card:hover .feature-icon-wrapper {
+      transform: scale(1.08);
+    }
+
+    .icon-violet {
+      background: rgba(124, 58, 237, 0.2);
+      color: #a78bfa;
+      border: 1px solid rgba(139, 92, 246, 0.35);
+    }
+
+    .icon-amber {
+      background: rgba(245, 158, 11, 0.2);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.35);
+    }
+
+    .icon-cyan {
+      background: rgba(6, 182, 212, 0.2);
+      color: #38bdf8;
+      border: 1px solid rgba(6, 182, 212, 0.35);
+    }
+
+    .icon-emerald {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+
+    .feature-title {
+      font-family: var(--font-heading);
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #ffffff;
+    }
+
+    .feature-text {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* ==========================================================================
+       How It Works Section
+       ========================================================================== */
+    .how-it-works-section {
+      background: linear-gradient(180deg, rgba(16, 11, 38, 0.5) 0%, rgba(10, 8, 24, 0.8) 100%);
+      border-top: 1px solid var(--border-glass);
+      border-bottom: 1px solid var(--border-glass);
+    }
+
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1.5rem;
+      position: relative;
+    }
+
+    .step-card {
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid var(--border-glass);
+      border-radius: var(--radius-xl);
+      padding: 2.25rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.15rem;
+      position: relative;
+      transition: all var(--transition-normal);
+    }
+
+    .step-card:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--border-accent);
+      transform: translateY(-4px);
+    }
+
+    .step-number {
+      font-family: var(--font-heading);
+      font-size: 1.75rem;
+      font-weight: 800;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, rgba(124, 58, 237, 0.3), rgba(245, 158, 11, 0.2));
+      border: 1.5px solid rgba(255, 255, 255, 0.2);
+      color: #ffffff;
+    }
+
+    .step-title {
+      font-family: var(--font-heading);
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #ffffff;
+    }
+
+    .step-text {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* ==========================================================================
+       Download Section
+       ========================================================================== */
+    .download-section {
+      padding: 6rem 0;
+      position: relative;
+    }
+
+    .download-box {
+      background: linear-gradient(135deg, rgba(32, 22, 68, 0.85) 0%, rgba(18, 13, 40, 0.95) 100%);
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      border-radius: var(--radius-xl);
+      padding: 3.5rem 2.5rem;
+      box-shadow: var(--shadow-glow);
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 3rem;
+      align-items: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .download-box::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -20%;
+      width: 400px;
+      height: 400px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(124, 58, 237, 0.25) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .download-info {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .download-title {
+      font-family: var(--font-heading);
+      font-size: clamp(2rem, 3.2vw, 2.6rem);
+      font-weight: 800;
+      color: #ffffff;
+      line-height: 1.2;
+    }
+
+    .download-desc {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+
+    .download-actions-group {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      margin-top: 0.5rem;
+    }
+
+    .btn-download-large {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: #ffffff;
+      padding: 1.1rem 2.25rem;
+      border-radius: var(--radius-lg);
+      font-size: 1.15rem;
+      font-weight: 700;
+      box-shadow: 0 10px 25px -5px rgba(16, 185, 129, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      transition: all var(--transition-normal);
+      cursor: pointer;
+      width: fit-content;
+    }
+
+    .btn-download-large:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 15px 35px -5px rgba(16, 185, 129, 0.65);
+    }
+
+    .install-notes {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .compatibility-card {
+      background: rgba(10, 8, 24, 0.7);
+      border: 1px solid var(--border-glass);
+      border-radius: var(--radius-lg);
+      padding: 1.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .compat-header {
+      font-family: var(--font-heading);
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border-glass);
+    }
+
+    .compat-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .compat-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.9rem;
+    }
+
+    .compat-label {
+      color: var(--text-muted);
+    }
+
+    .compat-val {
+      font-weight: 600;
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.05);
+      padding: 0.2rem 0.5rem;
+      border-radius: var(--radius-sm);
+    }
+
+    /* ==========================================================================
+       FAQ Accordion Section
+       ========================================================================== */
+    .faq-container {
+      max-width: 800px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .faq-item {
+      background: var(--bg-card);
+      border: 1px solid var(--border-glass);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      transition: all var(--transition-fast);
+    }
+
+    .faq-item:hover {
+      border-color: var(--border-accent);
+    }
+
+    .faq-question {
+      width: 100%;
+      padding: 1.25rem 1.5rem;
+      background: transparent;
+      border: none;
+      color: var(--text-main);
+      font-family: var(--font-heading);
+      font-size: 1.05rem;
+      font-weight: 600;
+      text-align: left;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+    }
+
+    .faq-icon {
+      font-size: 1.25rem;
+      transition: transform var(--transition-fast);
+      color: var(--color-primary-light);
+    }
+
+    .faq-answer {
+      display: none;
+      padding: 0 1.5rem 1.25rem;
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .faq-item.active .faq-answer {
+      display: block;
+    }
+
+    .faq-item.active .faq-icon {
+      transform: rotate(45deg);
+    }
+
+    /* ==========================================================================
+       Footer Section
+       ========================================================================== */
+    .site-footer {
+      background: #080614;
+      border-top: 1px solid var(--border-glass);
+      padding: 4.5rem 0 2rem;
+    }
+
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 1.4fr 0.8fr 0.8fr 1fr;
+      gap: 3rem;
+      margin-bottom: 3.5rem;
+    }
+
+    .footer-col {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .footer-about {
+      font-size: 0.925rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+
+    .footer-heading {
+      font-family: var(--font-heading);
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #ffffff;
+      letter-spacing: -0.01em;
+    }
+
+    .footer-links {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .footer-link {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      transition: color var(--transition-fast);
+      cursor: pointer;
+    }
+
+    .footer-link:hover {
+      color: var(--color-primary-light);
+    }
+
+    .contact-item {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+
+    .footer-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border-glass);
+      font-size: 0.875rem;
+      color: var(--text-dim);
+    }
+
+    .footer-bottom-links {
+      display: flex;
+      gap: 1.5rem;
+    }
+
+    /* ==========================================================================
+       Modals for Terms & Privacy Policy
+       ========================================================================== */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      z-index: 1000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+
+    .modal-backdrop.active {
+      display: flex;
+    }
+
+    .modal-dialog {
+      background: #140f2e;
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      border-radius: var(--radius-xl);
+      max-width: 650px;
+      width: 100%;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+      animation: modalFade 0.3s ease;
+    }
+
+    @keyframes modalFade {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .modal-header {
+      padding: 1.5rem 2rem;
+      border-bottom: 1px solid var(--border-glass);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-title {
+      font-family: var(--font-heading);
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: #ffffff;
+    }
+
+    .modal-close-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.5rem;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0.25rem;
+    }
+
+    .modal-close-btn:hover {
+      color: #ffffff;
+    }
+
+    .modal-body {
+      padding: 1.75rem 2rem;
+      overflow-y: auto;
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      line-height: 1.7;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .modal-body h4 {
+      color: #ffffff;
+      font-family: var(--font-heading);
+      font-size: 1.05rem;
+      margin-top: 0.5rem;
+    }
+
+    .modal-footer {
+      padding: 1.25rem 2rem;
+      border-top: 1px solid var(--border-glass);
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    /* ==========================================================================
+       Responsive Breakpoints
+       ========================================================================== */
+    @media (max-width: 1024px) {
+      .hero-grid {
+        grid-template-columns: 1fr;
+        text-align: center;
+        gap: 3.5rem;
+      }
+      .hero-content {
+        align-items: center;
+      }
+      .hero-actions {
+        justify-content: center;
+      }
+      .hero-meta {
+        justify-content: center;
+      }
+      .badge-pill {
+        align-self: center;
+      }
+      .features-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .steps-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .download-box {
+        grid-template-columns: 1fr;
+        text-align: center;
+        gap: 2.5rem;
+      }
+      .btn-download-large {
+        margin: 0 auto;
+      }
+      .install-notes {
+        justify-content: center;
+      }
+      .footer-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 768px) {
+      .nav-links {
+        display: none;
+      }
+      .mobile-menu-btn {
+        display: block;
+      }
+      .mobile-nav-active .nav-links {
+        display: flex;
+        flex-direction: column;
+        position: absolute;
+        top: 72px;
+        left: 0;
+        right: 0;
+        background: #0f0b24;
+        padding: 1.5rem;
+        border-bottom: 1px solid var(--border-glass);
+        gap: 1.25rem;
+        align-items: flex-start;
+      }
+      .features-grid {
+        grid-template-columns: 1fr;
+      }
+      .steps-grid {
+        grid-template-columns: 1fr;
+      }
+      .footer-grid {
+        grid-template-columns: 1fr;
+      }
+      .footer-bottom {
+        flex-direction: column;
+        gap: 1rem;
+        text-align: center;
+      }
+      .floating-card-1, .floating-card-2 {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ==========================================================================
+       Site Header / Navigation
+       ========================================================================== -->
+  <header class="site-header" id="header">
+    <div class="container nav-wrapper">
+      <a href="#" class="brand-logo" aria-label="TaskFlow Home">
+        <!-- Official TaskFlow Brand Logo -->
+        <img 
+          src="public/assets/aistudio/IMG-20261107-WA0010_2346bc43.jpg" 
+          alt="TaskFlow Official Logo" 
+          class="brand-logo-img"
+          onerror="this.src='https://placehold.co/44x44/1a103c/fbbf24?text=TF'"
+        >
+        <span class="brand-logo-text">Task<span>Flow</span></span>
+      </a>
+
+      <nav aria-label="Main Navigation">
+        <ul class="nav-links" id="navLinks">
+          <li><a href="#features" class="nav-link">Features</a></li>
+          <li><a href="#how-it-works" class="nav-link">How It Works</a></li>
+          <li><a href="#compatibility" class="nav-link">Specs</a></li>
+          <li><a href="#faq" class="nav-link">FAQ</a></li>
+          <li><a href="#download" class="nav-link">Download</a></li>
+        </ul>
+      </nav>
+
+      <div class="header-actions">
+        <a href="#download" class="btn-nav-download" id="headerDownloadBtn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          <span>Get APK</span>
+        </a>
+        <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Toggle Navigation Menu">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ==========================================================================
+         Hero Section
+         ========================================================================== -->
+    <section class="hero-section" id="hero">
+      <div class="container hero-grid">
+        <div class="hero-content">
+          <div class="badge-pill">
+            <span class="badge-dot"></span>
+            <span>Latest Release v2.9 &bull; Direct Check-in Ready</span>
+          </div>
+
+          <h1 class="hero-title">
+            Complete Tasks.<br>
+            <span class="gradient-text">Track Progress.</span><br>
+            Earn Rewards.
+          </h1>
+
+          <p class="hero-tagline">
+            The trusted Android task management and reward discovery application.
+          </p>
+
+          <p class="hero-description">
+            TaskFlow connects everyday users with verified campaigns, structured community tasks, and daily check-ins. Submit real proof, track administrative reviews in real-time, and manage your earnings directly on your Android device.
+          </p>
+
+          <div class="hero-actions">
+            <a href="https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk" class="btn-primary" id="heroDownloadBtn">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <span>Download TaskFlow APK</span>
+            </a>
+            <a href="#how-it-works" class="btn-secondary">
+              <span>How It Works</span>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </a>
+          </div>
+
+          <div class="hero-meta">
+            <div class="hero-meta-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3z"></path>
+              </svg>
+              <span>Verified Package</span>
+            </div>
+            <div class="hero-meta-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M17.523 15.3414c-.5511 0-.9993-.4486-.9993-1.0001s.4482-.9999.9993-.9999c.5511 0 .9997.4484.9997.9999s-.4486 1.0001-.9997 1.0001m-11.046 0c-.5511 0-.9993-.4486-.9993-1.0001s.4482-.9999.9993-.9999c.5511 0 .9997.4484.9997.9999s-.4486 1.0001-.9997 1.0001m11.4045-6.02l1.9967-3.4588a.4162.4162 0 0 0-.1521-.5676.416.416 0 0 0-.568.1523l-2.0223 3.503C15.5898 8.4384 13.8566 8.166 12 8.166s-3.5898.2724-5.1358.7843L4.8419 5.4473a.4158.4158 0 0 0-.568-.1523.416.416 0 0 0-.1521.5676l1.9967 3.4588C2.688 11.238 0 15.228 0 19.834h24c0-4.606-2.688-8.596-6.1185-10.5126"/>
+              </svg>
+              <span>Android 7.0+</span>
+            </div>
+            <div class="hero-meta-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+              </svg>
+              <span>Direct INR Rewards</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Phone App Preview Mockup -->
+        <div class="hero-visual">
+          <div class="mockup-container">
+            <!-- Floating Highlights -->
+            <div class="floating-card-1">
+              <span>🔥 Daily Streak Active</span>
+            </div>
+            <div class="floating-card-2">
+              <span>✓ Submission Approved</span>
+            </div>
+
+            <!-- Phone Frame -->
+            <div class="phone-card">
+              <div class="phone-speaker"></div>
+
+              <div class="phone-header">
+                <div class="user-mini-badge">
+                  <div class="user-avatar-mini">TF</div>
+                  <div class="user-text-mini">
+                    <span class="user-name-mini">TaskFlow User</span>
+                    <span class="user-status-mini">● Google Verified</span>
+                  </div>
+                </div>
+                <div class="balance-badge-mini">
+                  <span>₹</span>
+                  <span>245.00</span>
+                </div>
+              </div>
+
+              <!-- Quick Action Row (Check-in & Watch/Earn matching App UI) -->
+              <div class="mockup-dual-grid">
+                <div class="mockup-action-card checkin">
+                  <div class="mockup-card-icon">🔥</div>
+                  <div class="mockup-card-title">Check-in Daily</div>
+                  <div class="mockup-pill">Claimed Today</div>
+                </div>
+                <div class="mockup-action-card earn">
+                  <div class="mockup-card-icon">▶</div>
+                  <div class="mockup-card-title">Watch &amp; Earn</div>
+                  <div class="mockup-pill">Up to ₹25</div>
+                </div>
+              </div>
+
+              <!-- Compact Task Items -->
+              <div class="mockup-task-item">
+                <div class="mockup-task-left">
+                  <div class="task-dot"></div>
+                  <div>
+                    <div class="task-meta-text">Follow Official Social Page</div>
+                    <div class="task-meta-sub">Proof: Screenshot + Profile ID</div>
+                  </div>
+                </div>
+                <div class="task-reward-badge">+₹15</div>
+              </div>
+
+              <div class="mockup-task-item">
+                <div class="mockup-task-left">
+                  <div class="task-dot" style="background:#fbbf24;"></div>
+                  <div>
+                    <div class="task-meta-text">App Feedback &amp; Review</div>
+                    <div class="task-meta-sub">Proof: Rating screenshot</div>
+                  </div>
+                </div>
+                <div class="task-reward-badge">+₹20</div>
+              </div>
+
+              <div class="mockup-task-item">
+                <div class="mockup-task-left">
+                  <div class="task-dot" style="background:#38bdf8;"></div>
+                  <div>
+                    <div class="task-meta-text">Daily Activity Check</div>
+                    <div class="task-meta-sub">Direct one-tap claim</div>
+                  </div>
+                </div>
+                <div class="task-reward-badge">+₹5</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================================
+         Features Section
+         ========================================================================== -->
+    <section class="section" id="features">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-subtitle">Core Capabilities</span>
+          <h2 class="section-title">Designed for Seamless Task Execution &amp; Rewards</h2>
+          <p class="section-desc">
+            Explore the complete feature suite built into the native TaskFlow Android application, providing transparent tracking and verified claims.
+          </p>
+        </div>
+
+        <div class="features-grid">
+          <!-- Feature 1 -->
+          <article class="feature-card">
+            <div class="feature-icon-wrapper icon-violet">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+              </svg>
+            </div>
+            <h3 class="feature-title">Browse Available Tasks</h3>
+            <p class="feature-text">
+              Discover active community tasks with transparent reward values in INR (₹), step-by-step instructions, and target URLs. Filter and pick campaigns matching your interests.
+            </p>
+          </article>
+
+          <!-- Feature 2 -->
+          <article class="feature-card">
+            <div class="feature-icon-wrapper icon-amber">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+            </div>
+            <h3 class="feature-title">Complete Tasks &amp; Submit Proof</h3>
+            <p class="feature-text">
+              Submit proof with a structured modal enforcing both written explanation and screenshot photo evidence to ensure transparent verification for every submission.
+            </p>
+          </article>
+
+          <!-- Feature 3 -->
+          <article class="feature-card">
+            <div class="feature-icon-wrapper icon-cyan">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 14 14"></polyline>
+              </svg>
+            </div>
+            <h3 class="feature-title">Track Submission Status</h3>
+            <p class="feature-text">
+              Real-time submission tracking with distinct status labels: Pending Review, Approved with instant credit, or Rejected with clear admin feedback notes.
+            </p>
+          </article>
+
+          <!-- Feature 4 -->
+          <article class="feature-card">
+            <div class="feature-icon-wrapper icon-emerald">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path>
+              </svg>
+            </div>
+            <h3 class="feature-title">Daily Check-in</h3>
+            <p class="feature-text">
+              Claim daily rewards directly with a single tap. Build a 7-day streak to maximize daily milestone bonuses credited directly into your Available Balance without ads.
+            </p>
+          </article>
+
+          <!-- Feature 5 -->
+          <article class="feature-card">
+            <div class="feature-icon-wrapper icon-violet">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                <circle cx="12" cy="7" r="4"></circle>
+              </svg>
+            </div>
+            <h3 class="feature-title">User Dashboard &amp; Profile</h3>
+            <p class="feature-text">
+              Manage your personal profile, review your Available Balance, inspect Pending Rewards, and view complete ledger transaction histories for total financial clarity.
+            </p>
+          </article>
+
+          <!-- Feature 6 -->
+          <article class="feature-card">
+            <div class="feature-icon-wrapper icon-amber">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="3" y1="9" x2="21" y2="9"></line>
+                <line x1="9" y1="21" x2="9" y2="9"></line>
+              </svg>
+            </div>
+            <h3 class="feature-title">Admin-Managed Tasks</h3>
+            <p class="feature-text">
+              Quality-controlled task campaigns created and audited by authorized admins. Dedicated admin dashboard with user management, proof inspection, and batch handling.
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================================
+         How It Works Section
+         ========================================================================== -->
+    <section class="section how-it-works-section" id="how-it-works">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-subtitle">Workflow</span>
+          <h2 class="section-title">How TaskFlow Works</h2>
+          <p class="section-desc">
+            Four simple steps to get started, complete assignments, and track your verified rewards.
+          </p>
+        </div>
+
+        <div class="steps-grid">
+          <!-- Step 1 -->
+          <div class="step-card">
+            <div class="step-number">1</div>
+            <h3 class="step-title">Sign In Securely</h3>
+            <p class="step-text">
+              Launch TaskFlow on your Android phone and sign in with one tap using your Google Account via official Android Credential Manager.
+            </p>
+          </div>
+
+          <!-- Step 2 -->
+          <div class="step-card">
+            <div class="step-number">2</div>
+            <h3 class="step-title">Choose an Available Task</h3>
+            <p class="step-text">
+              Browse the task catalog on the Home screen. Pick an active campaign, read its requirements, and review the exact reward payout.
+            </p>
+          </div>
+
+          <!-- Step 3 -->
+          <div class="step-card">
+            <div class="step-number">3</div>
+            <h3 class="step-title">Complete &amp; Submit Proof</h3>
+            <p class="step-text">
+              Perform the required task steps. Attach your screenshot proof and enter your verification notes in the proof submission dialog.
+            </p>
+          </div>
+
+          <!-- Step 4 -->
+          <div class="step-card">
+            <div class="step-number">4</div>
+            <h3 class="step-title">Wait for Admin Review</h3>
+            <p class="step-text">
+              Admins review the submitted proof. Once approved, the reward is credited immediately to your balance and logged in your transaction history.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================================
+         Download Section & Specs
+         ========================================================================== -->
+    <section class="download-section" id="download">
+      <div class="container">
+        <div class="download-box">
+          <div class="download-info">
+            <div class="badge-pill">
+              <span class="badge-dot"></span>
+              <span id="versionBadge">Version 2.9 (Build 10)</span>
+            </div>
+
+            <h2 class="download-title">Get TaskFlow for Android Today</h2>
+
+            <p class="download-desc">
+              Download the official, cryptographically signed APK directly to your Android device. Enjoy full native performance, edge-to-edge Material 3 design, and instant cloud sync.
+            </p>
+
+            <div class="download-actions-group">
+              <a href="https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk" class="btn-download-large" id="mainDownloadBtn" download>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span>Download APK File</span>
+              </a>
+
+              <div class="install-notes">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="16" x2="12" y2="12"></line>
+                  <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+                <span>If prompted, tap <em>Settings &rarr; Allow from this source</em> to complete installation.</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Compatibility Specs Card -->
+          <div class="compatibility-card" id="compatibility">
+            <div class="compat-header">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M17.523 15.3414c-.5511 0-.9993-.4486-.9993-1.0001s.4482-.9999.9993-.9999c.5511 0 .9997.4484.9997.9999s-.4486 1.0001-.9997 1.0001m-11.046 0c-.5511 0-.9993-.4486-.9993-1.0001s.4482-.9999.9993-.9999c.5511 0 .9997.4484.9997.9999s-.4486 1.0001-.9997 1.0001m11.4045-6.02l1.9967-3.4588a.4162.4162 0 0 0-.1521-.5676.416.416 0 0 0-.568.1523l-2.0223 3.503C15.5898 8.4384 13.8566 8.166 12 8.166s-3.5898.2724-5.1358.7843L4.8419 5.4473a.4158.4158 0 0 0-.568-.1523.416.416 0 0 0-.1521.5676l1.9967 3.4588C2.688 11.238 0 15.228 0 19.834h24c0-4.606-2.688-8.596-6.1185-10.5126"/>
+              </svg>
+              <span>Verified Android Specifications</span>
+            </div>
+
+            <ul class="compat-list">
+              <li class="compat-item">
+                <span class="compat-label">Current App Version</span>
+                <span class="compat-val" id="specVersion">v2.9 (Code 10)</span>
+              </li>
+              <li class="compat-item">
+                <span class="compat-label">Minimum Android Version</span>
+                <span class="compat-val">Android 7.0 (API 24)</span>
+              </li>
+              <li class="compat-item">
+                <span class="compat-label">Target Android SDK</span>
+                <span class="compat-val">Android 14 / 15 / 16 (API 36)</span>
+              </li>
+              <li class="compat-item">
+                <span class="compat-label">Package Identifier</span>
+                <span class="compat-val" style="font-size: 0.8rem;">com.aistudio.taskflow.kxmpzq</span>
+              </li>
+              <li class="compat-item">
+                <span class="compat-label">Architecture</span>
+                <span class="compat-val">Universal (ARM64, x86_64)</span>
+              </li>
+              <li class="compat-item">
+                <span class="compat-label">Security &amp; Auth</span>
+                <span class="compat-val">Google Identity &bull; Firebase</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================================
+         FAQ Section
+         ========================================================================== -->
+    <section class="section" id="faq">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-subtitle">Questions &amp; Answers</span>
+          <h2 class="section-title">Frequently Asked Questions</h2>
+          <p class="section-desc">
+            Find answers to common questions about installing TaskFlow, completing tasks, and claiming daily check-in rewards.
+          </p>
+        </div>
+
+        <div class="faq-container">
+          <div class="faq-item">
+            <button class="faq-question">
+              <span>How do I install the downloaded TaskFlow APK?</span>
+              <span class="faq-icon">+</span>
+            </button>
+            <div class="faq-answer">
+              After downloading the APK file, tap on the completed download notification or open your device's Files/Downloads folder. When prompted by Android to install unknown apps, select "Settings", toggle on "Allow from this source", and return to complete the installation.
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question">
+              <span>Do I need to watch advertisements for Daily Check-in?</span>
+              <span class="faq-icon">+</span>
+            </button>
+            <div class="faq-answer">
+              No. In TaskFlow v2.9, Daily Check-in is a direct one-tap claim. As long as you have not already claimed today's reward, simply tap the Check-in button and your reward credits directly to your Available Balance without requiring ad viewing.
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question">
+              <span>What kind of proof is required for submitted tasks?</span>
+              <span class="faq-icon">+</span>
+            </button>
+            <div class="faq-answer">
+              TaskFlow enforces two verification items for every task submission: (1) a clear written description (such as your account username or transaction ID), and (2) a photo/screenshot attachment confirming task completion.
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question">
+              <span>How long does administrative review take?</span>
+              <span class="faq-icon">+</span>
+            </button>
+            <div class="faq-answer">
+              Authorized administrators typically review submissions within 24 to 48 hours. You can monitor the real-time status of your submissions under the Tracking tab in the app.
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question">
+              <span>Will updating the app delete my account balance?</span>
+              <span class="faq-icon">+</span>
+            </button>
+            <div class="faq-answer">
+              No. Your account profile, streak, Available Balance, and submission history are securely linked to your Google Account and stored in Cloud Firestore. Installing app updates replaces the application package cleanly without affecting your server-backed data.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ==========================================================================
+       Footer Section
+       ========================================================================== -->
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <!-- Col 1: Brand Info -->
+        <div class="footer-col">
+          <div class="brand-logo">
+            <img 
+              src="public/assets/aistudio/IMG-20261107-WA0010_2346bc43.jpg" 
+              alt="TaskFlow Logo" 
+              class="brand-logo-img"
+              onerror="this.src='https://placehold.co/44x44/1a103c/fbbf24?text=TF'"
+            >
+            <span class="brand-logo-text">Task<span>Flow</span></span>
+          </div>
+          <p class="footer-about">
+            TaskFlow is a modern Android task management platform that rewards user participation. Complete tasks, submit verifiable proof, and build daily check-in streaks.
+          </p>
+        </div>
+
+        <!-- Col 2: Navigation Links -->
+        <div class="footer-col">
+          <h4 class="footer-heading">Navigation</h4>
+          <ul class="footer-links">
+            <li><a href="#features" class="footer-link">Features</a></li>
+            <li><a href="#how-it-works" class="footer-link">How It Works</a></li>
+            <li><a href="#download" class="footer-link">Download APK</a></li>
+            <li><a href="#compatibility" class="footer-link">System Specs</a></li>
+            <li><a href="#faq" class="footer-link">FAQ</a></li>
+          </ul>
+        </div>
+
+        <!-- Col 3: Legal -->
+        <div class="footer-col">
+          <h4 class="footer-heading">Legal</h4>
+          <ul class="footer-links">
+            <li><span class="footer-link" id="privacyPolicyBtn">Privacy Policy</span></li>
+            <li><span class="footer-link" id="termsBtn">Terms &amp; Conditions</span></li>
+            <li><span class="footer-link" id="securityBtn">Security Guidelines</span></li>
+          </ul>
+        </div>
+
+        <!-- Col 4: Contact Placeholder -->
+        <div class="footer-col">
+          <h4 class="footer-heading">Support &amp; Contact</h4>
+          <div class="contact-item">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+              <polyline points="22,6 12,13 2,6"></polyline>
+            </svg>
+            <span id="supportEmailPlaceholder">support@taskflow.example.com</span>
+          </div>
+          <p class="footer-about" style="font-size: 0.85rem;">
+            For account inquiries or admin assistance, sign in to TaskFlow and visit the Support section.
+          </p>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <p>&copy; 2026 TaskFlow. All rights reserved.</p>
+        <div class="footer-bottom-links">
+          <span class="footer-link" id="privacyBottomBtn">Privacy</span>
+          <span class="footer-link" id="termsBottomBtn">Terms</span>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ==========================================================================
+       Interactive Modals (Privacy Policy & Terms)
+       ========================================================================== -->
+  <!-- Privacy Modal -->
+  <div class="modal-backdrop" id="privacyModal" role="dialog" aria-modal="true" aria-labelledby="privacyTitle">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="privacyTitle">Privacy Policy</h3>
+        <button class="modal-close-btn" id="closePrivacyBtn" aria-label="Close modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <h4>1. Information We Collect</h4>
+        <p>
+          TaskFlow collects minimal account credentials via Google Sign-In (display name, email address, and UID) to authenticate your user profile and track completed tasks.
+        </p>
+        <h4>2. Proof Submissions</h4>
+        <p>
+          When you submit proof for a task, your written response and uploaded screenshot image are securely stored to allow authorized administrators to verify task completion. We do not sell your personal data or submitted screenshots to third parties.
+        </p>
+        <h4>3. Security</h4>
+        <p>
+          User balances and submission records are protected with Firestore zero-trust security rules and role-based access controls to prevent unauthorized access or modification.
+        </p>
+        <h4>4. Contact</h4>
+        <p>
+          If you have questions regarding your data or account deletion, please reach out via the in-app support chat or contact our support team.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="dismissPrivacyBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Terms Modal -->
+  <div class="modal-backdrop" id="termsModal" role="dialog" aria-modal="true" aria-labelledby="termsTitle">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="termsTitle">Terms &amp; Conditions</h3>
+        <button class="modal-close-btn" id="closeTermsBtn" aria-label="Close modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <h4>1. Acceptance of Terms</h4>
+        <p>
+          By downloading and installing TaskFlow, you agree to comply with all guidelines regarding fair task participation, honest proof submissions, and respectful community conduct.
+        </p>
+        <h4>2. Task Completion &amp; Verification</h4>
+        <p>
+          Rewards are credited only after administrative review and verification of authentic written and photographic evidence. Submitting fake or manipulated proof may result in immediate task rejection or account suspension.
+        </p>
+        <h4>3. Daily Check-in Rules</h4>
+        <p>
+          Each eligible user may claim one Daily Check-in reward per calendar day. Duplicate or automated claims are restricted by server-side verification rules.
+        </p>
+        <h4>4. Updates &amp; Availability</h4>
+        <p>
+          TaskFlow periodically delivers updates via our integrated APK update system. Users are encouraged to maintain the latest version for optimum performance and security.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="dismissTermsBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================================================
+       Embedded JavaScript: Interactive Behaviors & Dynamic Configuration
+       ========================================================================== -->
+  <script>
+    // Configurable Application Constants
+    const TASKFLOW_CONFIG = {
+      APP_NAME: "TaskFlow",
+      LATEST_VERSION_NAME: "2.9",
+      LATEST_VERSION_CODE: 10,
+      MIN_SDK: 24,
+      TARGET_SDK: 36,
+      PACKAGE_ID: "com.aistudio.taskflow.kxmpzq",
+      // Official published release APK download URL
+      DOWNLOAD_URL: "https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk",
+      SUPPORT_EMAIL: "dasakash24059@gmail.com"
+    };
+
+    document.addEventListener("DOMContentLoaded", () => {
+      // 1. Initialize Dynamic URLs and Configuration
+      const downloadElements = [
+        document.getElementById("mainDownloadBtn"),
+        document.getElementById("heroDownloadBtn"),
+        document.getElementById("headerDownloadBtn")
+      ];
+
+      downloadElements.forEach(el => {
+        if (el) {
+          el.href = TASKFLOW_CONFIG.DOWNLOAD_URL;
+        }
+      });
+
+      // Update support email placeholder
+      const supportEmailEl = document.getElementById("supportEmailPlaceholder");
+      if (supportEmailEl && TASKFLOW_CONFIG.SUPPORT_EMAIL) {
+        supportEmailEl.textContent = TASKFLOW_CONFIG.SUPPORT_EMAIL;
+      }
+
+      // Try fetching version.json dynamically if hosted on the same origin
+      fetch("version.json?_t=" + Date.now())
+        .then(response => {
+          if (response.ok) return response.json();
+          throw new Error("version.json fetch failed");
+        })
+        .then(data => {
+          if (data && data.download_url) {
+            downloadElements.forEach(el => {
+              if (el) el.href = data.download_url;
+            });
+            if (data.latest_version_name && data.latest_version_code) {
+              const versionStr = `Version ${data.latest_version_name} (Build ${data.latest_version_code})`;
+              const badgeEl = document.getElementById("versionBadge");
+              const specEl = document.getElementById("specVersion");
+              if (badgeEl) badgeEl.textContent = versionStr;
+              if (specEl) specEl.textContent = `v${data.latest_version_name} (Code ${data.latest_version_code})`;
+            }
+          }
+        })
+        .catch(() => {
+          // Graceful fallback to embedded defaults
+          console.log("Using default verified TaskFlow configuration");
+        });
+
+      // 2. Mobile Navigation Toggle
+      const mobileMenuBtn = document.getElementById("mobileMenuBtn");
+      const navLinks = document.getElementById("navLinks");
+      const siteHeader = document.getElementById("header");
+
+      if (mobileMenuBtn && navLinks) {
+        mobileMenuBtn.addEventListener("click", () => {
+          siteHeader.classList.toggle("mobile-nav-active");
+        });
+
+        // Close menu on link click
+        navLinks.querySelectorAll("a").forEach(link => {
+          link.addEventListener("click", () => {
+            siteHeader.classList.remove("mobile-nav-active");
+          });
+        });
+      }
+
+      // 3. FAQ Accordion Behavior
+      const faqItems = document.querySelectorAll(".faq-item");
+      faqItems.forEach(item => {
+        const questionBtn = item.querySelector(".faq-question");
+        if (questionBtn) {
+          questionBtn.addEventListener("click", () => {
+            const isActive = item.classList.contains("active");
+            // Close other items
+            faqItems.forEach(other => other.classList.remove("active"));
+            if (!isActive) {
+              item.classList.add("active");
+            }
+          });
+        }
+      });
+
+      // 4. Modal Handlers (Privacy & Terms)
+      const privacyModal = document.getElementById("privacyModal");
+      const termsModal = document.getElementById("termsModal");
+
+      const openModal = (modal) => {
+        if (modal) {
+          modal.classList.add("active");
+          document.body.style.overflow = "hidden";
+        }
+      };
+
+      const closeModal = (modal) => {
+        if (modal) {
+          modal.classList.remove("active");
+          document.body.style.overflow = "auto";
+        }
+      };
+
+      // Privacy triggers
+      document.getElementById("privacyPolicyBtn")?.addEventListener("click", () => openModal(privacyModal));
+      document.getElementById("privacyBottomBtn")?.addEventListener("click", () => openModal(privacyModal));
+      document.getElementById("closePrivacyBtn")?.addEventListener("click", () => closeModal(privacyModal));
+      document.getElementById("dismissPrivacyBtn")?.addEventListener("click", () => closeModal(privacyModal));
+
+      // Terms triggers
+      document.getElementById("termsBtn")?.addEventListener("click", () => openModal(termsModal));
+      document.getElementById("termsBottomBtn")?.addEventListener("click", () => openModal(termsModal));
+      document.getElementById("closeTermsBtn")?.addEventListener("click", () => closeModal(termsModal));
+      document.getElementById("dismissTermsBtn")?.addEventListener("click", () => closeModal(termsModal));
+      document.getElementById("securityBtn")?.addEventListener("click", () => openModal(termsModal));
+
+      // Close modal on outside backdrop click
+      window.addEventListener("click", (e) => {
+        if (e.target === privacyModal) closeModal(privacyModal);
+        if (e.target === termsModal) closeModal(termsModal);
+      });
+
+      // Close modal on Escape key
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          closeModal(privacyModal);
+          closeModal(termsModal);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
