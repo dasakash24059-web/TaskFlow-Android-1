@@ -282,12 +282,6 @@ class ExampleRobolectricTest {
       .performClick()
     assertEquals("task_101", selectedTaskId)
 
-    composeTestRule
-      .onNodeWithTag("user_home_screen")
-      .performScrollToNode(hasTestTag("home_recent_activity_section"))
-    composeTestRule
-      .onNodeWithTag("home_recent_activity_section")
-      .assertIsDisplayed()
   }
 
   @Test

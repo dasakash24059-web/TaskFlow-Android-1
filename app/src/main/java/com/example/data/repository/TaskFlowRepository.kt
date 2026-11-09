@@ -1372,4 +1372,90 @@ class TaskFlowRepository(
       )
       .await()
   }
+
+  suspend fun claimWatchEarnReward(
+    userId: String,
+    userName: String,
+    dateKey: String
+  ): Result<Long> = runCatching {
+    require(userId.isNotBlank()) { "userId must not be blank" }
+    require(dateKey.isNotBlank()) { "Invalid dateKey" }
+
+    val userRef = usersCollection.document(userId)
+    val watchStatRef = userRef.collection("watch_stats").document(dateKey)
+    val transactionRef = transactionsCollection.document()
+
+    val rewardCents = 100L // ₹1 per video
+
+    firestore.runTransaction { transaction ->
+      val snapshot = transaction.get(watchStatRef)
+      val currentVideos = snapshot.getLong("videosWatched") ?: 0L
+      val currentEarned = snapshot.getLong("totalEarnedCents") ?: 0L
+
+      if (currentVideos >= 25L) {
+        throw IllegalStateException("You have reached the maximum limit of 25 watched videos for today.")
+      }
+      if (currentEarned + rewardCents > 4000L) {
+        throw IllegalStateException("You have reached the daily Watch & Earn earning limit of ₹40.")
+      }
+
+      val newVideos = currentVideos + 1L
+      val newEarned = currentEarned + rewardCents
+
+      transaction.set(
+        watchStatRef,
+        mapOf(
+          "userId" to userId,
+          "dateKey" to dateKey,
+          "videosWatched" to newVideos,
+          "totalEarnedCents" to newEarned,
+          "updatedAt" to FieldValue.serverTimestamp()
+        ),
+        com.google.firebase.firestore.SetOptions.merge()
+      )
+
+      transaction.update(
+        userRef,
+        mapOf(
+          "balanceCents" to FieldValue.increment(rewardCents),
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
+      )
+
+      transaction.set(
+        transactionRef,
+        mapOf(
+          "userId" to userId,
+          "userName" to userName.trim().ifEmpty { "TaskFlow Member" },
+          "type" to TransactionType.WATCH_EARN,
+          "title" to "Watch & Earn Video Reward (#$newVideos)",
+          "amountCents" to rewardCents,
+          "status" to "CREDITED",
+          "referenceId" to dateKey,
+          "createdAt" to FieldValue.serverTimestamp()
+        )
+      )
+    }.await()
+
+    rewardCents
+  }
+
+  fun observeWatchStats(uid: String, dateKey: String): Flow<com.example.data.model.WatchStats> = callbackFlow {
+    if (uid.isBlank()) {
+      trySend(com.example.data.model.WatchStats())
+      close()
+      return@callbackFlow
+    }
+    val listener = usersCollection.document(uid).collection("watch_stats").document(dateKey)
+      .addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          trySend(com.example.data.model.WatchStats())
+          return@addSnapshotListener
+        }
+        val stats = snapshot?.toObject(com.example.data.model.WatchStats::class.java) 
+          ?: com.example.data.model.WatchStats(userId = uid, dateKey = dateKey)
+        trySend(stats)
+      }
+    awaitClose { listener.remove() }
+  }
 }

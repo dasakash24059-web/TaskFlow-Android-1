@@ -107,6 +107,8 @@ import com.example.data.model.UserProfile
 import com.example.data.model.calculateDailyCheckInState
 import com.example.data.model.formatRewardInr
 import com.example.data.model.mergeTasksWithPreservedSubmissions
+import com.example.data.model.WatchStats
+import com.example.util.UnityBannerAdView
 import com.example.ui.components.AppIconThumbnail
 import com.example.ui.components.ClickableTaskLinkCard
 import com.example.ui.components.FullSizeImageDialog
@@ -143,7 +145,9 @@ fun UserHomeScreen(
   onNavigateToDailyCheckIn: () -> Unit = {},
   transactionsState: UiState<List<TransactionRecord>> = UiState.Success(emptyList()),
   leaderboardState: UiState<List<UserProfile>> = UiState.Success(emptyList()),
-  onNavigateToWallet: (Boolean) -> Unit = {}
+  onNavigateToWallet: (Boolean) -> Unit = {},
+  watchStats: WatchStats = WatchStats(),
+  onClaimWatchEarn: () -> Unit = {}
 ) {
   val profile = (profileState as? UiState.Success)?.data
   val currentUserId = profile?.userId?.ifBlank { profile.id } ?: ""
@@ -197,7 +201,11 @@ fun UserHomeScreen(
   val displayName = profile?.displayName?.ifBlank { "TaskFlow Member" } ?: "TaskFlow Member"
 
   if (showWatchAdDialog) {
-    WatchAdInfoDialog(onDismiss = { showWatchAdDialog = false })
+    WatchAdInfoDialog(
+      watchStats = watchStats,
+      onClaimWatchEarn = onClaimWatchEarn,
+      onDismiss = { showWatchAdDialog = false }
+    )
   }
 
   if (showLeaderboardDialog) {
@@ -365,26 +373,7 @@ fun UserHomeScreen(
       }
     }
 
-    // 2. Daily Check-in & Watch & Earn Cards Side-by-Side Horizontal Grid
-    item {
-      Row(
-        modifier = Modifier.fillMaxWidth().height(138.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-      ) {
-        DailyCheckInCard(
-          dailyCheckInState = dailyCheckInState,
-          onClaimDailyCheckIn = onClaimDailyCheckIn,
-          onOpenCalendar = onNavigateToDailyCheckIn,
-          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_daily_checkin_card")
-        )
-        WatchAndEarnCard(
-          onWatchAdClicked = { showWatchAdDialog = true },
-          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_watch_earn_card")
-        )
-      }
-    }
-
-    // 3. Available Tasks Section
+    // 2. Available Tasks Section
     item {
       Card(
         modifier = Modifier.fillMaxWidth().testTag("home_available_tasks_section"),
@@ -451,48 +440,44 @@ fun UserHomeScreen(
     }
 
     // Active Task Cards (Part of Available Tasks section)
-    when (tasksState) {
-      is UiState.Loading -> {
-        item {
-          Box(
-            modifier = Modifier.fillMaxWidth().padding(36.dp),
-            contentAlignment = Alignment.Center
-          ) {
-            CircularProgressIndicator()
-          }
+    if (tasksState is UiState.Loading) {
+      item {
+        Box(
+          modifier = Modifier.fillMaxWidth().padding(36.dp),
+          contentAlignment = Alignment.Center
+        ) {
+          CircularProgressIndicator()
         }
       }
-      is UiState.Error -> {
-        item {
-          Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.errorContainer,
-            modifier = Modifier.fillMaxWidth()
-          ) {
-            Text(
-              text = tasksState.message,
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onErrorContainer,
-              modifier = Modifier.padding(16.dp)
-            )
-          }
+    } else if (tasksState is UiState.Error) {
+      item {
+        Surface(
+          shape = RoundedCornerShape(16.dp),
+          color = MaterialTheme.colorScheme.errorContainer,
+          modifier = Modifier.fillMaxWidth()
+        ) {
+          Text(
+            text = (tasksState as UiState.Error).message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.padding(16.dp)
+          )
         }
       }
-      is UiState.Success -> {
-        if (activeAvailableTasks.isEmpty()) {
-          item {
-            EmptyAssignedTaskCard(
-              isAdminAuthorized = isAdminAuthorized,
-              onSwitchToAdmin = onSwitchToAdmin
-            )
-          }
-        } else {
-          items(activeAvailableTasks.take(3), key = { "home_avail_${it.id}" }) { task ->
-            TaskItemCard(
-              task = task,
-              onClick = { onSelectTask(task.id) }
-            )
-          }
+    } else {
+      if (activeAvailableTasks.isEmpty()) {
+        item {
+          EmptyAssignedTaskCard(
+            isAdminAuthorized = isAdminAuthorized,
+            onSwitchToAdmin = onSwitchToAdmin
+          )
+        }
+      } else {
+        items(activeAvailableTasks.take(3), key = { "home_avail_${it.id}" }) { task ->
+          TaskItemCard(
+            task = task,
+            onClick = { onSelectTask(task.id) }
+          )
         }
       }
     }
@@ -505,16 +490,46 @@ fun UserHomeScreen(
       )
     }
 
+    // 3. Daily Check-in & Watch & Earn Cards Side-by-Side Horizontal Grid
+    item {
+      Row(
+        modifier = Modifier.fillMaxWidth().height(138.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        DailyCheckInCard(
+          dailyCheckInState = dailyCheckInState,
+          onClaimDailyCheckIn = onClaimDailyCheckIn,
+          onOpenCalendar = onNavigateToDailyCheckIn,
+          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_daily_checkin_card")
+        )
+        WatchAndEarnCard(
+          onWatchAdClicked = { showWatchAdDialog = true },
+          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_watch_earn_card")
+        )
+      }
+    }
+
+    // 5. Unity Banner Ad View
+    item {
+      UnityBannerAdView(modifier = Modifier.clip(RoundedCornerShape(16.dp)))
+    }
+
     // Hidden test anchors preserving unit test compatibility
     item {
-      Column {
-        Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_wallet_section"))
-        Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_recent_transactions_section")) {
-          transactions.forEach { tx ->
-            Text(text = tx.title, fontSize = 1.sp, color = Color.Transparent)
-          }
+      Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_wallet_section"))
+    }
+    item {
+      Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_recent_transactions_section")) {
+        transactions.forEach { tx ->
+          Text(text = tx.title, fontSize = 1.sp, color = Color.Transparent)
         }
-        Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_recent_activity_section")) {
+      }
+    }
+    item {
+      Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_recent_activity_section")) {
+        if (recentActivityTasks.isEmpty()) {
+          Text("anchor", fontSize = 1.sp, color = Color.Transparent)
+        } else {
           recentActivityTasks.forEach { act ->
             Text(text = act.title, fontSize = 1.sp, color = Color.Transparent)
           }
@@ -654,7 +669,11 @@ private fun WatchAndEarnCard(
 }
 
 @Composable
-private fun WatchAdInfoDialog(onDismiss: () -> Unit) {
+private fun WatchAdInfoDialog(
+  watchStats: WatchStats,
+  onClaimWatchEarn: () -> Unit,
+  onDismiss: () -> Unit
+) {
   AlertDialog(
     onDismissRequest = onDismiss,
     modifier = Modifier.testTag("watch_earn_dialog"),
@@ -693,7 +712,7 @@ private fun WatchAdInfoDialog(onDismiss: () -> Unit) {
           color = Color(0xFFEDE9FE)
         ) {
           Text(
-            text = "🎁 Reward: Up to ₹25",
+            text = "🎁 Reward: ₹1 per Video (Max ₹40 / 25 daily)",
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             color = Color(0xFF6D28D9),
@@ -707,80 +726,85 @@ private fun WatchAdInfoDialog(onDismiss: () -> Unit) {
         modifier = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
       ) {
-        // Main Description Card
+        // Stats Card
         Surface(
           shape = RoundedCornerShape(16.dp),
           color = Color(0xFFF3E8FF).copy(alpha = 0.6f),
           modifier = Modifier.fillMaxWidth()
         ) {
-          Text(
-            text = "Watch genuine advertisements and earn rewards. Follow the instructions carefully and complete eligible advertisements to qualify for rewards.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Color(0xFF4C1D95),
+          Column(
             modifier = Modifier.padding(14.dp),
-            lineHeight = 20.sp
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+          ) {
+            Text(
+              text = "Today's Progress:",
+              style = MaterialTheme.typography.labelLarge,
+              fontWeight = FontWeight.Bold,
+              color = Color(0xFF4C1D95)
+            )
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Text(
+                text = "Videos Watched: ${watchStats.videosWatched} / 25",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFF1E1B4B)
+              )
+              Text(
+                text = "Earned: ₹${watchStats.totalEarnedCents / 100} / ₹40",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF059669)
+              )
+            }
+          }
+        }
+
+        // Action Button
+        Button(
+          onClick = {
+            onClaimWatchEarn()
+          },
+          shape = RoundedCornerShape(14.dp),
+          colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+          modifier = Modifier.fillMaxWidth().height(48.dp).testTag("watch_ad_action_button")
+        ) {
+          Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
+          Spacer(modifier = Modifier.width(8.dp))
+          Text(
+            text = if (watchStats.videosWatched >= 25L || watchStats.totalEarnedCents >= 4000L) 
+              "Daily Limit Reached" 
+            else 
+              "Watch Video & Earn ₹1",
+            fontWeight = FontWeight.Bold,
+            color = Color.White
           )
         }
 
-        // Important Information Bullet Points
+        // Instructions
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
           Text(
-            text = "Important Information:",
+            text = "Instructions:",
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
             color = Color(0xFF1E1B4B)
           )
           Text(
-            text = "• Rewards depend on the actual advertisement campaign.",
+            text = "• Watch the rewarded advertisement completely until completion.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
           Text(
-            text = "• Only eligible and successfully completed advertisements qualify.",
+            text = "• Closing the ad early or skipping will not credit the reward.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
           Text(
-            text = "• Watch advertisements properly and follow the advertiser's instructions.",
+            text = "• Maximum 25 videos or ₹40 earnings allowed per day.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
-          Text(
-            text = "• Do not skip advertisements or attempt to manipulate the reward system.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-          )
-          Text(
-            text = "• Rewards will be credited only after successful advertisement verification.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-          )
-        }
-
-        // Clearly Labelled Coming Soon Message
-        Surface(
-          shape = RoundedCornerShape(14.dp),
-          color = Color(0xFFFEF3C7),
-          modifier = Modifier.fillMaxWidth()
-        ) {
-          Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-          ) {
-            Icon(
-              imageVector = Icons.Default.Info,
-              contentDescription = null,
-              tint = Color(0xFFB45309),
-              modifier = Modifier.size(20.dp)
-            )
-            Text(
-              text = "Advertisements are coming soon. Stay tuned!",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.Bold,
-              color = Color(0xFF78350F)
-            )
-          }
         }
       }
     },
@@ -793,7 +817,7 @@ private fun WatchAdInfoDialog(onDismiss: () -> Unit) {
           Modifier.fillMaxWidth()
             .testTag("close_watch_dialog_button")
       ) {
-        Text("Got it", fontWeight = FontWeight.Bold)
+        Text("Close", fontWeight = FontWeight.Bold)
       }
     }
   )

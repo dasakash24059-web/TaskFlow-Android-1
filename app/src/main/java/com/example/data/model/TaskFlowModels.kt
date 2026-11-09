@@ -137,6 +137,13 @@ data class TransactionRecord(
   @ServerTimestamp val createdAt: Timestamp? = null
 )
 
+data class WatchStats(
+  val userId: String = "",
+  val dateKey: String = "",
+  val videosWatched: Long = 0L,
+  val totalEarnedCents: Long = 0L
+)
+
 object DailyCheckInConstants {
   // 7-Day Reward Structure: Day 1-6: ₹1 (100 paise), Day 7: ₹7 (700 paise). Total = ₹13 (1300 paise).
   val REWARDS_CENTS = listOf(100L, 100L, 100L, 100L, 100L, 100L, 700L)

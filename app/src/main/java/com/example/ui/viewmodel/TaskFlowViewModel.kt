@@ -18,9 +18,11 @@ import com.example.data.model.TransactionRecord
 import com.example.data.model.UpdateDownloadProgress
 import com.example.data.model.UpdateDownloadStatus
 import com.example.data.model.UserProfile
+import com.example.data.model.WatchStats
 import com.example.data.model.WithdrawalMethod
 import com.example.data.model.calculateDailyCheckInState
 import com.example.data.model.formatRewardInr
+import com.example.data.model.getTodayDateKey
 import com.example.data.model.isValidImageUrlOrDataUri
 import com.example.data.model.isValidTaskUrl
 import com.example.data.model.mergeTasksWithPreservedSubmissions
@@ -177,6 +179,12 @@ class TaskFlowViewModel(
       .map<List<UserProfile>, UiState<List<UserProfile>>> { UiState.Success(it) }
       .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load leaderboard")) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  val watchStats: StateFlow<WatchStats> =
+    repository
+      .observeWatchStats(currentUserId, getTodayDateKey())
+      .catch { emit(WatchStats(userId = currentUserId, dateKey = getTodayDateKey())) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WatchStats(userId = currentUserId, dateKey = getTodayDateKey()))
 
   val dailyCheckInState: StateFlow<DailyCheckInState> =
     userProfileState
@@ -744,6 +752,40 @@ class TaskFlowViewModel(
         }
         .onFailure { error ->
           _bannerMessage.value = error.localizedMessage ?: "Failed to claim check-in reward."
+        }
+      _isBusy.value = false
+    }
+  }
+
+  fun claimWatchEarnReward(onSuccess: (Long) -> Unit = {}) {
+    val uid = currentUserId
+    val todayKey = getTodayDateKey()
+    val name = (userProfileState.value as? UiState.Success)?.data?.displayName ?: "TaskFlow Member"
+
+    if (uid.isBlank()) {
+      _bannerMessage.value = "Please sign in to earn rewards."
+      return
+    }
+
+    val stats = watchStats.value
+    if (stats.videosWatched >= 25L) {
+      _bannerMessage.value = "You have reached the maximum limit of 25 watched videos for today."
+      return
+    }
+    if (stats.totalEarnedCents >= 4000L) {
+      _bannerMessage.value = "You have reached the daily Watch & Earn earning limit of ₹40."
+      return
+    }
+
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository.claimWatchEarnReward(uid, name, todayKey)
+        .onSuccess { earned ->
+          _bannerMessage.value = "Watch & Earn reward claimed: +${formatRewardInr(earned)}"
+          onSuccess(earned)
+        }
+        .onFailure { err ->
+          _bannerMessage.value = err.localizedMessage ?: "Failed to claim reward."
         }
       _isBusy.value = false
     }

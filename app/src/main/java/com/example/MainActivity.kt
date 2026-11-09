@@ -77,6 +77,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
+import com.example.data.model.WatchStats
 import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.data.repository.TaskFlowRepository
 import com.example.ui.admin.AdminDashboardScreen
@@ -129,6 +130,7 @@ class MainActivity : ComponentActivity() {
     com.example.ui.theme.ThemePreferences.init(applicationContext)
     com.example.util.TaskFlowNotificationHelper.ensureNotificationChannels(applicationContext)
     ensureFirebaseInitialized(applicationContext)
+    com.example.util.UnityAdsHelper.initialize(applicationContext)
     runCatching { enableEdgeToEdge() }
     setContent {
       val themeMode by com.example.ui.theme.ThemePreferences.currentThemeMode.collectAsStateWithLifecycle()
@@ -344,6 +346,7 @@ private fun AuthenticatedWorkspace(
   val userTransactionsState by viewModel.userTransactionsState.collectAsStateWithLifecycle()
   val leaderboardUsersState by viewModel.leaderboardUsersState.collectAsStateWithLifecycle()
   val dailyCheckInState by viewModel.dailyCheckInState.collectAsStateWithLifecycle()
+  val watchStats by viewModel.watchStats.collectAsStateWithLifecycle()
   val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
   val submissionError by viewModel.submissionError.collectAsStateWithLifecycle()
   val withdrawalValidationError by viewModel.withdrawalValidationError.collectAsStateWithLifecycle()
@@ -659,7 +662,20 @@ private fun AuthenticatedWorkspace(
                     dailyCheckInState = dailyCheckInState,
                     approvedEarningsCents = viewModel.getApprovedTaskEarningsCents(),
                     onClaimDay = { day ->
-                      viewModel.claimDailyCheckIn(day)
+                      val activity = context as? android.app.Activity
+                      if (activity != null) {
+                        com.example.util.UnityAdsHelper.watchAndClaimReward(
+                          activity = activity,
+                          onComplete = {
+                            viewModel.claimDailyCheckIn(day)
+                          },
+                          onFailed = { err ->
+                            Log.e("MainActivity", "Check-in ad failed: $err")
+                          }
+                        )
+                      } else {
+                        viewModel.claimDailyCheckIn(day)
+                      }
                     },
                     onBack = { viewModel.setDailyCheckInScreenVisible(false) },
                     isBusy = isBusy
@@ -680,8 +696,22 @@ private fun AuthenticatedWorkspace(
                     submissionsState = userSubmissionsState,
                     dailyCheckInState = dailyCheckInState,
                     onClaimDailyCheckIn = {
-                      viewModel.claimDailyCheckIn()
-                      viewModel.setDailyCheckInScreenVisible(true)
+                      val activity = context as? android.app.Activity
+                      if (activity != null) {
+                        com.example.util.UnityAdsHelper.watchAndClaimReward(
+                          activity = activity,
+                          onComplete = {
+                            viewModel.claimDailyCheckIn()
+                            viewModel.setDailyCheckInScreenVisible(true)
+                          },
+                          onFailed = { err ->
+                            Log.e("MainActivity", "Daily check-in ad failed: $err")
+                          }
+                        )
+                      } else {
+                        viewModel.claimDailyCheckIn()
+                        viewModel.setDailyCheckInScreenVisible(true)
+                      }
                     },
                     onNavigateToDailyCheckIn = { viewModel.setDailyCheckInScreenVisible(true) },
                     transactionsState = userTransactionsState,
@@ -691,6 +721,23 @@ private fun AuthenticatedWorkspace(
                         viewModel.setOpenWithdrawOnWalletNavigation(true)
                       }
                       viewModel.setUserTab(UserTab.WALLET)
+                    },
+                    watchStats = viewModel.watchStats.collectAsStateWithLifecycle().value,
+                    onClaimWatchEarn = {
+                      val activity = context as? android.app.Activity
+                      if (activity != null) {
+                        com.example.util.UnityAdsHelper.watchAndClaimReward(
+                          activity = activity,
+                          onComplete = {
+                            viewModel.claimWatchEarnReward()
+                          },
+                          onFailed = { err ->
+                            Log.e("MainActivity", "Watch & Earn ad failed: $err")
+                          }
+                        )
+                      } else {
+                        viewModel.claimWatchEarnReward()
+                      }
                     }
                   )
                 }
