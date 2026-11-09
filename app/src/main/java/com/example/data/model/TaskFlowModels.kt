@@ -144,6 +144,34 @@ data class WatchStats(
   val totalEarnedCents: Long = 0L
 )
 
+enum class WatchEarnFlowStatus {
+  IDLE,
+  LOADING_AD,
+  SHOWING_AD,
+  READY_TO_CLAIM,
+  CLAIMING,
+  CLAIMED,
+  ERROR
+}
+
+data class WatchEarnUiState(
+  val status: WatchEarnFlowStatus = WatchEarnFlowStatus.IDLE,
+  val activeSessionId: String = "",
+  val statusMessage: String = "",
+  val errorMessage: String? = null
+) {
+  val isLoadingAd: Boolean
+    get() = status == WatchEarnFlowStatus.LOADING_AD || status == WatchEarnFlowStatus.SHOWING_AD
+  val isReadyToClaim: Boolean
+    get() = status == WatchEarnFlowStatus.READY_TO_CLAIM && activeSessionId.isNotBlank()
+  val isClaiming: Boolean
+    get() = status == WatchEarnFlowStatus.CLAIMING
+  val isClaimed: Boolean
+    get() = status == WatchEarnFlowStatus.CLAIMED
+  val hasError: Boolean
+    get() = status == WatchEarnFlowStatus.ERROR
+}
+
 object DailyCheckInConstants {
   // 7-Day Reward Structure: Day 1-6: ₹1 (100 paise), Day 7: ₹7 (700 paise). Total = ₹13 (1300 paise).
   val REWARDS_CENTS = listOf(100L, 100L, 100L, 100L, 100L, 100L, 700L)

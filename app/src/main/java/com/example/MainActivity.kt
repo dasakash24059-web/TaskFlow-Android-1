@@ -117,8 +117,7 @@ class MainActivity : ComponentActivity() {
       if (intent.action == android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE) {
         val downloadId = intent.getLongExtra(android.app.DownloadManager.EXTRA_DOWNLOAD_ID, -1)
         if (downloadId != -1L) {
-          android.util.Log.d("AppUpdateManager", "Download complete: $downloadId")
-          com.example.util.AppUpdateManager.installDownloadedApk(context)
+          android.util.Log.d("AppUpdateManager", "Download complete broadcast received: $downloadId")
         }
       }
     }
@@ -347,6 +346,7 @@ private fun AuthenticatedWorkspace(
   val leaderboardUsersState by viewModel.leaderboardUsersState.collectAsStateWithLifecycle()
   val dailyCheckInState by viewModel.dailyCheckInState.collectAsStateWithLifecycle()
   val watchStats by viewModel.watchStats.collectAsStateWithLifecycle()
+  val watchEarnUiState by viewModel.watchEarnUiState.collectAsStateWithLifecycle()
   val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
   val submissionError by viewModel.submissionError.collectAsStateWithLifecycle()
   val withdrawalValidationError by viewModel.withdrawalValidationError.collectAsStateWithLifecycle()
@@ -662,22 +662,7 @@ private fun AuthenticatedWorkspace(
                     dailyCheckInState = dailyCheckInState,
                     approvedEarningsCents = viewModel.getApprovedTaskEarningsCents(),
                     onClaimDay = { day ->
-                      val activity = context as? android.app.Activity
-                      if (activity != null) {
-                        com.example.util.UnityAdsHelper.watchAndClaimReward(
-                          activity = activity,
-                          userId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "",
-                          rewardType = "DAILY_CHECK_IN",
-                          onComplete = {
-                            viewModel.claimDailyCheckIn(day)
-                          },
-                          onFailed = { err ->
-                            Log.e("MainActivity", "Check-in ad failed: $err")
-                          }
-                        )
-                      } else {
-                        viewModel.claimDailyCheckIn(day)
-                      }
+                      viewModel.claimDailyCheckIn(day)
                     },
                     onBack = { viewModel.setDailyCheckInScreenVisible(false) },
                     isBusy = isBusy
@@ -698,24 +683,8 @@ private fun AuthenticatedWorkspace(
                     submissionsState = userSubmissionsState,
                     dailyCheckInState = dailyCheckInState,
                     onClaimDailyCheckIn = {
-                      val activity = context as? android.app.Activity
-                      if (activity != null) {
-                        com.example.util.UnityAdsHelper.watchAndClaimReward(
-                          activity = activity,
-                          userId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "",
-                          rewardType = "DAILY_CHECK_IN",
-                          onComplete = {
-                            viewModel.claimDailyCheckIn()
-                            viewModel.setDailyCheckInScreenVisible(true)
-                          },
-                          onFailed = { err ->
-                            Log.e("MainActivity", "Daily check-in ad failed: $err")
-                          }
-                        )
-                      } else {
-                        viewModel.claimDailyCheckIn()
-                        viewModel.setDailyCheckInScreenVisible(true)
-                      }
+                      viewModel.claimDailyCheckIn()
+                      viewModel.setDailyCheckInScreenVisible(true)
                     },
                     onNavigateToDailyCheckIn = { viewModel.setDailyCheckInScreenVisible(true) },
                     transactionsState = userTransactionsState,
@@ -726,24 +695,22 @@ private fun AuthenticatedWorkspace(
                       }
                       viewModel.setUserTab(UserTab.WALLET)
                     },
-                    watchStats = viewModel.watchStats.collectAsStateWithLifecycle().value,
+                    watchStats = watchStats,
                     onClaimWatchEarn = {
+                      viewModel.claimWatchEarnReward()
+                    },
+                    watchEarnUiState = watchEarnUiState,
+                    onStartWatchVideo = {
                       val activity = context as? android.app.Activity
                       if (activity != null) {
-                        com.example.util.UnityAdsHelper.watchAndClaimReward(
-                          activity = activity,
-                          userId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "",
-                          rewardType = "WATCH_AND_EARN",
-                          onComplete = {
-                            viewModel.claimWatchEarnReward()
-                          },
-                          onFailed = { err ->
-                            Log.e("MainActivity", "Watch & Earn ad failed: $err")
-                          }
-                        )
-                      } else {
-                        viewModel.claimWatchEarnReward()
+                        viewModel.startWatchEarnVideo(activity)
                       }
+                    },
+                    onClaimVerifiedWatchReward = {
+                      viewModel.claimVerifiedWatchEarnReward()
+                    },
+                    onOpenWatchDialog = {
+                      viewModel.prepareWatchEarnDialog()
                     }
                   )
                 }

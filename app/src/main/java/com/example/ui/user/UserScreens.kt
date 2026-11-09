@@ -147,7 +147,12 @@ fun UserHomeScreen(
   leaderboardState: UiState<List<UserProfile>> = UiState.Success(emptyList()),
   onNavigateToWallet: (Boolean) -> Unit = {},
   watchStats: WatchStats = WatchStats(),
-  onClaimWatchEarn: () -> Unit = {}
+  onClaimWatchEarn: () -> Unit = {},
+  watchEarnUiState: com.example.data.model.WatchEarnUiState =
+    com.example.data.model.WatchEarnUiState(),
+  onStartWatchVideo: (() -> Unit)? = null,
+  onClaimVerifiedWatchReward: (() -> Unit)? = null,
+  onOpenWatchDialog: () -> Unit = {}
 ) {
   val profile = (profileState as? UiState.Success)?.data
   val currentUserId = profile?.userId?.ifBlank { profile.id } ?: ""
@@ -203,8 +208,26 @@ fun UserHomeScreen(
   if (showWatchAdDialog) {
     WatchAdInfoDialog(
       watchStats = watchStats,
-      onClaimWatchEarn = onClaimWatchEarn,
-      onDismiss = { showWatchAdDialog = false }
+      watchEarnUiState = watchEarnUiState,
+      onStartWatchVideo = {
+        if (onStartWatchVideo != null) {
+          onStartWatchVideo()
+        } else {
+          onClaimWatchEarn()
+        }
+      },
+      onClaimVerifiedReward = {
+        if (onClaimVerifiedWatchReward != null) {
+          onClaimVerifiedWatchReward()
+        } else {
+          onClaimWatchEarn()
+        }
+      },
+      onDismiss = {
+        if (!watchEarnUiState.isLoadingAd && !watchEarnUiState.isClaiming) {
+          showWatchAdDialog = false
+        }
+      }
     )
   }
 
@@ -373,7 +396,29 @@ fun UserHomeScreen(
       }
     }
 
-    // 2. Available Tasks Section
+    // 2. Daily Check-in & Watch & Earn Cards Side-by-Side Horizontal Grid (Original Top Position)
+    item {
+      Row(
+        modifier = Modifier.fillMaxWidth().height(138.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        DailyCheckInCard(
+          dailyCheckInState = dailyCheckInState,
+          onClaimDailyCheckIn = onClaimDailyCheckIn,
+          onOpenCalendar = onNavigateToDailyCheckIn,
+          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_daily_checkin_card")
+        )
+        WatchAndEarnCard(
+          onWatchAdClicked = {
+            onOpenWatchDialog()
+            showWatchAdDialog = true
+          },
+          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_watch_earn_card")
+        )
+      }
+    }
+
+    // 3. Available Tasks Section
     item {
       Card(
         modifier = Modifier.fillMaxWidth().testTag("home_available_tasks_section"),
@@ -482,31 +527,12 @@ fun UserHomeScreen(
       }
     }
 
-    // 4. Top Earners Leaderboard (positioned immediately after Available Tasks)
+    // 4. Top Earners Leaderboard
     item {
       LeaderboardPreviewCard(
         users = leaderboardUsers,
         onViewAllClicked = { showLeaderboardDialog = true }
       )
-    }
-
-    // 3. Daily Check-in & Watch & Earn Cards Side-by-Side Horizontal Grid
-    item {
-      Row(
-        modifier = Modifier.fillMaxWidth().height(138.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-      ) {
-        DailyCheckInCard(
-          dailyCheckInState = dailyCheckInState,
-          onClaimDailyCheckIn = onClaimDailyCheckIn,
-          onOpenCalendar = onNavigateToDailyCheckIn,
-          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_daily_checkin_card")
-        )
-        WatchAndEarnCard(
-          onWatchAdClicked = { showWatchAdDialog = true },
-          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_watch_earn_card")
-        )
-      }
     }
 
     // 5. Unity Banner Ad View
@@ -616,14 +642,16 @@ private fun WatchAndEarnCard(
           imageVector = Icons.Default.PlayArrow,
           contentDescription = null,
           tint = Color(0xFF5B21B6),
-          modifier = Modifier.size(22.dp)
+          modifier = Modifier.size(20.dp)
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-          text = "Earn",
-          style = MaterialTheme.typography.titleMedium,
+          text = "Watch & Earn",
+          style = MaterialTheme.typography.titleSmall,
           fontWeight = FontWeight.ExtraBold,
-          color = Color(0xFF5B21B6)
+          color = Color(0xFF5B21B6),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
         )
       }
 
@@ -633,17 +661,13 @@ private fun WatchAndEarnCard(
         modifier = Modifier.testTag("watch_earn_badge")
       ) {
         Row(
-          modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp),
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(6.dp)
+          horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
           Text(
-            text = "🎁",
-            fontSize = 13.sp
-          )
-          Text(
-            text = "Up to ₹25",
-            style = MaterialTheme.typography.labelMedium,
+            text = "Daily 25 Videos",
+            style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             color = Color(0xFF5B21B6)
           )
@@ -654,11 +678,11 @@ private fun WatchAndEarnCard(
         onClick = onWatchAdClicked,
         shape = RoundedCornerShape(50),
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5B21B6)),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
         modifier = Modifier.fillMaxWidth().height(36.dp).testTag("watch_ad_button")
       ) {
         Text(
-          text = "Watch",
+          text = "Watch Now",
           style = MaterialTheme.typography.labelLarge,
           fontWeight = FontWeight.Bold,
           color = Color.White
@@ -671,137 +695,254 @@ private fun WatchAndEarnCard(
 @Composable
 private fun WatchAdInfoDialog(
   watchStats: WatchStats,
-  onClaimWatchEarn: () -> Unit,
+  watchEarnUiState: com.example.data.model.WatchEarnUiState =
+    com.example.data.model.WatchEarnUiState(),
+  onStartWatchVideo: () -> Unit,
+  onClaimVerifiedReward: () -> Unit = {},
   onDismiss: () -> Unit
 ) {
+  val isLimitReached = watchStats.videosWatched >= 25L
+  val isLoadingAd = watchEarnUiState.isLoadingAd
+  val isReadyToClaim = watchEarnUiState.isReadyToClaim
+  val isClaiming = watchEarnUiState.isClaiming
+  val isClaimed = watchEarnUiState.isClaimed
+  val hasError = watchEarnUiState.hasError
+
   AlertDialog(
     onDismissRequest = onDismiss,
     modifier = Modifier.testTag("watch_earn_dialog"),
     shape = RoundedCornerShape(26.dp),
     containerColor = Color(0xFFFAFAFE),
-    icon = {
-      Surface(
-        shape = CircleShape,
-        color = Color(0xFFEDE9FE),
-        modifier = Modifier.size(56.dp)
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.PlayArrow,
-            contentDescription = null,
-            tint = Color(0xFF6D28D9),
-            modifier = Modifier.size(32.dp)
-          )
-        }
-      }
-    },
     title = {
-      Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
       ) {
-        Text(
-          text = "Watch Ads & Earn",
-          style = MaterialTheme.typography.headlineSmall,
-          fontWeight = FontWeight.Bold,
-          color = Color(0xFF1E1B4B),
-          textAlign = TextAlign.Center
-        )
         Surface(
-          shape = RoundedCornerShape(50),
-          color = Color(0xFFEDE9FE)
+          shape = CircleShape,
+          color = Color(0xFFEDE9FE),
+          modifier = Modifier.size(44.dp)
         ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector =
+                if (isReadyToClaim || isClaimed) Icons.Default.CheckCircle
+                else Icons.Default.PlayArrow,
+              contentDescription = null,
+              tint = if (isReadyToClaim || isClaimed) Color(0xFF059669) else Color(0xFF6D28D9),
+              modifier = Modifier.size(26.dp)
+            )
+          }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
           Text(
-            text = "🎁 Reward: ₹1 per Video (Max ₹40 / 25 daily)",
-            style = MaterialTheme.typography.labelMedium,
+            text = "Watch & Earn",
+            style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFF6D28D9),
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+            color = Color(0xFF1E1B4B)
           )
+          Surface(
+            shape = RoundedCornerShape(50),
+            color = Color(0xFFEDE9FE)
+          ) {
+            Text(
+              text = "Daily 25 Videos",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Bold,
+              color = Color(0xFF6D28D9),
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp)
+            )
+          }
         }
       }
     },
     text = {
       Column(
         modifier = Modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
       ) {
-        // Stats Card
+        // Progress Card
         Surface(
-          shape = RoundedCornerShape(16.dp),
+          shape = RoundedCornerShape(14.dp),
           color = Color(0xFFF3E8FF).copy(alpha = 0.6f),
           modifier = Modifier.fillMaxWidth()
         ) {
           Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
           ) {
             Text(
-              text = "Today's Progress:",
+              text = "Today's Progress",
               style = MaterialTheme.typography.labelLarge,
               fontWeight = FontWeight.Bold,
               color = Color(0xFF4C1D95)
             )
+            Text(
+              text = "Videos Watched: ${watchStats.videosWatched} / 25",
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = Color(0xFF1E1B4B)
+            )
+          }
+        }
+
+        // Loading State Banner
+        if (isLoadingAd || isClaiming) {
+          Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = Color(0xFFEFF6FF),
+            modifier = Modifier.fillMaxWidth().testTag("watch_earn_loading_banner")
+          ) {
             Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween
+              modifier = Modifier.padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-              Text(
-                text = "Videos Watched: ${watchStats.videosWatched} / 25",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFF1E1B4B)
+              CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.5.dp,
+                color = Color(0xFF6D28D9)
               )
               Text(
-                text = "Earned: ₹${watchStats.totalEarnedCents / 100} / ₹40",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF059669)
+                text =
+                  watchEarnUiState.statusMessage.ifBlank {
+                    if (isClaiming) "Claiming reward..." else "Loading video..."
+                  },
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF1E3A8A)
               )
             }
           }
         }
 
-        // Action Button
-        Button(
-          onClick = {
-            onClaimWatchEarn()
-          },
-          shape = RoundedCornerShape(14.dp),
-          colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
-          modifier = Modifier.fillMaxWidth().height(48.dp).testTag("watch_ad_action_button")
-        ) {
-          Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
-          Spacer(modifier = Modifier.width(8.dp))
-          Text(
-            text = if (watchStats.videosWatched >= 25L || watchStats.totalEarnedCents >= 4000L) 
-              "Daily Limit Reached" 
-            else 
-              "Watch Video & Earn ₹1",
-            fontWeight = FontWeight.Bold,
-            color = Color.White
-          )
+        // Ready-to-Claim Verified State Banner & Claim Button
+        if (isReadyToClaim) {
+          Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = Color(0xFFECFDF5),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA7F3D0)),
+            modifier = Modifier.fillMaxWidth().testTag("watch_earn_ready_to_claim_banner")
+          ) {
+            Column(
+              modifier = Modifier.padding(12.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+              horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+              Text(
+                text =
+                  watchEarnUiState.statusMessage.ifBlank {
+                    "Video completed! Tap Claim to receive your reward."
+                  },
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF065F46),
+                textAlign = TextAlign.Center
+              )
+              Button(
+                onClick = onClaimVerifiedReward,
+                enabled = !isClaiming,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                modifier =
+                  Modifier.fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("claim_watch_reward_button")
+              ) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.White)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                  text = "Claim",
+                  fontWeight = FontWeight.Bold,
+                  color = Color.White
+                )
+              }
+            }
+          }
+        }
+
+        // Claimed Confirmation Banner
+        if (isClaimed) {
+          Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = Color(0xFFECFDF5),
+            modifier = Modifier.fillMaxWidth().testTag("watch_earn_claimed_banner")
+          ) {
+            Text(
+              text =
+                watchEarnUiState.statusMessage.ifBlank {
+                  "Reward claimed successfully and added to your wallet!"
+                },
+              style = MaterialTheme.typography.bodySmall,
+              fontWeight = FontWeight.Bold,
+              color = Color(0xFF047857),
+              modifier = Modifier.padding(14.dp)
+            )
+          }
+        }
+
+        // Error State Banner
+        if (hasError && !watchEarnUiState.errorMessage.isNullOrBlank()) {
+          Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = Color(0xFFFEF2F2),
+            modifier = Modifier.fillMaxWidth().testTag("watch_earn_error_banner")
+          ) {
+            Text(
+              text = watchEarnUiState.errorMessage,
+              style = MaterialTheme.typography.bodySmall,
+              fontWeight = FontWeight.SemiBold,
+              color = Color(0xFFB91C1C),
+              modifier = Modifier.padding(14.dp)
+            )
+          }
+        }
+
+        // Watch Now Button (hidden while Claim button is active for current completed video)
+        if (!isReadyToClaim) {
+          Button(
+            onClick = onStartWatchVideo,
+            enabled = !isLimitReached && !isLoadingAd && !isClaiming,
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("watch_ad_action_button")
+          ) {
+            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+              text =
+                when {
+                  isLimitReached -> "Daily Limit Reached (25/25)"
+                  isLoadingAd -> "Loading Video..."
+                  else -> "Watch Now"
+                },
+              fontWeight = FontWeight.Bold,
+              color = Color.White
+            )
+          }
         }
 
         // Instructions
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
           Text(
-            text = "Instructions:",
+            text = "How it works:",
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
             color = Color(0xFF1E1B4B)
           )
           Text(
-            text = "• Watch the rewarded advertisement completely until completion.",
+            text = "• Tap Watch Now and watch the complete video until the end.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
           Text(
-            text = "• Closing the ad early or skipping will not credit the reward.",
+            text = "• Once the video is completed and verified, tap Claim to credit your wallet.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
           Text(
-            text = "• Maximum 25 videos or ₹40 earnings allowed per day.",
+            text = "• Up to 25 videos can be completed per day.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
@@ -811,6 +952,7 @@ private fun WatchAdInfoDialog(
     confirmButton = {
       Button(
         onClick = onDismiss,
+        enabled = !isLoadingAd && !isClaiming,
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6D28D9)),
         modifier =

@@ -793,6 +793,88 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
       )
     }
 
+  @Test
+  fun watchEarnSession_twoStepVerification_atomicSingleUseClaim_andDuplicateClaimRejection() =
+    runBlocking {
+      val repository = TaskFlowRepository(firestore, photoUploader = fakeStorageUploader)
+      val userEmail = "watch_earn_${UUID.randomUUID()}@test.com"
+      val userUid = signInTestUser(userEmail, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.ensureUserProfile(userUid, userEmail, "Watch User").getOrThrow()
+      }
+
+      val todayKey = com.example.data.model.getTodayDateKey()
+
+      // Step 1: Create a server-bound Watch & Earn session before showing ad
+      val sessionId =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.createWatchEarnSession(userUid, todayKey).getOrThrow()
+        }
+      assertTrue("Expected non-blank session ID", sessionId.isNotBlank())
+
+      // Attempting to claim BEFORE video completion / verification MUST fail
+      val prematureClaim =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.claimVerifiedWatchEarnSession(
+            userId = userUid,
+            userName = "Watch User",
+            sessionId = sessionId,
+            dateKey = todayKey
+          )
+        }
+      assertTrue("Expected claiming unverified PENDING session to fail", prematureClaim.isFailure)
+
+      // Step 2: Verify video completion (simulating UnityAdsShowCompletionState.COMPLETED)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.verifyWatchEarnSessionCompleted(userUid, sessionId).getOrThrow()
+      }
+
+      // Balance must still be 0 BEFORE user taps Claim button
+      val profileBeforeClaim =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.getUserProfile(userUid).getOrThrow() ?: error("Expected user profile")
+        }
+      assertEquals(0L, profileBeforeClaim.balanceCents)
+
+      // Step 3: User taps Claim -> atomically credits 100 paise (₹1.00), updates watch_stats, and marks session CLAIMED
+      val claimedReward =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository
+            .claimVerifiedWatchEarnSession(
+              userId = userUid,
+              userName = "Watch User",
+              sessionId = sessionId,
+              dateKey = todayKey
+            )
+            .getOrThrow()
+        }
+      assertEquals(100L, claimedReward)
+
+      val profileAfterClaim =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.getUserProfile(userUid).getOrThrow() ?: error("Expected user profile")
+        }
+      assertEquals(100L, profileAfterClaim.balanceCents)
+
+      // Step 4: Attempting to claim the same session a second time MUST fail and not double-credit
+      val duplicateClaim =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.claimVerifiedWatchEarnSession(
+            userId = userUid,
+            userName = "Watch User",
+            sessionId = sessionId,
+            dateKey = todayKey
+          )
+        }
+      assertTrue("Expected duplicate session claim to fail", duplicateClaim.isFailure)
+
+      val profileAfterDuplicateAttempt =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.getUserProfile(userUid).getOrThrow() ?: error("Expected user profile")
+        }
+      assertEquals(100L, profileAfterDuplicateAttempt.balanceCents)
+    }
+
   private companion object {
     const val DEFAULT_TIMEOUT_MS = 10000L
     const val FLOW_TIMEOUT_MS = 10000L

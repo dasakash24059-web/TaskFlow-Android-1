@@ -1,5 +1,5 @@
 {
-  "summary": "Zero-trust Firestore Security Rules for TaskFlow with task activation/deactivation/reactivation (isActive), mandatory text + photo proof validation, preserved submissions on task deletion, INR reward credit, and demo withdrawal requests.",
-  "updatedAt": "2026-11-05T16:30:09.722136415Z",
-  "userFacing": true
+  "summary":  "Updated Firestore Security Rules including /reward_sessions/{sessionId}, /watch_stats/{statId}, /users/{userId}/watch_stats/{dateKey}, and /processed_transactions/{txId} for the 2-step Watch & Earn verification and claim flow.",
+  "updatedAt":  "2026-11-09T16:57:49.800747787Z",
+  "userFacing":  true
 }

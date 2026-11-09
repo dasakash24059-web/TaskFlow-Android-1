@@ -1,29 +1,49 @@
 const crypto = require("crypto");
 const assert = require("assert");
+const { _verifyUnityS2SSignature } = require("./index.js");
 
-function verifySignature(params, secret, providedSignature) {
-  const keys = Object.keys(params).filter(k => k !== 'hmac').sort();
-  const paramString = keys.map(k => params[k]).join(',');
-  const hmacObj = crypto.createHmac("md5", secret);
-  hmacObj.update(paramString);
-  const calculated = hmacObj.digest("hex");
-  
-  const sigBuf = Buffer.from(providedSignature, 'hex');
-  const calcBuf = Buffer.from(calculated, 'hex');
-  return sigBuf.length === calcBuf.length && crypto.timingSafeEqual(sigBuf, calcBuf);
-}
+const secret = "test_unity_secret_hash_123";
 
-// Test Case 1: Valid Signature
-const secret = "test_secret";
-const params = { userId: "user1", rewardPoints: "2", oid: "tx123" };
-const paramString = Object.keys(params).sort().map(k => params[k]).join(',');
-const signature = crypto.createHmac("md5", secret).update(paramString).digest("hex");
-params.hmac = signature;
+// Official Unity S2S parameter format: sorted key=value pairs joined by commas, excluding hmac
+const params = {
+  adid: "800430673",
+  oid: "tx_987654321",
+  sid: "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+};
 
-const { hmac, ...rest } = params;
-assert.strictEqual(verifySignature(rest, secret, hmac), true, "Signature should be valid");
+const sortedParamString = Object.keys(params)
+  .sort()
+  .map((k) => `${k}=${params[k]}`)
+  .join(",");
 
-// Test Case 2: Invalid Signature
-assert.strictEqual(verifySignature(rest, "wrong_secret", hmac), false, "Signature should be invalid with wrong secret");
+const validHmac = crypto.createHmac("md5", secret).update(sortedParamString).digest("hex");
 
-console.log("Tests passed!");
+// Test Case 1: Valid Official HMAC-MD5 Signature
+assert.strictEqual(
+  _verifyUnityS2SSignature({ ...params, hmac: validHmac }, secret),
+  true,
+  "Expected valid Unity S2S HMAC-MD5 signature to pass verification"
+);
+
+// Test Case 2: Invalid Secret
+assert.strictEqual(
+  _verifyUnityS2SSignature({ ...params, hmac: validHmac }, "wrong_secret"),
+  false,
+  "Expected wrong secret to fail verification"
+);
+
+// Test Case 3: Tampered Parameter (sid modified)
+assert.strictEqual(
+  _verifyUnityS2SSignature({ ...params, sid: "tampered_session_id", hmac: validHmac }, secret),
+  false,
+  "Expected tampered sid parameter to fail verification"
+);
+
+// Test Case 4: Malformed non-hex HMAC
+assert.strictEqual(
+  _verifyUnityS2SSignature({ ...params, hmac: "not_a_valid_md5_hex" }, secret),
+  false,
+  "Expected malformed HMAC to fail verification"
+);
+
+console.log("All official Unity S2S HMAC-MD5 signature tests passed!");

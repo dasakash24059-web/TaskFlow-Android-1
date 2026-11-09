@@ -152,7 +152,7 @@ service cloud.firestore {
              data.role is string && (data.role == 'user' || data.role == 'admin') &&
              data.approvalStatus is string && (data.approvalStatus == 'approved' || data.approvalStatus == 'pending' || data.approvalStatus == 'suspended') &&
              data.balanceCents is int && data.balanceCents >= 0 && data.balanceCents <= 1000000000 &&
-             data.virtualPoints is int && data.virtualPoints >= 0 && data.virtualPoints <= 1000000 &&
+             (!('virtualPoints' in data) || (data.virtualPoints is int && data.virtualPoints >= 0 && data.virtualPoints <= 1000000)) &&
              data.completedTasksCount is int && data.completedTasksCount >= 0 && data.completedTasksCount <= 1000000 &&
              (!('assignedTaskId' in data) || data.assignedTaskId == null || (data.assignedTaskId is string && data.assignedTaskId.size() <= 128)) &&
              (!('lastCheckInDate' in data) || data.lastCheckInDate is string) &&
@@ -374,7 +374,7 @@ service cloud.firestore {
                        ]) &&
                        incoming().keys().hasOnly([
                          'userId', 'email', 'displayName', 'role',
-                         'approvalStatus', 'balanceCents', 'completedTasksCount',
+                         'approvalStatus', 'balanceCents', 'virtualPoints', 'completedTasksCount',
                          'assignedTaskId', 'lastCheckInDate', 'checkInStreak',
                          'lastCheckInTimestamp', 'createdAt', 'updatedAt'
                        ]) &&
@@ -411,7 +411,7 @@ service cloud.firestore {
                              incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']) ||
                              (
                                incoming().diff(existing()).affectedKeys().hasOnly([
-                                 'balanceCents', 'lastCheckInDate', 'checkInStreak',
+                                 'balanceCents', 'virtualPoints', 'lastCheckInDate', 'checkInStreak',
                                  'lastCheckInTimestamp', 'updatedAt'
                                ]) &&
                                (incoming().balanceCents == existing().balanceCents + 100 || incoming().balanceCents == existing().balanceCents + 700)
@@ -458,6 +458,24 @@ service cloud.firestore {
                          (incoming().rewardCents == 100 || incoming().rewardCents == 700);
         allow update, delete: if false;
       }
+
+      match /watch_stats/{dateKey} {
+        allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         incoming().userId == userId &&
+                         incoming().dateKey == dateKey &&
+                         incoming().videosWatched == 1 &&
+                         incoming().totalEarnedCents == 100;
+        allow update: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         existing().userId == userId &&
+                         incoming().userId == userId &&
+                         existing().videosWatched < 25 &&
+                         incoming().videosWatched == existing().videosWatched + 1 &&
+                         incoming().totalEarnedCents == existing().totalEarnedCents + 100;
+        allow delete: if false;
+      }
     }
 
     match /transactions/{transactionId} {
@@ -470,6 +488,79 @@ service cloud.firestore {
                        incoming().userId is string &&
                        (request.auth.uid == incoming().userId || isAdmin());
       allow update, delete: if false;
+    }
+
+    // 4B. Collection Rules: /reward_sessions/{sessionId}
+    match /reward_sessions/{sessionId} {
+      allow get: if isSignedIn() &&
+                    isValidId(sessionId) &&
+                    (resource == null || existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() &&
+                     (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+                       isValidId(sessionId) &&
+                       incoming().sessionId == sessionId &&
+                       incoming().userId == request.auth.uid &&
+                       (incoming().rewardType == 'WATCH_AND_EARN' || incoming().rewardType == 'DAILY_CHECK_IN') &&
+                       incoming().rewardCents == 100 &&
+                       incoming().status == 'PENDING' &&
+                       incoming().used == false &&
+                       incoming().claimed == false &&
+                       incoming().createdAt is timestamp &&
+                       incoming().expiresAt is timestamp &&
+                       incoming().expiresAt > request.time;
+      allow update: if isSignedIn() &&
+                       isValidId(sessionId) &&
+                       existing().userId == request.auth.uid &&
+                       incoming().userId == existing().userId &&
+                       incoming().sessionId == existing().sessionId &&
+                       incoming().rewardType == existing().rewardType &&
+                       incoming().rewardCents == existing().rewardCents &&
+                       existing().used == false &&
+                       existing().claimed == false &&
+                       existing().expiresAt > request.time &&
+                       (
+                         (
+                           existing().status == 'PENDING' &&
+                           incoming().status == 'VERIFIED' &&
+                           incoming().used == false &&
+                           incoming().claimed == false
+                         ) ||
+                         (
+                           existing().status == 'VERIFIED' &&
+                           incoming().status == 'CLAIMED' &&
+                           incoming().used == true &&
+                           incoming().claimed == true
+                         )
+                       );
+      allow delete: if false;
+    }
+
+    // 4C. Collection Rules: /watch_stats/{statId}
+    match /watch_stats/{statId} {
+      allow get: if isSignedIn() &&
+                    isValidId(statId) &&
+                    (resource == null || existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() &&
+                     (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+                       isValidId(statId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().videosWatched == 1 &&
+                       incoming().totalEarnedCents == 100;
+      allow update: if isSignedIn() &&
+                       isValidId(statId) &&
+                       existing().userId == request.auth.uid &&
+                       incoming().userId == existing().userId &&
+                       existing().videosWatched < 25 &&
+                       incoming().videosWatched == existing().videosWatched + 1 &&
+                       incoming().totalEarnedCents == existing().totalEarnedCents + 100;
+      allow delete: if false;
+    }
+
+    // 4D. Collection Rules: /processed_transactions/{txId} (Backend S2S Only)
+    match /processed_transactions/{txId} {
+      allow read, write: if false;
     }
 
     // 5. Collection Rules: /tasks/{taskId}

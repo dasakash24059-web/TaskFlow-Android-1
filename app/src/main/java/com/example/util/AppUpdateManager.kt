@@ -38,6 +38,7 @@ object AppUpdateManager {
   const val KEY_LATEST_VERSION_CODE = "latest_version_code"
   const val KEY_LATEST_VERSION_NAME = "latest_version_name"
   const val KEY_DOWNLOAD_URL = "download_url"
+  const val KEY_DOWNLOAD_URL_ALT = "Download_url"
   const val KEY_RELEASE_NOTES = "release_notes"
   const val KEY_FORCE_UPDATE = "force_update"
 
@@ -46,6 +47,9 @@ object AppUpdateManager {
 
   @Volatile
   private var activeDownloadId: Long = -1L
+
+  @Volatile
+  private var lastInstallerLaunchTimeMs: Long = 0L
 
   fun getInstalledVersionCode(context: Context): Int {
     return try {
@@ -98,8 +102,9 @@ object AppUpdateManager {
         KEY_LATEST_VERSION_CODE to installedCode,
         KEY_LATEST_VERSION_NAME to (BuildConfig.VERSION_NAME ?: "1.0"),
         KEY_DOWNLOAD_URL to "",
+        KEY_DOWNLOAD_URL_ALT to "",
         KEY_RELEASE_NOTES to "",
-        KEY_FORCE_UPDATE to false
+        KEY_FORCE_UPDATE to true
       )
 
       withTimeoutOrNull(3500L) {
@@ -118,10 +123,11 @@ object AppUpdateManager {
 
       val rawVersionString = remoteConfig.getString(KEY_LATEST_VERSION_CODE).trim()
       val latestVersionCode = rawVersionString.toIntOrNull() ?: remoteConfig.getLong(KEY_LATEST_VERSION_CODE).toInt()
-      val latestVersionName = remoteConfig.getString(KEY_LATEST_VERSION_NAME)
-      val downloadUrl = remoteConfig.getString(KEY_DOWNLOAD_URL).trim()
+      val latestVersionName = remoteConfig.getString(KEY_LATEST_VERSION_NAME).trim()
+      val downloadUrl = remoteConfig.getString(KEY_DOWNLOAD_URL).trim().ifBlank {
+        remoteConfig.getString(KEY_DOWNLOAD_URL_ALT).trim()
+      }
       val releaseNotes = remoteConfig.getString(KEY_RELEASE_NOTES)
-      val forceUpdate = remoteConfig.getBoolean(KEY_FORCE_UPDATE)
 
       android.util.Log.d("AppUpdateManager", "Remote Config parsed -> versionCode: $latestVersionCode, installedCode: $installedCode, downloadUrl: $downloadUrl")
 
@@ -137,7 +143,7 @@ object AppUpdateManager {
           versionName = latestVersionName.ifBlank { "1.0" },
           apkUrl = normalizeDownloadUrl(downloadUrl),
           releaseNotes = releaseNotes,
-          forceUpdate = forceUpdate
+          forceUpdate = true
         )
         Result.success(versionInfo)
       } else {
@@ -183,21 +189,20 @@ object AppUpdateManager {
       val json = JSONObject(jsonString)
       val versionCode = json.optInt("latest_version_code", json.optInt("versionCode", 1))
       val versionName = json.optString("latest_version_name", json.optString("versionName", "1.0"))
-      val rawApkUrl = json.optString("download_url", json.optString("apkUrl", "")).trim()
+      val rawApkUrl = json.optString("download_url", json.optString("Download_url", json.optString("apkUrl", ""))).trim()
       val releaseNotes = json.optString("release_notes", json.optString("releaseNotes", ""))
-      val forceUpdate = json.optBoolean("force_update", json.optBoolean("forceUpdate", false))
 
       val resolvedApkUrl = normalizeDownloadUrl(rawApkUrl)
 
+      val installedCode = getInstalledVersionCode(context)
       val versionInfo = AppVersionInfo(
         versionCode = versionCode,
         versionName = versionName,
         apkUrl = resolvedApkUrl,
         releaseNotes = releaseNotes,
-        forceUpdate = forceUpdate
+        forceUpdate = true
       )
 
-      val installedCode = getInstalledVersionCode(context)
       if (versionInfo.versionCode > installedCode) {
         Result.success(versionInfo)
       } else {
@@ -476,7 +481,11 @@ object AppUpdateManager {
    * 3. Validates that the digital signing certificate matches the currently installed application.
    * 4. Validates that the APK version code is newer than the currently installed version code.
    */
-  fun validateDownloadedApk(context: Context, apkFile: File): ApkValidationResult {
+  fun validateDownloadedApk(
+    context: Context,
+    apkFile: File,
+    expectedMinVersionCode: Int = 0
+  ): ApkValidationResult {
     // 1. Verify that the APK downloaded successfully
     if (!apkFile.exists() || apkFile.length() == 0L) {
       return ApkValidationResult.Invalid("Downloaded APK file not found or is 0 bytes.")
@@ -501,7 +510,7 @@ object AppUpdateManager {
       )
     }
 
-    // 4. Verify downloaded version code is newer than installed version
+    // 4. Verify downloaded version code is newer than installed version and meets required version
     val apkVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
       archiveInfo.longVersionCode.toInt()
     } else {
@@ -516,6 +525,12 @@ object AppUpdateManager {
       )
     }
 
+    if (expectedMinVersionCode > 0 && apkVersionCode < expectedMinVersionCode) {
+      return ApkValidationResult.Invalid(
+        "Downloaded APK version code ($apkVersionCode) is lower than required update version ($expectedMinVersionCode)."
+      )
+    }
+
     // 3. Verify that its signing certificate matches currently installed app
     if (!verifyApkSignatures(context, apkFile.absolutePath)) {
       return ApkValidationResult.Invalid(
@@ -524,6 +539,11 @@ object AppUpdateManager {
     }
 
     return ApkValidationResult.Valid
+  }
+
+  fun hasValidDownloadedApk(context: Context, expectedMinVersionCode: Int = 0): Boolean {
+    val destination = getDestinationApkFile(context)
+    return validateDownloadedApk(context, destination, expectedMinVersionCode) is ApkValidationResult.Valid
   }
 
   /**
@@ -668,33 +688,18 @@ object AppUpdateManager {
   fun installDownloadedApk(
     context: Context,
     targetCode: Int = -1,
-    targetName: String = ""
+    targetName: String = "",
+    openSettingsIfMissingPermission: Boolean = true
   ): Boolean {
     val destination = getDestinationApkFile(context)
-    val validation = validateDownloadedApk(context, destination)
+    val validation = validateDownloadedApk(context, destination, expectedMinVersionCode = if (targetCode > 0) targetCode else 0)
 
     if (validation is ApkValidationResult.Invalid) {
       android.util.Log.e("AppUpdateManager", "Installation blocked: ${validation.reason}")
       return false
     }
 
-    if (!canRequestPackageInstalls(context)) {
-      openUnknownAppSourcesSettings(context)
-      return false
-    }
-
-    val uri: Uri = try {
-      FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.fileprovider",
-        destination
-      )
-    } catch (e: Exception) {
-      android.util.Log.e("AppUpdateManager", "FileProvider getUriForFile failed", e)
-      return false
-    }
-
-    // Determine target version code and name from APK archive
+    // Determine target version code and name from APK archive before checking permission
     val finalTargetCode = if (targetCode > 0) targetCode else {
       val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) PackageManager.GET_SIGNING_CERTIFICATES else 0
       val archive = context.packageManager.getPackageArchiveInfo(destination.absolutePath, flags)
@@ -710,8 +715,33 @@ object AppUpdateManager {
       archive?.versionName ?: "Latest"
     }
 
-    // Record pending installation in SharedPreferences before launching installer
+    // Always record pending installation in SharedPreferences BEFORE checking install permission
+    // so when the user returns from Settings after granting permission, the pending target is preserved.
     recordPendingInstallation(context, finalTargetCode, finalTargetName)
+
+    if (!canRequestPackageInstalls(context)) {
+      if (openSettingsIfMissingPermission) {
+        openUnknownAppSourcesSettings(context)
+      }
+      return false
+    }
+
+    val now = System.currentTimeMillis()
+    if (now - lastInstallerLaunchTimeMs < 2000L) {
+      android.util.Log.d("AppUpdateManager", "Skipping duplicate package installer launch within 2s debounce window.")
+      return true
+    }
+
+    val uri: Uri = try {
+      FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        destination
+      )
+    } catch (e: Exception) {
+      android.util.Log.e("AppUpdateManager", "FileProvider getUriForFile failed", e)
+      return false
+    }
 
     val intent = Intent(Intent.ACTION_VIEW).apply {
       setDataAndType(uri, "application/vnd.android.package-archive")
@@ -720,9 +750,11 @@ object AppUpdateManager {
     }
 
     return try {
+      lastInstallerLaunchTimeMs = now
       context.startActivity(intent)
       true
     } catch (e: Exception) {
+      lastInstallerLaunchTimeMs = 0L
       android.util.Log.e("AppUpdateManager", "Failed to launch Android Package Installer", e)
       false
     }

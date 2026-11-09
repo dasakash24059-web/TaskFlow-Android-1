@@ -769,10 +769,14 @@ fun AppUpdateDialog(
 
   AlertDialog(
     onDismissRequest = {
-      if (!versionInfo.forceUpdate && !isDownloading && !isVerifying) {
+      if (isUpdateCompleted) {
         onDismiss()
       }
     },
+    properties = androidx.compose.ui.window.DialogProperties(
+      dismissOnBackPress = isUpdateCompleted,
+      dismissOnClickOutside = isUpdateCompleted
+    ),
     modifier = Modifier.testTag("update_dialog"),
     title = {
       Row(
@@ -846,9 +850,9 @@ fun AppUpdateDialog(
                 color = Color(0xFF065F46)
               )
               Text(
-                text = downloadProgress.statusMessage.ifBlank {
+                text = downloadProgress?.statusMessage?.ifBlank {
                   "TaskFlow has been updated successfully with all latest features and UI enhancements."
-                },
+                } ?: "TaskFlow has been updated successfully.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color(0xFF047857),
                 textAlign = TextAlign.Center
@@ -943,7 +947,7 @@ fun AppUpdateDialog(
 
                 if (isPermissionRequired) {
                   Text(
-                    text = "Android requires explicit authorization to allow TaskFlow to install updates. Tap 'Grant Permission' below to open Settings, enable 'Allow from this source', and return here.",
+                    text = "Android requires explicit authorization to allow TaskFlow to install updates. Tap 'Grant Permission in Settings' below, enable 'Allow from this source', and return here to automatically resume installation.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF78350F)
                   )
@@ -960,15 +964,13 @@ fun AppUpdateDialog(
             }
           }
 
-          if (versionInfo.forceUpdate) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-              text = "This is a required update. You must install the latest APK to continue using TaskFlow.",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.error,
-              fontWeight = FontWeight.SemiBold
-            )
-          }
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            text = "This is a required update. You must install the latest APK to continue using TaskFlow.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            fontWeight = FontWeight.SemiBold
+          )
         }
       }
     },
@@ -1051,7 +1053,7 @@ fun AppUpdateDialog(
             modifier = Modifier.fillMaxWidth().testTag("update_now_button"),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
           ) {
-            Text("Retry Update")
+            Text("Retry Update", fontWeight = FontWeight.Bold)
           }
         }
         else -> {
@@ -1060,21 +1062,12 @@ fun AppUpdateDialog(
             modifier = Modifier.fillMaxWidth().testTag("update_now_button"),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
           ) {
-            Text("Update")
+            Text("Update Now", fontWeight = FontWeight.Bold)
           }
         }
       }
     },
-    dismissButton = {
-      if (!versionInfo.forceUpdate && !isDownloading && !isVerifying && !isUpdateCompleted) {
-        TextButton(
-          onClick = onDismiss,
-          modifier = Modifier.testTag("later_update_button")
-        ) {
-          Text("Later")
-        }
-      }
-    }
+    dismissButton = null
   )
 }
 

@@ -1748,6 +1748,98 @@ class ExampleRobolectricTest {
     assertTrue("Should succeed when current version >= target", successResult is AppUpdateManager.UpdateVerificationResult.Success)
     assertNull(AppUpdateManager.getPendingInstallation(context))
   }
+
+  @Test
+  fun `WatchAndEarnCard and DailyCheckInCard are visible at top of UserHomeScreen without scrolling and support 2-step Watch and Claim flow`() {
+    val sampleProfile =
+      UserProfile(
+        id = "user_top_1",
+        userId = "user_top_1",
+        displayName = "Ananya Sen",
+        email = "ananya@example.com",
+        balanceCents = 5000L
+      )
+    val watchEarnStateHolder =
+      androidx.compose.runtime.mutableStateOf(
+        com.example.data.model.WatchEarnUiState(
+          status = com.example.data.model.WatchEarnFlowStatus.IDLE
+        )
+      )
+    var watchStarted = false
+    var rewardClaimed = false
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        UserHomeScreen(
+          profileState = UiState.Success(sampleProfile),
+          tasksState = UiState.Success(emptyList()),
+          isAdminAuthorized = false,
+          onSelectTask = {},
+          onNavigateToTracking = {},
+          onSwitchToAdmin = {},
+          watchStats = com.example.data.model.WatchStats(userId = "user_top_1", videosWatched = 3L),
+          watchEarnUiState = watchEarnStateHolder.value,
+          onStartWatchVideo = { watchStarted = true },
+          onClaimVerifiedWatchReward = { rewardClaimed = true }
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. Both Daily Check-in and Watch & Earn cards are immediately visible at the top without scrolling
+    composeTestRule.onNodeWithTag("home_daily_checkin_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("home_watch_earn_card").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Watch & Earn").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Daily 25 Videos").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Watch Now").assertIsDisplayed()
+    // Ensure promotional guaranteed earning text is NOT displayed
+    composeTestRule.onNodeWithText("Up to ₹25", substring = true).assertDoesNotExist()
+
+    // 2. Open Watch & Earn dialog -> Claim button is NOT shown before video completion
+    composeTestRule.onNodeWithTag("watch_ad_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("watch_earn_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Videos Watched: 3 / 25").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("claim_watch_reward_button").assertDoesNotExist()
+
+    // 3. Tap Watch Now -> triggers onStartWatchVideo
+    composeTestRule.onNodeWithTag("watch_ad_action_button").assertIsDisplayed().performClick()
+    assertTrue(watchStarted)
+
+    // 4. Transition to LOADING_AD -> loading banner is displayed and Watch button is disabled
+    watchEarnStateHolder.value =
+      com.example.data.model.WatchEarnUiState(
+        status = com.example.data.model.WatchEarnFlowStatus.LOADING_AD,
+        statusMessage = "Loading video..."
+      )
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("watch_earn_loading_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("watch_ad_action_button").assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("claim_watch_reward_button").assertDoesNotExist()
+
+    // 5. Transition to READY_TO_CLAIM after verified video completion -> Claim button is displayed
+    watchEarnStateHolder.value =
+      com.example.data.model.WatchEarnUiState(
+        status = com.example.data.model.WatchEarnFlowStatus.READY_TO_CLAIM,
+        activeSessionId = "verified_session_123",
+        statusMessage = "Video completed! Tap Claim to receive your reward."
+      )
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("watch_earn_ready_to_claim_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("claim_watch_reward_button").assertIsDisplayed().performClick()
+    assertTrue(rewardClaimed)
+
+    // 6. Transition to CLAIMED -> Claim button is hidden for that session and confirmation is shown
+    watchEarnStateHolder.value =
+      com.example.data.model.WatchEarnUiState(
+        status = com.example.data.model.WatchEarnFlowStatus.CLAIMED,
+        activeSessionId = "",
+        statusMessage = "Reward claimed successfully! +₹1.00 added to your wallet."
+      )
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("claim_watch_reward_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("watch_earn_claimed_banner").assertIsDisplayed()
+  }
 }
 
 

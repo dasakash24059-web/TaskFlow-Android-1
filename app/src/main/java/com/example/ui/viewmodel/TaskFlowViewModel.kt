@@ -757,7 +757,184 @@ class TaskFlowViewModel(
     }
   }
 
+  private val _watchEarnUiState =
+    MutableStateFlow(com.example.data.model.WatchEarnUiState())
+  val watchEarnUiState: StateFlow<com.example.data.model.WatchEarnUiState> =
+    _watchEarnUiState.asStateFlow()
+
+  fun prepareWatchEarnDialog() {
+    val current = _watchEarnUiState.value
+    if (
+      current.status == com.example.data.model.WatchEarnFlowStatus.CLAIMED ||
+        current.status == com.example.data.model.WatchEarnFlowStatus.ERROR
+    ) {
+      _watchEarnUiState.value = com.example.data.model.WatchEarnUiState()
+    }
+  }
+
+  /**
+   * Step 1 & 2 of Watch & Earn:
+   * - Prevents rapid duplicate taps
+   * - Shows loading indicator
+   * - Creates a unique server-verified reward session bound to currentUserId
+   * - Binds sessionId via PlayerMetaData.setServerId(sessionId)
+   * - Loads and shows BP_Rewarded_Android
+   * - Upon COMPLETED state and backend verification, transitions to READY_TO_CLAIM so the
+   *   "Claim" button appears (never auto-credits on ad start or completion).
+   */
+  fun startWatchEarnVideo(activity: android.app.Activity) {
+    val uid = currentUserId
+    if (uid.isBlank()) {
+      _bannerMessage.value = "Please sign in to watch videos."
+      return
+    }
+    val currentFlow = _watchEarnUiState.value
+    if (currentFlow.isLoadingAd || currentFlow.isClaiming) {
+      return
+    }
+    val stats = watchStats.value
+    if (stats.videosWatched >= 25L) {
+      _watchEarnUiState.value =
+        com.example.data.model.WatchEarnUiState(
+          status = com.example.data.model.WatchEarnFlowStatus.ERROR,
+          errorMessage = "Daily limit of 25 videos reached (25/25). Come back tomorrow!"
+        )
+      return
+    }
+
+    val todayKey = getTodayDateKey()
+    _watchEarnUiState.value =
+      com.example.data.model.WatchEarnUiState(
+        status = com.example.data.model.WatchEarnFlowStatus.LOADING_AD,
+        statusMessage = "Loading video..."
+      )
+
+    viewModelScope.launch {
+      val sessionResult = repository.createWatchEarnSession(uid, todayKey)
+      val sessionId =
+        sessionResult.getOrElse { err ->
+          _watchEarnUiState.value =
+            com.example.data.model.WatchEarnUiState(
+              status = com.example.data.model.WatchEarnFlowStatus.ERROR,
+              errorMessage =
+                err.localizedMessage
+                  ?: com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
+            )
+          return@launch
+        }
+
+      com.example.util.UnityAdsHelper.loadAndShowRewardedAdForSession(
+        activity = activity,
+        sessionId = sessionId,
+        onAdShowing = {
+          _watchEarnUiState.value =
+            com.example.data.model.WatchEarnUiState(
+              status = com.example.data.model.WatchEarnFlowStatus.SHOWING_AD,
+              activeSessionId = sessionId,
+              statusMessage = "Watching video... Please watch until the end."
+            )
+        },
+        onVideoCompleted = {
+          viewModelScope.launch {
+            repository
+              .verifyWatchEarnSessionCompleted(uid, sessionId)
+              .onSuccess {
+                _watchEarnUiState.value =
+                  com.example.data.model.WatchEarnUiState(
+                    status = com.example.data.model.WatchEarnFlowStatus.READY_TO_CLAIM,
+                    activeSessionId = sessionId,
+                    statusMessage = "Video completed! Tap Claim to receive your reward."
+                  )
+              }
+              .onFailure { err ->
+                _watchEarnUiState.value =
+                  com.example.data.model.WatchEarnUiState(
+                    status = com.example.data.model.WatchEarnFlowStatus.ERROR,
+                    errorMessage =
+                      err.localizedMessage
+                        ?: "Reward verification failed. Please try again."
+                  )
+              }
+          }
+        },
+        onFailed = { errorMsg ->
+          _watchEarnUiState.value =
+            com.example.data.model.WatchEarnUiState(
+              status = com.example.data.model.WatchEarnFlowStatus.ERROR,
+              errorMessage =
+                errorMsg.ifBlank { com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE }
+            )
+        }
+      )
+    }
+  }
+
+  /**
+   * Step 3 of Watch & Earn:
+   * Called when the user explicitly taps the "Claim" button after completing a verified video.
+   * Atomically verifies the session is unused and valid, credits the wallet, updates watch stats,
+   * and disables the Claim button for that session so it cannot be claimed twice.
+   */
+  fun claimVerifiedWatchEarnReward(onSuccess: (Long) -> Unit = {}) {
+    val uid = currentUserId
+    val currentFlow = _watchEarnUiState.value
+    val sessionId = currentFlow.activeSessionId
+
+    if (uid.isBlank() || !currentFlow.isReadyToClaim || currentFlow.isClaiming || sessionId.isBlank()) {
+      return
+    }
+
+    val todayKey = getTodayDateKey()
+    val name = (userProfileState.value as? UiState.Success)?.data?.displayName ?: "TaskFlow Member"
+
+    _watchEarnUiState.value =
+      currentFlow.copy(
+        status = com.example.data.model.WatchEarnFlowStatus.CLAIMING,
+        statusMessage = "Verifying and claiming your reward...",
+        errorMessage = null
+      )
+
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository
+        .claimVerifiedWatchEarnSession(
+          userId = uid,
+          userName = name,
+          sessionId = sessionId,
+          dateKey = todayKey
+        )
+        .onSuccess { earned ->
+          val currentBalance =
+            ((userProfileState.value as? UiState.Success)?.data?.balanceCents ?: 0L)
+          _watchEarnUiState.value =
+            com.example.data.model.WatchEarnUiState(
+              status = com.example.data.model.WatchEarnFlowStatus.CLAIMED,
+              activeSessionId = "",
+              statusMessage =
+                "Reward claimed successfully! +${formatRewardInr(earned)} added to your wallet."
+            )
+          _bannerMessage.value =
+            "Reward claimed! +${formatRewardInr(earned)} credited to your wallet (Balance: ${formatRewardInr(currentBalance)})."
+          onSuccess(earned)
+        }
+        .onFailure { err ->
+          _watchEarnUiState.value =
+            currentFlow.copy(
+              status = com.example.data.model.WatchEarnFlowStatus.ERROR,
+              errorMessage = err.localizedMessage ?: "Failed to claim reward."
+            )
+          _bannerMessage.value = err.localizedMessage ?: "Failed to claim reward."
+        }
+      _isBusy.value = false
+    }
+  }
+
   fun claimWatchEarnReward(onSuccess: (Long) -> Unit = {}) {
+    val currentFlow = _watchEarnUiState.value
+    if (currentFlow.isReadyToClaim && currentFlow.activeSessionId.isNotBlank()) {
+      claimVerifiedWatchEarnReward(onSuccess)
+      return
+    }
     val uid = currentUserId
     val todayKey = getTodayDateKey()
     val name = (userProfileState.value as? UiState.Success)?.data?.displayName ?: "TaskFlow Member"
@@ -772,14 +949,11 @@ class TaskFlowViewModel(
       _bannerMessage.value = "You have reached the maximum limit of 25 watched videos for today."
       return
     }
-    if (stats.totalEarnedCents >= 4000L) {
-      _bannerMessage.value = "You have reached the daily Watch & Earn earning limit of ₹40."
-      return
-    }
 
     viewModelScope.launch {
       _isBusy.value = true
-      repository.claimWatchEarnReward(uid, name, todayKey)
+      repository
+        .claimWatchEarnReward(uid, name, todayKey)
         .onSuccess { earned ->
           _bannerMessage.value = "Watch & Earn reward claimed: +${formatRewardInr(earned)}"
           onSuccess(earned)
@@ -821,35 +995,55 @@ class TaskFlowViewModel(
   private val _isCheckingUpdate = MutableStateFlow(false)
   val isCheckingUpdate: StateFlow<Boolean> = _isCheckingUpdate.asStateFlow()
 
-  private var hasCheckedUpdateThisSession = false
-  private var dismissedUpdateCode: Int = -1
-
   fun checkForAppUpdates(context: android.content.Context, forceCheck: Boolean = false) {
-    if (hasCheckedUpdateThisSession && !forceCheck) return
-    val prefs = context.getSharedPreferences("app_update_prefs", android.content.Context.MODE_PRIVATE)
-    dismissedUpdateCode = prefs.getInt("dismissed_update_code", -1)
-    hasCheckedUpdateThisSession = true
+    if (_isCheckingUpdate.value) return
+    val currentStatus = _updateDownloadProgress.value.status
+    // Do not interrupt an active download, permission flow, or installation with a redundant check
+    if (
+      !forceCheck &&
+        (currentStatus == UpdateDownloadStatus.DOWNLOADING ||
+          currentStatus == UpdateDownloadStatus.VERIFYING ||
+          currentStatus == UpdateDownloadStatus.DOWNLOAD_COMPLETED ||
+          currentStatus == UpdateDownloadStatus.READY_TO_INSTALL ||
+          currentStatus == UpdateDownloadStatus.PERMISSION_REQUIRED ||
+          currentStatus == UpdateDownloadStatus.INSTALLATION_STARTED ||
+          currentStatus == UpdateDownloadStatus.WAITING_FOR_INSTALL_CONFIRMATION)
+    ) {
+      _showUpdateDialog.value = true
+      return
+    }
+
     viewModelScope.launch {
       _isCheckingUpdate.value = true
       com.example.util.AppUpdateManager.checkForUpdate(context)
         .onSuccess { updateInfo ->
-          if (updateInfo != null && (forceCheck || updateInfo.versionCode != dismissedUpdateCode)) {
-            _appUpdateInfo.value = updateInfo
+          val installedCode = com.example.util.AppUpdateManager.getInstalledVersionCode(context)
+          if (updateInfo != null && installedCode < updateInfo.versionCode) {
+            val mandatoryUpdateInfo = updateInfo.copy(forceUpdate = true)
+            _appUpdateInfo.value = mandatoryUpdateInfo
             _showUpdateDialog.value = true
             if (_updateDownloadProgress.value.status == UpdateDownloadStatus.IDLE) {
-              _updateDownloadProgress.value = UpdateDownloadProgress(
-                status = UpdateDownloadStatus.UPDATE_AVAILABLE,
-                targetVersionCode = updateInfo.versionCode,
-                targetVersionName = updateInfo.versionName
-              )
+              _updateDownloadProgress.value =
+                UpdateDownloadProgress(
+                  status = UpdateDownloadStatus.UPDATE_AVAILABLE,
+                  targetVersionCode = mandatoryUpdateInfo.versionCode,
+                  targetVersionName = mandatoryUpdateInfo.versionName
+                )
             }
-          } else if (forceCheck) {
-            _bannerMessage.value = "TaskFlow is up to date (Version ${BuildConfig.VERSION_NAME})."
+          } else {
+            // Installed version is >= latest_version_code
+            _appUpdateInfo.value = null
+            _showUpdateDialog.value = false
+            if (forceCheck) {
+              _bannerMessage.value =
+                "TaskFlow is up to date (Version ${BuildConfig.VERSION_NAME})."
+            }
           }
         }
         .onFailure { err ->
           if (forceCheck) {
-            _bannerMessage.value = "Update check failed: ${err.localizedMessage ?: "Network error"}"
+            _bannerMessage.value =
+              "Update check failed: ${err.localizedMessage ?: "Network error"}"
           }
         }
       _isCheckingUpdate.value = false
@@ -860,11 +1054,16 @@ class TaskFlowViewModel(
   val updateDownloadProgress: StateFlow<UpdateDownloadProgress> = _updateDownloadProgress.asStateFlow()
 
   fun dismissUpdateDialog(context: android.content.Context) {
+    // Mandatory updates cannot be dismissed while installedVersionCode < latest_version_code
     val info = _appUpdateInfo.value
-    if (info != null) {
-      val prefs = context.getSharedPreferences("app_update_prefs", android.content.Context.MODE_PRIVATE)
-      prefs.edit().putInt("dismissed_update_code", info.versionCode).apply()
-      dismissedUpdateCode = info.versionCode
+    val installedCode = com.example.util.AppUpdateManager.getInstalledVersionCode(context)
+    if (
+      info != null &&
+        installedCode < info.versionCode &&
+        !_updateDownloadProgress.value.isUpdateCompleted
+    ) {
+      _showUpdateDialog.value = true
+      return
     }
     _showUpdateDialog.value = false
     _updateDownloadProgress.value = UpdateDownloadProgress()
@@ -883,6 +1082,12 @@ class TaskFlowViewModel(
       return
     }
 
+    // If a valid downloaded APK for this target version already exists on disk, install directly without re-downloading
+    if (com.example.util.AppUpdateManager.hasValidDownloadedApk(context, info.versionCode)) {
+      triggerInstalledApkInstall(context)
+      return
+    }
+
     // Prevent duplicate downloads when already downloading or verifying
     if (_updateDownloadProgress.value.isDownloading || _updateDownloadProgress.value.isVerifying) {
       _bannerMessage.value = "Download is already in progress..."
@@ -890,22 +1095,24 @@ class TaskFlowViewModel(
     }
 
     _showUpdateDialog.value = true
-    _updateDownloadProgress.value = UpdateDownloadProgress(
-      status = UpdateDownloadStatus.DOWNLOADING,
-      progressPercent = 0,
-      statusMessage = "Connecting and starting download...",
-      targetVersionCode = info.versionCode,
-      targetVersionName = info.versionName
-    )
-
-    val downloadId = com.example.util.AppUpdateManager.downloadAndInstallApk(context, trimmedUrl)
-    if (downloadId <= 0L) {
-      _updateDownloadProgress.value = UpdateDownloadProgress(
-        status = UpdateDownloadStatus.FAILED,
-        errorMessage = "Unable to start download. Check network and storage.",
+    _updateDownloadProgress.value =
+      UpdateDownloadProgress(
+        status = UpdateDownloadStatus.DOWNLOADING,
+        progressPercent = 0,
+        statusMessage = "Connecting and starting download...",
         targetVersionCode = info.versionCode,
         targetVersionName = info.versionName
       )
+
+    val downloadId = com.example.util.AppUpdateManager.downloadAndInstallApk(context, trimmedUrl)
+    if (downloadId <= 0L) {
+      _updateDownloadProgress.value =
+        UpdateDownloadProgress(
+          status = UpdateDownloadStatus.FAILED,
+          errorMessage = "Unable to start download. Check network and storage.",
+          targetVersionCode = info.versionCode,
+          targetVersionName = info.versionName
+        )
       _bannerMessage.value = "Failed to start download."
       return
     }
@@ -915,11 +1122,15 @@ class TaskFlowViewModel(
         context = context,
         downloadId = downloadId,
         onProgress = { progress ->
-          _updateDownloadProgress.value = progress.copy(
-            targetVersionCode = info.versionCode,
-            targetVersionName = info.versionName
-          )
-          if (progress.status == UpdateDownloadStatus.DOWNLOAD_COMPLETED || progress.status == UpdateDownloadStatus.READY_TO_INSTALL) {
+          _updateDownloadProgress.value =
+            progress.copy(
+              targetVersionCode = info.versionCode,
+              targetVersionName = info.versionName
+            )
+          if (
+            progress.status == UpdateDownloadStatus.DOWNLOAD_COMPLETED ||
+              progress.status == UpdateDownloadStatus.READY_TO_INSTALL
+          ) {
             triggerInstalledApkInstall(context)
           }
         }
@@ -927,76 +1138,177 @@ class TaskFlowViewModel(
     }
   }
 
-  fun triggerInstalledApkInstall(context: android.content.Context) {
+  fun triggerInstalledApkInstall(
+    context: android.content.Context,
+    openSettingsIfMissingPermission: Boolean = true
+  ) {
     val info = _appUpdateInfo.value
     val targetCode = info?.versionCode ?: _updateDownloadProgress.value.targetVersionCode
     val targetName = info?.versionName ?: _updateDownloadProgress.value.targetVersionName
 
     _showUpdateDialog.value = true
-    _updateDownloadProgress.value = _updateDownloadProgress.value.copy(
-      status = UpdateDownloadStatus.INSTALLATION_STARTED,
-      statusMessage = "Android Package Installer launched. Please tap 'Update' in the system dialog to complete installation.",
-      targetVersionCode = targetCode,
-      targetVersionName = targetName
-    )
 
-    val success = com.example.util.AppUpdateManager.installDownloadedApk(context, targetCode, targetName)
+    if (!com.example.util.AppUpdateManager.canRequestPackageInstalls(context)) {
+      com.example.util.AppUpdateManager.recordPendingInstallation(
+        context,
+        if (targetCode > 0) targetCode else 1,
+        targetName.ifBlank { "Latest" }
+      )
+      _updateDownloadProgress.value =
+        _updateDownloadProgress.value.copy(
+          status = UpdateDownloadStatus.PERMISSION_REQUIRED,
+          statusMessage =
+            "Install permission required. Please allow 'Install unknown apps' for TaskFlow in Settings.",
+          targetVersionCode = targetCode,
+          targetVersionName = targetName
+        )
+      if (openSettingsIfMissingPermission) {
+        com.example.util.AppUpdateManager.openUnknownAppSourcesSettings(context)
+      }
+      return
+    }
+
+    _updateDownloadProgress.value =
+      _updateDownloadProgress.value.copy(
+        status = UpdateDownloadStatus.INSTALLATION_STARTED,
+        statusMessage =
+          "Android Package Installer launched. Please tap 'Update' in the system dialog to complete installation.",
+        targetVersionCode = targetCode,
+        targetVersionName = targetName
+      )
+
+    val success =
+      com.example.util.AppUpdateManager.installDownloadedApk(
+        context = context,
+        targetCode = targetCode,
+        targetName = targetName,
+        openSettingsIfMissingPermission = openSettingsIfMissingPermission
+      )
     if (!success) {
       if (!com.example.util.AppUpdateManager.canRequestPackageInstalls(context)) {
-        _updateDownloadProgress.value = _updateDownloadProgress.value.copy(
-          status = UpdateDownloadStatus.PERMISSION_REQUIRED,
-          statusMessage = "Install permission required. Please allow 'Install unknown apps' in Settings."
-        )
-        _bannerMessage.value = "Please allow installation of unknown apps for TaskFlow in Settings."
+        _updateDownloadProgress.value =
+          _updateDownloadProgress.value.copy(
+            status = UpdateDownloadStatus.PERMISSION_REQUIRED,
+            statusMessage =
+              "Install permission required. Please allow 'Install unknown apps' in Settings."
+          )
       } else {
-        _updateDownloadProgress.value = _updateDownloadProgress.value.copy(
-          status = UpdateDownloadStatus.FAILED,
-          errorMessage = "Unable to start installation. Verification or FileProvider error."
-        )
+        _updateDownloadProgress.value =
+          _updateDownloadProgress.value.copy(
+            status = UpdateDownloadStatus.FAILED,
+            errorMessage = "Unable to start installation. Verification or FileProvider error."
+          )
         _bannerMessage.value = "Unable to start installation. Verification error."
       }
     }
   }
 
+  /**
+   * Called on Activity ON_RESUME to handle:
+   * 1. Post-installation version verification (installedVersionCode >= latest_version_code).
+   * 2. Returning from Android "Install Unknown Apps" Settings: if permission is now granted,
+   *    automatically transitions out of PERMISSION_REQUIRED and launches the APK installer
+   *    without looping or re-downloading!
+   * 3. Returning from a cancelled Package Installer prompt: keeps the mandatory update dialog
+   *    active in READY_TO_INSTALL state so the user cannot bypass the required update.
+   */
   fun verifyPostInstallation(context: android.content.Context) {
+    val currentProgress = _updateDownloadProgress.value
     val result = com.example.util.AppUpdateManager.verifyInstalledVersionAfterUpdate(context)
+
     when (result) {
       is com.example.util.AppUpdateManager.UpdateVerificationResult.Success -> {
         _showUpdateDialog.value = true
-        _updateDownloadProgress.value = UpdateDownloadProgress(
-          status = UpdateDownloadStatus.UPDATE_COMPLETED,
-          progressPercent = 100,
-          statusMessage = "Update completed successfully! TaskFlow version ${result.installedName} (Build ${result.installedCode}) is now installed with all latest features and UI enhancements.",
-          targetVersionCode = result.installedCode,
-          targetVersionName = result.installedName
-        )
+        _updateDownloadProgress.value =
+          UpdateDownloadProgress(
+            status = UpdateDownloadStatus.UPDATE_COMPLETED,
+            progressPercent = 100,
+            statusMessage =
+              "Update completed successfully! TaskFlow version ${result.installedName} (Build ${result.installedCode}) is now installed.",
+            targetVersionCode = result.installedCode,
+            targetVersionName = result.installedName
+          )
         _bannerMessage.value = "TaskFlow updated to version ${result.installedName}!"
+        return
       }
       is com.example.util.AppUpdateManager.UpdateVerificationResult.StillPending -> {
-        val currentProgress = _updateDownloadProgress.value
+        // Case A: User was in PERMISSION_REQUIRED state and just returned from Settings
+        if (currentProgress.isPermissionRequired) {
+          if (com.example.util.AppUpdateManager.canRequestPackageInstalls(context)) {
+            val dest = com.example.util.AppUpdateManager.getDestinationApkFile(context)
+            if (dest.exists() && dest.length() > 0L) {
+              // Permission is now granted! Automatically resume installation without asking again
+              triggerInstalledApkInstall(context, openSettingsIfMissingPermission = false)
+            } else {
+              // APK was not yet downloaded; start download now that permission is granted
+              downloadAndInstallUpdate(context)
+            }
+          }
+          return
+        }
+
+        // Case B: User was in INSTALLATION_STARTED / WAITING_FOR_INSTALL_CONFIRMATION and returned (e.g. cancelled system dialog)
         if (currentProgress.isInstallationStarted || currentProgress.isWaitingForInstallConfirmation) {
           val dest = com.example.util.AppUpdateManager.getDestinationApkFile(context)
           val isApkReady = dest.exists() && dest.length() > 0L
-          _updateDownloadProgress.value = currentProgress.copy(
-            status = if (isApkReady) UpdateDownloadStatus.DOWNLOAD_COMPLETED else UpdateDownloadStatus.FAILED,
-            statusMessage = "Installation was not completed. Android Package Installer was cancelled or interrupted. Tap 'Install Now' to proceed with installation.",
-            errorMessage = if (!isApkReady) "Installation cancelled and package file missing. Please retry update." else null
-          )
+          _showUpdateDialog.value = true
+          _updateDownloadProgress.value =
+            currentProgress.copy(
+              status =
+                if (isApkReady) UpdateDownloadStatus.DOWNLOAD_COMPLETED
+                else UpdateDownloadStatus.FAILED,
+              statusMessage =
+                "Installation was not completed. Please tap 'Install Now' to complete the required update.",
+              errorMessage =
+                if (!isApkReady)
+                  "Installation cancelled and package file missing. Please retry update."
+                else null
+            )
+          return
         }
       }
       is com.example.util.AppUpdateManager.UpdateVerificationResult.NoPendingUpdate -> {
+        // Even if NoPendingUpdate was recorded in prefs, check if UI was waiting on PERMISSION_REQUIRED
+        if (currentProgress.isPermissionRequired && com.example.util.AppUpdateManager.canRequestPackageInstalls(context)) {
+          val dest = com.example.util.AppUpdateManager.getDestinationApkFile(context)
+          if (dest.exists() && dest.length() > 0L) {
+            triggerInstalledApkInstall(context, openSettingsIfMissingPermission = false)
+            return
+          }
+        }
         val currentCode = com.example.util.AppUpdateManager.getInstalledVersionCode(context)
-        val prefs = context.getSharedPreferences("app_update_prefs", android.content.Context.MODE_PRIVATE)
+        val prefs =
+          context.getSharedPreferences("app_update_prefs", android.content.Context.MODE_PRIVATE)
         val lastKnownCode = prefs.getInt("last_known_installed_code", currentCode)
         if (currentCode > lastKnownCode) {
           prefs.edit().putInt("last_known_installed_code", currentCode).apply()
         }
       }
     }
+
+    // Always re-verify Remote Config version requirement if no active update dialog is showing
+    if (_appUpdateInfo.value == null) {
+      checkForAppUpdates(context, forceCheck = false)
+    }
   }
 
   fun requestUnknownAppSourcesPermission(context: android.content.Context) {
-    com.example.util.AppUpdateManager.openUnknownAppSourcesSettings(context)
+    val info = _appUpdateInfo.value
+    val targetCode = info?.versionCode ?: _updateDownloadProgress.value.targetVersionCode
+    val targetName = info?.versionName ?: _updateDownloadProgress.value.targetVersionName
+    if (targetCode > 0) {
+      com.example.util.AppUpdateManager.recordPendingInstallation(
+        context,
+        targetCode,
+        targetName.ifBlank { "Latest" }
+      )
+    }
+    if (com.example.util.AppUpdateManager.canRequestPackageInstalls(context)) {
+      // Permission is already granted — proceed directly to install!
+      triggerInstalledApkInstall(context, openSettingsIfMissingPermission = false)
+    } else {
+      com.example.util.AppUpdateManager.openUnknownAppSourcesSettings(context)
+    }
   }
 
   fun resetUpdateDownloadProgress() {
