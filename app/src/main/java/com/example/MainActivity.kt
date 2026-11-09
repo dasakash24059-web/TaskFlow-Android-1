@@ -666,6 +666,8 @@ private fun AuthenticatedWorkspace(
                       if (activity != null) {
                         com.example.util.UnityAdsHelper.watchAndClaimReward(
                           activity = activity,
+                          userId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "",
+                          rewardType = "DAILY_CHECK_IN",
                           onComplete = {
                             viewModel.claimDailyCheckIn(day)
                           },
@@ -700,6 +702,8 @@ private fun AuthenticatedWorkspace(
                       if (activity != null) {
                         com.example.util.UnityAdsHelper.watchAndClaimReward(
                           activity = activity,
+                          userId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "",
+                          rewardType = "DAILY_CHECK_IN",
                           onComplete = {
                             viewModel.claimDailyCheckIn()
                             viewModel.setDailyCheckInScreenVisible(true)
@@ -728,6 +732,8 @@ private fun AuthenticatedWorkspace(
                       if (activity != null) {
                         com.example.util.UnityAdsHelper.watchAndClaimReward(
                           activity = activity,
+                          userId = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "",
+                          rewardType = "WATCH_AND_EARN",
                           onComplete = {
                             viewModel.claimWatchEarnReward()
                           },

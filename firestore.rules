@@ -152,6 +152,7 @@ service cloud.firestore {
              data.role is string && (data.role == 'user' || data.role == 'admin') &&
              data.approvalStatus is string && (data.approvalStatus == 'approved' || data.approvalStatus == 'pending' || data.approvalStatus == 'suspended') &&
              data.balanceCents is int && data.balanceCents >= 0 && data.balanceCents <= 1000000000 &&
+             data.virtualPoints is int && data.virtualPoints >= 0 && data.virtualPoints <= 1000000 &&
              data.completedTasksCount is int && data.completedTasksCount >= 0 && data.completedTasksCount <= 1000000 &&
              (!('assignedTaskId' in data) || data.assignedTaskId == null || (data.assignedTaskId is string && data.assignedTaskId.size() <= 128)) &&
              (!('lastCheckInDate' in data) || data.lastCheckInDate is string) &&

@@ -24,8 +24,8 @@ android {
         applicationId = "com.aistudio.taskflow.kxmpzq"
         minSdk = 24
         targetSdk = 36
-        versionCode = 14
-        versionName = "3.6"
+        versionCode = 13
+        versionName = "3.5"
 
         testInstrumentationRunner =
             "androidx.test.runner.AndroidJUnitRunner"
@@ -122,6 +122,7 @@ dependencies {
     implementation(libs.firebase.auth)
     implementation(libs.firebase.storage)
     implementation(libs.firebase.config)
+    implementation(libs.firebase.functions)
     implementation(libs.coil.compose)
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services)

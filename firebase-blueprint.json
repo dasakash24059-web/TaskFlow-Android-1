@@ -31,6 +31,10 @@
           "type": "integer",
           "description": "Accumulated task reward balance in INR paise (100 paise = ₹1.00, read-only for regular users)."
         },
+        "virtualPoints": {
+          "type": "integer",
+          "description": "Accumulated virtual points from video ads (read-only for regular users)."
+        },
         "completedTasksCount": {
           "type": "integer",
           "description": "Total number of approved tasks for this user."
@@ -57,6 +61,7 @@
         "role",
         "approvalStatus",
         "balanceCents",
+        "virtualPoints",
         "completedTasksCount",
         "createdAt",
         "updatedAt"

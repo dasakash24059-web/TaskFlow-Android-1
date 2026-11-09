@@ -8,9 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -22,12 +20,15 @@ import com.unity3d.ads.UnityAds
 import com.unity3d.ads.UnityAdsShowOptions
 import com.unity3d.services.banners.BannerView
 import com.unity3d.services.banners.UnityBannerSize
+import com.unity3d.ads.metadata.PlayerMetaData
+import com.google.firebase.functions.FirebaseFunctions
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.launch
 
 object UnityAdsHelper {
   const val GAME_ID = "800430673"
   const val REWARDED_PLACEMENT_ID = "BP_Rewarded_Android"
   const val BANNER_PLACEMENT_ID = "BP_Banner_Android"
-  const val INTERSTITIAL_PLACEMENT_ID = "BP_Interstitial_Android"
   const val TEST_MODE = true
 
   private var isInitialized = false
@@ -44,7 +45,6 @@ object UnityAdsHelper {
           isInitialized = true
           Log.d("UnityAdsHelper", "Unity Ads Initialization Complete.")
         }
-
         override fun onInitializationFailed(error: UnityAds.UnityAdsInitializationError, message: String) {
           Log.e("UnityAdsHelper", "Unity Ads Initialization Failed: $error - $message")
         }
@@ -66,7 +66,6 @@ object UnityAdsHelper {
           Log.d("UnityAdsHelper", "Rewarded ad loaded: $placementId")
           onLoaded()
         }
-
         override fun onUnityAdsFailedToLoad(placementId: String, error: UnityAds.UnityAdsLoadError, message: String) {
           Log.e("UnityAdsHelper", "Rewarded ad failed to load: $error - $message")
           onError(message)
@@ -89,27 +88,15 @@ object UnityAdsHelper {
       }
       val options = UnityAdsShowOptions()
       UnityAds.show(activity, REWARDED_PLACEMENT_ID, options, object : IUnityAdsShowListener {
-        override fun onUnityAdsShowStart(placementId: String) {
-          Log.d("UnityAdsHelper", "Rewarded ad show start: $placementId")
+        override fun onUnityAdsShowComplete(placementId: String, state: UnityAds.UnityAdsShowCompletionState) {
+          if (state == UnityAds.UnityAdsShowCompletionState.COMPLETED) onComplete()
+          else onFailed("Ad not completed: $state")
         }
-
-        override fun onUnityAdsShowClick(placementId: String) {
-          Log.d("UnityAdsHelper", "Rewarded ad show click: $placementId")
-        }
-
-        override fun onUnityAdsShowComplete(placementId: String, state: com.unity3d.ads.UnityAds.UnityAdsShowCompletionState) {
-          Log.d("UnityAdsHelper", "Rewarded ad show complete: $state")
-          if (state == com.unity3d.ads.UnityAds.UnityAdsShowCompletionState.COMPLETED) {
-            onComplete()
-          } else {
-            onFailed("Ad was not completed fully (State: $state)")
-          }
-        }
-
         override fun onUnityAdsShowFailure(placementId: String, error: UnityAds.UnityAdsShowError, message: String) {
-          Log.e("UnityAdsHelper", "Rewarded ad show failure: $error - $message")
           onFailed(message)
         }
+        override fun onUnityAdsShowStart(p0: String) {}
+        override fun onUnityAdsShowClick(p0: String) {}
       })
     } catch (e: Throwable) {
       onFailed(e.message ?: "Exception showing ad")
@@ -118,19 +105,33 @@ object UnityAdsHelper {
 
   fun watchAndClaimReward(
     activity: Activity,
+    userId: String,
+    rewardType: String,
     onComplete: () -> Unit,
     onFailed: (String) -> Unit
   ) {
-    loadRewardedAd(
-      onLoaded = {
-        showRewardedAd(
-          activity = activity,
-          onComplete = onComplete,
-          onFailed = onFailed
+    val functions = FirebaseFunctions.getInstance()
+    kotlinx.coroutines.MainScope().launch {
+      try {
+        val result = functions.getHttpsCallable("createRewardSession")
+          .call(mapOf("rewardType" to rewardType)).await()
+        val sessionId = (result.data as Map<*, *>)["sessionId"] as String
+        
+        val playerMetaData = PlayerMetaData(activity)
+        playerMetaData.setServerId(userId)
+        playerMetaData.set("session_id", sessionId)
+        playerMetaData.commit()
+        
+        loadRewardedAd(
+          onLoaded = {
+            showRewardedAd(activity, onComplete, onFailed)
+          },
+          onError = onFailed
         )
-      },
-      onError = onFailed
-    )
+      } catch (e: Exception) {
+        onFailed("Failed to create session: ${e.message}")
+      }
+    }
   }
 }
 

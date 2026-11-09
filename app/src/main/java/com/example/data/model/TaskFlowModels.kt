@@ -228,6 +228,7 @@ data class UserProfile(
   val role: String = "user",
   val approvalStatus: String = "approved",
   val balanceCents: Long = 0L,
+  val virtualPoints: Long = 0L,
   val completedTasksCount: Long = 0L,
   val assignedTaskId: String = "",
   val lastCheckInDate: String = "",

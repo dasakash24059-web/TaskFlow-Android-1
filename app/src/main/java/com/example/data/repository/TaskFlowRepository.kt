@@ -287,6 +287,7 @@ class TaskFlowRepository(
           "role" to initialRole,
           "approvalStatus" to initialApproval,
           "balanceCents" to 0L,
+          "virtualPoints" to 0L,
           "completedTasksCount" to 0L,
           "assignedTaskId" to "",
           "createdAt" to FieldValue.serverTimestamp(),
