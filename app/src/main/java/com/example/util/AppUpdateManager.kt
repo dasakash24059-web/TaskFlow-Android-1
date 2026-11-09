@@ -104,8 +104,9 @@ object AppUpdateManager {
 
       withTimeoutOrNull(3500L) {
         runCatching {
+          val fetchInterval = if (BuildConfig.DEBUG) 0L else 60L
           val configSettings = FirebaseRemoteConfigSettings.Builder()
-            .setMinimumFetchIntervalInSeconds(60L)
+            .setMinimumFetchIntervalInSeconds(fetchInterval)
             .setFetchTimeoutInSeconds(3L)
             .build()
           remoteConfig.setConfigSettingsAsync(configSettings)
