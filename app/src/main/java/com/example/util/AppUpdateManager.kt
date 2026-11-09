@@ -116,14 +116,18 @@ object AppUpdateManager {
         }
       }
 
-      val latestVersionCode = remoteConfig.getLong(KEY_LATEST_VERSION_CODE).toInt()
+      val rawVersionString = remoteConfig.getString(KEY_LATEST_VERSION_CODE).trim()
+      val latestVersionCode = rawVersionString.toIntOrNull() ?: remoteConfig.getLong(KEY_LATEST_VERSION_CODE).toInt()
       val latestVersionName = remoteConfig.getString(KEY_LATEST_VERSION_NAME)
       val downloadUrl = remoteConfig.getString(KEY_DOWNLOAD_URL).trim()
       val releaseNotes = remoteConfig.getString(KEY_RELEASE_NOTES)
       val forceUpdate = remoteConfig.getBoolean(KEY_FORCE_UPDATE)
 
+      android.util.Log.d("AppUpdateManager", "Remote Config parsed -> versionCode: $latestVersionCode, installedCode: $installedCode, downloadUrl: $downloadUrl")
+
       // If Remote Config is unconfigured or missing URL, fallback to repository version.json
       if (latestVersionCode <= 0 || downloadUrl.isBlank()) {
+        android.util.Log.w("AppUpdateManager", "Remote Config missing valid versionCode or downloadUrl. Falling back to version.json.")
         return@withContext checkForUpdateViaFallbackJson(context)
       }
 
