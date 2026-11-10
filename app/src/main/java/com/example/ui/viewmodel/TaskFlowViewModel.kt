@@ -745,78 +745,63 @@ class TaskFlowViewModel(
 
     viewModelScope.launch {
       _isBusy.value = true
-      if (activity != null) {
-        val sessionResult =
-          repository.createDailyCheckInSession(
-            userId = uid,
-            dateKey = todayKey,
-            streakDay = targetStreak,
-            rewardCents = rewardCents
-          )
-        val sessionId =
-          sessionResult.getOrElse { err ->
-            com.example.util.UnityAdsHelper.runDiagnosticLoadProbe(activity)
-            _isBusy.value = false
-            _bannerMessage.value =
-              err.localizedMessage ?: com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
-            return@launch
-          }
-
-        com.example.util.UnityAdsHelper.loadAndShowRewardedAdForSession(
-          activity = activity,
-          sessionId = sessionId,
-          onAdShowing = {
-            android.util.Log.i("WatchEarnFlow", "[DailyCheckIn] Showing video ad for Day $targetStreak")
-          },
-          onVideoCompleted = {
-            viewModelScope.launch {
-              repository.verifyWatchEarnSessionCompleted(uid, sessionId)
-              repository
-                .claimDailyCheckIn(
-                  userId = uid,
-                  streakDay = targetStreak,
-                  rewardCents = rewardCents,
-                  dateKey = todayKey,
-                  userName = name,
-                  verifiedAdCallbackToken = sessionId
-                )
-                .onSuccess { earned ->
-                  _bannerMessage.value =
-                    "Success! Day $targetStreak check-in claimed: +${formatRewardInr(earned)}"
-                  onSuccess(earned)
-                }
-                .onFailure { error ->
-                  _bannerMessage.value =
-                    error.localizedMessage ?: "Failed to claim check-in reward."
-                }
-              _isBusy.value = false
-            }
-          },
-          onFailed = { errorMsg ->
-            _isBusy.value = false
-            _bannerMessage.value =
-              errorMsg.ifBlank { com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE }
-          }
-        )
-      } else {
-        repository
-          .claimDailyCheckIn(
-            userId = uid,
-            streakDay = targetStreak,
-            rewardCents = rewardCents,
-            dateKey = todayKey,
-            userName = name
-          )
-          .onSuccess { earned ->
-            _bannerMessage.value =
-              "Success! Day $targetStreak check-in claimed: +${formatRewardInr(earned)}"
-            onSuccess(earned)
-          }
-          .onFailure { error ->
-            _bannerMessage.value = error.localizedMessage ?: "Failed to claim check-in reward."
-          }
+      if (activity == null) {
         _isBusy.value = false
+        _bannerMessage.value = com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
+        return@launch
       }
+
+      val sessionResult =
+        repository.createDailyCheckInSession(
+          userId = uid,
+          dateKey = todayKey,
+          streakDay = targetStreak,
+          rewardCents = rewardCents
+        )
+      val sessionId =
+        sessionResult.getOrElse { err ->
+          _isBusy.value = false
+          _bannerMessage.value =
+            err.localizedMessage ?: com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
+          return@launch
+        }
+
+      com.example.util.UnityAdsHelper.loadAndShowRewardedAdForSession(
+        activity = activity,
+        sessionId = sessionId,
+        onAdShowing = {
+          android.util.Log.i("WatchEarnFlow", "[DailyCheckIn] Showing video ad for Day $targetStreak")
+        },
+        onVideoCompleted = {
+          viewModelScope.launch {
+            repository.verifyWatchEarnSessionCompleted(uid, sessionId)
+            repository
+              .claimDailyCheckIn(
+                userId = uid,
+                streakDay = targetStreak,
+                rewardCents = rewardCents,
+                dateKey = todayKey,
+                userName = name,
+                verifiedAdCallbackToken = sessionId
+              )
+              .onSuccess { earned ->
+                _bannerMessage.value =
+                  "Success! Day $targetStreak check-in claimed: +${formatRewardInr(earned)}"
+                onSuccess(earned)
+              }
+              .onFailure { error ->
+                _bannerMessage.value =
+                  error.localizedMessage ?: "Failed to claim check-in reward."
+              }
+            _isBusy.value = false
+          }
+        },
+        onFailed = { errorMsg ->
+          _isBusy.value = false
+          _bannerMessage.value =
+            errorMsg.ifBlank { com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE }
+        }
+      )
     }
   }
 
@@ -891,7 +876,6 @@ class TaskFlowViewModel(
             "[Step 4] Reward session creation failed: ${err.message}",
             err
           )
-          com.example.util.UnityAdsHelper.runDiagnosticLoadProbe(activity)
           val msg = err.localizedMessage ?: ""
           val userMessage =
             if (msg.contains("Daily limit", ignoreCase = true) || msg.contains("sign in", ignoreCase = true)) {

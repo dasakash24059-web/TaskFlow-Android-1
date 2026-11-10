@@ -1790,10 +1790,8 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("home_daily_checkin_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("home_watch_earn_card").assertIsDisplayed()
     composeTestRule.onNodeWithText("Watch & Earn").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Daily 25 Videos").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Up to ₹25").assertIsDisplayed()
     composeTestRule.onNodeWithText("Watch Now").assertIsDisplayed()
-    // Ensure promotional guaranteed earning text is NOT displayed
-    composeTestRule.onNodeWithText("Up to ₹25", substring = true).assertDoesNotExist()
 
     // 2. Open Watch & Earn dialog -> Claim button is NOT shown before video completion
     composeTestRule.onNodeWithTag("watch_ad_button").performClick()
