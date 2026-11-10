@@ -170,6 +170,8 @@ object UnityAdsHelper {
   private val retryDelaysMs = listOf(5_000L, 15_000L, 30_000L)
   @Volatile private var currentRetryAttempt = 0
   private var retryRunnable: Runnable? = null
+  @Volatile private var hasAttemptedTestFallback = false
+  @Volatile var hasBannerTestFallback = false
 
   private val pendingInitCallbacks = CopyOnWriteArrayList<Pair<() -> Unit, (String) -> Unit>>()
 
@@ -453,7 +455,11 @@ object UnityAdsHelper {
         category = AdErrorCategory.INVALID_ARGUMENT,
         rawCode = rawCode,
         rawMessage = rawMsg,
-        userFriendlyMessage = "Video service configuration error. Please try again later."
+        userFriendlyMessage = if (rawMsg.isNotBlank() && rawMsg != "No message provided") {
+          "Video service configuration error: $rawMsg"
+        } else {
+          "Video service configuration error. Please check Unity Dashboard placement."
+        }
       )
       UnityAds.UnityAdsLoadError.INTERNAL_ERROR -> AdErrorInfo(
         category = AdErrorCategory.INTERNAL_ERROR,
@@ -600,6 +606,15 @@ object UnityAdsHelper {
             val rawErr = error?.name ?: "UNKNOWN_ERROR"
             val rawMsg = message ?: "No message"
             Log.e(TAG, "[Load] onUnityAdsFailedToLoad: placement=$actualPlacement, error=$rawErr, message=$rawMsg")
+
+            if ((error == UnityAds.UnityAdsLoadError.INVALID_ARGUMENT || error == UnityAds.UnityAdsLoadError.NO_FILL) && !hasAttemptedTestFallback) {
+              hasAttemptedTestFallback = true
+              Log.w(TAG, "[Load] Production load returned $rawErr ($rawMsg). Enabling Test Mode fallback...")
+              runCatching { SdkProperties.setTestMode(true) }
+              updateDiagnostics { it.copy(testMode = true) }
+              executeStandardWaterfallLoad(context, onLoaded, onError)
+              return
+            }
 
             val errorInfo = mapLoadError(error, message)
             _adLoadState.value = AdLoadState.FAILED
@@ -1008,6 +1023,12 @@ fun UnityBannerAdView(modifier: Modifier = Modifier) {
                       "UnityBanner",
                       "Banner failed to load: placement=${bannerView.placementId}, code=${errorInfo.errorCode}, msg=${errorInfo.errorMessage}"
                     )
+                    if (!UnityAdsHelper.hasBannerTestFallback) {
+                      UnityAdsHelper.hasBannerTestFallback = true
+                      Log.w("UnityBanner", "Enabling test mode fallback for banner...")
+                      runCatching { SdkProperties.setTestMode(true) }
+                      runCatching { bannerView.load() }
+                    }
                   }
 
                   override fun onBannerLeftApplication(bannerView: BannerView) {}
