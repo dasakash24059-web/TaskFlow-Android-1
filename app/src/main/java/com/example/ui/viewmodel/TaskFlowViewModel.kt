@@ -825,13 +825,16 @@ class TaskFlowViewModel(
   val watchEarnUiState: StateFlow<com.example.data.model.WatchEarnUiState> =
     _watchEarnUiState.asStateFlow()
 
-  fun prepareWatchEarnDialog() {
+  fun prepareWatchEarnDialog(context: android.content.Context? = null) {
     val current = _watchEarnUiState.value
     if (
       current.status == com.example.data.model.WatchEarnFlowStatus.CLAIMED ||
         current.status == com.example.data.model.WatchEarnFlowStatus.ERROR
     ) {
       _watchEarnUiState.value = com.example.data.model.WatchEarnUiState()
+    }
+    context?.let { ctx ->
+      com.example.util.UnityAdsHelper.preloadRewardedAd(ctx, force = false)
     }
   }
 
@@ -894,7 +897,7 @@ class TaskFlowViewModel(
             if (msg.contains("Daily limit", ignoreCase = true) || msg.contains("sign in", ignoreCase = true)) {
               msg
             } else {
-              com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
+              msg.ifBlank { "Failed to create reward session. Please try again." }
             }
           _watchEarnUiState.value =
             com.example.data.model.WatchEarnUiState(

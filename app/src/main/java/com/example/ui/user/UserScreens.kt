@@ -1053,6 +1053,35 @@ private fun WatchAdInfoDialog(
                   color = Color(0xFF334155)
                 )
 
+                // Test Mode Toggle for guaranteed 100% fill testing
+                Row(
+                  modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                  Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text(
+                      text = if (diagSnapshot.testMode) "Official Unity Test Ads (100% Fill)" else "Unity Production Ads Mode",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.Bold,
+                      color = if (diagSnapshot.testMode) Color(0xFF15803D) else Color(0xFF0F172A)
+                    )
+                    Text(
+                      text = if (diagSnapshot.testMode) "Active: Guaranteed ad fill from Unity for testing."
+                             else "Default: Real ads (testMode=false). Requires ad server fill.",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = Color(0xFF64748B)
+                    )
+                  }
+                  androidx.compose.material3.Switch(
+                    checked = diagSnapshot.testMode,
+                    onCheckedChange = { checked ->
+                      com.example.util.UnityAdsHelper.setTestMode(context, checked)
+                    },
+                    modifier = Modifier.testTag("toggle_unity_test_mode_switch")
+                  )
+                }
+
                 Row(
                   modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                   horizontalArrangement = Arrangement.spacedBy(8.dp)

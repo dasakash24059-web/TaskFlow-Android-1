@@ -139,6 +139,11 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  override fun onResume() {
+    super.onResume()
+    com.example.util.UnityAdsHelper.onAppForeground(this)
+  }
+
   override fun onDestroy() {
     super.onDestroy()
     unregisterReceiver(downloadReceiver)
@@ -726,7 +731,7 @@ private fun AuthenticatedWorkspace(
                       viewModel.claimVerifiedWatchEarnReward()
                     },
                     onOpenWatchDialog = {
-                      viewModel.prepareWatchEarnDialog()
+                      viewModel.prepareWatchEarnDialog(context)
                     }
                   )
                 }
