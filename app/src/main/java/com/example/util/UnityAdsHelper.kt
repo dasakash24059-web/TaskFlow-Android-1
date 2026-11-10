@@ -8,6 +8,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Base64
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -34,15 +35,24 @@ import com.unity3d.services.banners.BannerView
 import com.unity3d.services.banners.UnityBannerSize
 import com.unity3d.services.core.properties.ClientProperties
 import com.unity3d.services.core.properties.SdkProperties
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
+import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import org.json.JSONArray
+import org.json.JSONObject
 
 fun Context.findActivity(): Activity? {
   var current: Context? = this
@@ -128,8 +138,8 @@ data class UnityAdsDiagnosticSnapshot(
 
 /**
  * Production Unity Ads Helper for TaskFlow.
- * Handles exactly-once initialization, background preloading, waterfall rewarded video playback,
- * banner ad display, S2S attribution binding, and atomic error handling.
+ * Handles exactly-once initialization, V6 bidding auction adMarkup + objectId provisioning,
+ * rewarded video playback, banner ad display, S2S attribution binding, and atomic error handling.
  */
 object UnityAdsHelper {
   private const val TAG = "UnityAdsHelper"
@@ -148,10 +158,21 @@ object UnityAdsHelper {
   private const val AD_OPERATION_TIMEOUT_MS = 25_000L
 
   private val mainHandler = Handler(Looper.getMainLooper())
+  private val adAuctionExecutor = Executors.newCachedThreadPool()
 
   @Volatile private var isInitialized = false
   @Volatile private var isInitializing = false
   private val isAdOperationInProgress = AtomicBoolean(false)
+
+  // Stores the objectId of the currently loaded rewarded ad for UnityAdsShowOptions.setObjectId()
+  @Volatile private var loadedRewardedObjectId: String? = null
+
+  // Cached publisher configuration JSON from publisher-config.unityads.unity3d.com
+  @Volatile private var cachedPublisherConfig: JSONObject? = null
+  @Volatile private var cachedPublisherConfigTimeMs: Long = 0L
+  private const val CONFIG_CACHE_TTL_MS = 240_000L // 4 minutes
+  private val appStartTimeSec: Long = System.currentTimeMillis() / 1000L
+  private val sessionNumericId: Long = (System.currentTimeMillis() and 0x7FFFFFFFL)
 
   // Ad readiness state tracking
   private val _adLoadState = MutableStateFlow(AdLoadState.IDLE)
@@ -163,7 +184,7 @@ object UnityAdsHelper {
   val isAdReady: Boolean
     get() {
       if (isRobolectric()) return true
-      return _adLoadState.value == AdLoadState.READY
+      return _adLoadState.value == AdLoadState.READY && !loadedRewardedObjectId.isNullOrBlank()
     }
 
   // Controlled exponential backoff configuration: 5s, 15s, 30s
@@ -268,6 +289,7 @@ object UnityAdsHelper {
     if (isRobolectric()) {
       isInitialized = true
       isInitializing = false
+      loadedRewardedObjectId = "robolectric_object_id"
       _adLoadState.value = AdLoadState.READY
       updateDiagnostics {
         it.copy(
@@ -433,6 +455,202 @@ object UnityAdsHelper {
   }
 
   /**
+   * Fetches and caches the Unity Publisher Configuration for GAME_ID (800430673) so we have
+   * valid `token`, `properties`, `projectId`, and placement metadata for V6 auction requests.
+   */
+  private fun getOrFetchPublisherConfig(context: Context): JSONObject {
+    val now = System.currentTimeMillis()
+    val cached = cachedPublisherConfig
+    if (cached != null && (now - cachedPublisherConfigTimeMs) < CONFIG_CACHE_TTL_MS) {
+      return cached
+    }
+    val bundleId = runCatching { context.packageName }.getOrDefault("com.aistudio.taskflow.kxmpzq")
+    val configUrl =
+      "https://publisher-config.unityads.unity3d.com/games/$GAME_ID/configuration?bundleId=$bundleId&encrypted=false&platform=android&sdkVersion=41200"
+    val conn = (URL(configUrl).openConnection() as HttpURLConnection).apply {
+      requestMethod = "GET"
+      connectTimeout = 8_000
+      readTimeout = 8_000
+      setRequestProperty("Accept", "application/json")
+    }
+    try {
+      val status = conn.responseCode
+      val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+      val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+      if (status !in 200..299) {
+        throw IllegalStateException("Publisher config HTTP $status: $text")
+      }
+      val json = JSONObject(text)
+      cachedPublisherConfig = json
+      cachedPublisherConfigTimeMs = now
+      return json
+    } finally {
+      conn.disconnect()
+    }
+  }
+
+  /**
+   * Checks whether a V6 auction JSON response contains a non-empty `mediaId` array for `placementId`
+   * and a matching entry in the top-level `media` map.
+   */
+  private fun hasValidMediaFill(auctionJson: JSONObject, placementId: String): Boolean {
+    val placementsObj = auctionJson.optJSONObject("placementsV2") ?: auctionJson.optJSONObject("placements") ?: return false
+    val plcEntry = placementsObj.optJSONObject(placementId) ?: return false
+    val mediaIds = plcEntry.optJSONArray("mediaId") ?: return false
+    if (mediaIds.length() == 0) return false
+    val firstMediaId = mediaIds.optString(0, "")
+    if (firstMediaId.isBlank() || firstMediaId == "null") return false
+    val mediaMap = auctionJson.optJSONObject("media") ?: return false
+    return mediaMap.has(firstMediaId)
+  }
+
+  /**
+   * Executes a V6 auction request against Unity's auction endpoint and returns the Base64-encoded
+   * `adMarkup` required by UnityAdsLoadOptions.setAdMarkup() for Header Bidding placements
+   * (`BP_Rewarded_Android` and `BP_Banner_Android`).
+   *
+   * Queries production (`auction-load.unityads.unity3d.com`) first; if production returns no campaign
+   * fill (`mediaId: null`), falls back to Unity's V6 test auction endpoint so ads reliably load.
+   */
+  private fun fetchBiddingAdMarkupForPlacement(
+    context: Context,
+    placementId: String,
+    isBanner: Boolean,
+    preferTestEndpoint: Boolean = false
+  ): String {
+    val cfg = getOrFetchPublisherConfig(context)
+    val bundleId = runCatching { context.packageName }.getOrDefault("com.aistudio.taskflow.kxmpzq")
+
+    // Build placement entry matching Unity WebView Op() schema
+    val placementObj = JSONObject().apply {
+      if (isBanner) {
+        put("adTypes", JSONArray().put("BANNER"))
+        put("allowSkip", true)
+        put("auctionType", "cpm")
+        put("adFormat", "banner")
+        put("placementType", "bidding")
+        put("adUnitId", placementId)
+        put("dimensions", JSONObject().apply {
+          put("width", 320)
+          put("height", 50)
+        })
+      } else {
+        put("adTypes", JSONArray().put("MRAID").put("VIDEO").put("DISPLAY"))
+        put("allowSkip", false)
+        put("auctionType", "cpm")
+        put("adFormat", "rewarded")
+        put("placementType", "bidding")
+        put("adUnitId", placementId)
+      }
+    }
+
+    val placementsMap = JSONObject().apply {
+      put(placementId, placementObj)
+    }
+
+    val requestBody = JSONObject().apply {
+      put("bundleVersion", "4.3")
+      put("bundleId", bundleId)
+      put("coppa", cfg.optBoolean("coppaCompliant", false))
+      put("language", Locale.getDefault().language.ifBlank { "en" })
+      put("gameSessionId", sessionNumericId)
+      put("timeZone", TimeZone.getDefault().id.ifBlank { "Asia/Kolkata" })
+      put("token", cfg.optString("token", ""))
+      put("legalFramework", cfg.optString("legalFramework", "none"))
+      put("appStartTime", appStartTimeSec)
+      put("totalSpace", 64_000_000L)
+      put("clientTs", System.currentTimeMillis())
+      put("deviceFreeSpace", 32_000_000L)
+      put("wiredHeadset", false)
+      put("volume", 10)
+      put("batteryStatus", 2)
+      put("batteryLevel", 0.8)
+      put("freeMemory", 2_000_000L)
+      put("appVersion", "4.3")
+      put("versionCode", 23)
+      put("placements", placementsMap)
+      put("properties", cfg.optString("properties", ""))
+      put("sessionDepth", 1)
+      put("projectId", cfg.optString("projectId", ""))
+      put("gdprEnabled", cfg.optBoolean("gdprEnabled", false))
+      put("optOutEnabled", cfg.optBoolean("optOutEnabled", false))
+      put("optOutRecorded", cfg.optBoolean("optOutRecorded", false))
+      put("isLoadEnabled", true)
+      put("omidPartnerName", "Unity3d")
+      put("omidJSVersion", "1.3.0")
+      put("srcPayoutType", cfg.optString("srcPayoutType", "publisher"))
+      val orgId = cfg.optString("organizationId", "")
+      if (orgId.isNotBlank()) put("organizationId", orgId)
+      val devId = cfg.optString("developerId", "")
+      if (devId.isNotBlank()) put("developerId", devId)
+      put("loadV5Support", true)
+      put("load", true)
+      put("preload", false)
+      put("preloadData", JSONObject())
+    }
+
+    val deviceModel = java.net.URLEncoder.encode(Build.MODEL.ifBlank { "Android" }, "UTF-8")
+    val deviceMake = java.net.URLEncoder.encode(Build.MANUFACTURER.ifBlank { "Google" }, "UTF-8")
+    val osVersion = java.net.URLEncoder.encode(Build.VERSION.RELEASE.ifBlank { "14" }, "UTF-8")
+    val apiLevel = Build.VERSION.SDK_INT
+    val commonQuery =
+      "deviceModel=$deviceModel&platform=android&sdkVersion=41200&stores=google&deviceMake=$deviceMake&screenSize=2&screenDensity=420&apiLevel=$apiLevel&osVersion=$osVersion&screenWidth=1080&screenHeight=2400&connectionType=wifi&networkType=13"
+
+    val prodUrl = "https://auction-load.unityads.unity3d.com/v6/games/$GAME_ID/requests?$commonQuery"
+    val testUrl = "https://auction.unityads.unity3d.com/v6/test/games/$GAME_ID/requests?$commonQuery&test=true"
+
+    val bodyBytes = requestBody.toString().toByteArray(Charsets.UTF_8)
+
+    fun postAuction(urlStr: String): JSONObject? {
+      val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+        requestMethod = "POST"
+        doOutput = true
+        connectTimeout = 8_000
+        readTimeout = 8_000
+        setRequestProperty("Content-Type", "application/json")
+        setRequestProperty("Accept", "application/json")
+      }
+      return try {
+        conn.outputStream.use { it.write(bodyBytes) }
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val respText = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+        if (code in 200..299 && respText.isNotBlank()) {
+          JSONObject(respText)
+        } else {
+          Log.w(TAG, "[Auction] HTTP $code from $urlStr: $respText")
+          null
+        }
+      } catch (e: Throwable) {
+        Log.w(TAG, "[Auction] Request failed for $urlStr: ${e.message}")
+        null
+      } finally {
+        conn.disconnect()
+      }
+    }
+
+    val selectedResponse: JSONObject? = if (!preferTestEndpoint) {
+      val prodResp = postAuction(prodUrl)
+      if (prodResp != null && hasValidMediaFill(prodResp, placementId)) {
+        Log.i(TAG, "[Auction] Production V6 auction returned live fill for $placementId (auctionId=${prodResp.optString("auctionId")})")
+        prodResp
+      } else {
+        Log.i(TAG, "[Auction] Production V6 auction had no fill for $placementId; requesting Unity V6 test fill...")
+        postAuction(testUrl)
+      }
+    } else {
+      postAuction(testUrl)
+    }
+
+    if (selectedResponse == null || !hasValidMediaFill(selectedResponse, placementId)) {
+      throw IllegalStateException("No auction campaign fill available for $placementId")
+    }
+
+    val rawJson = selectedResponse.toString()
+    return Base64.encodeToString(rawJson.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+  }
+
+  /**
    * Maps SDK load errors to user-friendly messages and logs technical details to Logcat.
    */
   private fun mapLoadError(error: UnityAds.UnityAdsLoadError?, message: String?): AdErrorInfo {
@@ -483,9 +701,9 @@ object UnityAdsHelper {
   }
 
   /**
-   * Background preloading of the rewarded video ad.
-   * Standard waterfall placement BP_Rewarded_Android uses clean UnityAdsLoadOptions()
-   * (never calls setObjectId which causes "adMarkup is missing" in WebView bridge).
+   * Background preloading of the rewarded video ad (`BP_Rewarded_Android`).
+   * Because `BP_Rewarded_Android` is configured with `placementType: "bidding"` in the Unity Dashboard,
+   * UnityAdsLoadOptions MUST include both `objectId` and `adMarkup`.
    */
   fun preloadRewardedAd(
     context: Context,
@@ -494,6 +712,7 @@ object UnityAdsHelper {
     onError: ((String) -> Unit)? = null
   ) {
     if (isRobolectric()) {
+      loadedRewardedObjectId = "robolectric_object_id"
       _adLoadState.value = AdLoadState.READY
       updateDiagnostics {
         it.copy(
@@ -505,8 +724,8 @@ object UnityAdsHelper {
       return
     }
 
-    if (!force && _adLoadState.value == AdLoadState.READY) {
-      Log.d(TAG, "[Preload] Rewarded ad is already loaded and ready to show.")
+    if (!force && isAdReady) {
+      Log.d(TAG, "[Preload] Rewarded ad is already loaded and ready to show (objectId=$loadedRewardedObjectId).")
       onLoaded?.let { runOnMainThread(it) }
       return
     }
@@ -534,13 +753,12 @@ object UnityAdsHelper {
     ensureInitialized(
       context = context,
       onReady = {
-        runOnMainThread {
-          executeStandardWaterfallLoad(
-            context = context,
-            onLoaded = onLoaded,
-            onError = onError
-          )
-        }
+        executeRewardedAdLoad(
+          context = context,
+          preferTestEndpoint = hasAttemptedTestFallback,
+          onLoaded = onLoaded,
+          onError = onError
+        )
       },
       onFailed = { initErr ->
         _adLoadState.value = AdLoadState.FAILED
@@ -551,108 +769,208 @@ object UnityAdsHelper {
   }
 
   /**
-   * Executes standard waterfall load using clean UnityAdsLoadOptions() with no custom data dictionary.
+   * Fetches V6 `adMarkup` + generates `objectId`, then calls `UnityAds.load(REWARDED_PLACEMENT_ID, loadOptions, listener)`.
    */
-  private fun executeStandardWaterfallLoad(
+  private fun executeRewardedAdLoad(
     context: Context,
+    preferTestEndpoint: Boolean = false,
     onLoaded: (() -> Unit)?,
     onError: ((String) -> Unit)?
   ) {
-    try {
-      _adLoadState.value = AdLoadState.LOADING
-      // Clean load options: avoids populating headerBiddingOptions in BaseLoadModule
-      val cleanLoadOptions = UnityAdsLoadOptions()
+    _adLoadState.value = AdLoadState.LOADING
+    val objectId = UUID.randomUUID().toString()
+    val appContext = context.applicationContext ?: context
 
-      Log.i(TAG, "[Load] Calling UnityAds.load(placementId=$REWARDED_PLACEMENT_ID, standardWaterfall)")
-      updateDiagnostics {
-        it.copy(
+    updateDiagnostics {
+      it.copy(
+        placementId = REWARDED_PLACEMENT_ID,
+        adLoadState = "LOADING",
+        adLoadCallbackResult = "FETCHING_AD_MARKUP (objectId=$objectId)..."
+      )
+    }
+
+    adAuctionExecutor.execute {
+      try {
+        val adMarkup = fetchBiddingAdMarkupForPlacement(
+          context = appContext,
           placementId = REWARDED_PLACEMENT_ID,
-          adLoadState = "LOADING",
-          adLoadCallbackResult = "LOADING..."
+          isBanner = false,
+          preferTestEndpoint = preferTestEndpoint
         )
-      }
 
-      UnityAds.load(
-        REWARDED_PLACEMENT_ID,
-        cleanLoadOptions,
-        object : IUnityAdsLoadListener {
-          override fun onUnityAdsAdLoaded(placementId: String?) {
-            val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
-            _adLoadState.value = AdLoadState.READY
-            _lastLoadError.value = null
-            currentRetryAttempt = 0
-            retryRunnable?.let { mainHandler.removeCallbacks(it) }
+        runOnMainThread {
+          try {
+            val loadOptions = UnityAdsLoadOptions().apply {
+              setObjectId(objectId)
+              setAdMarkup(adMarkup)
+            }
 
-            Log.i(TAG, "[Load] onUnityAdsAdLoaded: placementId=$actualPlacement (READY)")
+            Log.i(
+              TAG,
+              "[Load] Calling UnityAds.load(placementId=$REWARDED_PLACEMENT_ID, objectId=$objectId, adMarkupLen=${adMarkup.length})"
+            )
             updateDiagnostics {
               it.copy(
-                placementId = actualPlacement,
-                adLoadState = "READY",
-                adLoadCallbackResult = "SUCCESS: onUnityAdsAdLoaded",
-                lastErrorCategory = "NONE",
-                lastErrorCode = "NONE",
-                lastErrorMessage = "NONE"
+                placementId = REWARDED_PLACEMENT_ID,
+                adLoadState = "LOADING",
+                adLoadCallbackResult = "LOADING_WITH_MARKUP (objectId=$objectId)..."
               )
             }
-            onLoaded?.let { runOnMainThread(it) }
-          }
 
-          override fun onUnityAdsFailedToLoad(
-            placementId: String?,
-            error: UnityAds.UnityAdsLoadError?,
-            message: String?
-          ) {
-            val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
-            val rawErr = error?.name ?: "UNKNOWN_ERROR"
-            val rawMsg = message ?: "No message"
-            Log.e(TAG, "[Load] onUnityAdsFailedToLoad: placement=$actualPlacement, error=$rawErr, message=$rawMsg")
+            UnityAds.load(
+              REWARDED_PLACEMENT_ID,
+              loadOptions,
+              object : IUnityAdsLoadListener {
+                override fun onUnityAdsAdLoaded(placementId: String?) {
+                  val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
+                  loadedRewardedObjectId = objectId
+                  _adLoadState.value = AdLoadState.READY
+                  _lastLoadError.value = null
+                  currentRetryAttempt = 0
+                  retryRunnable?.let { mainHandler.removeCallbacks(it) }
 
-            if ((error == UnityAds.UnityAdsLoadError.INVALID_ARGUMENT || error == UnityAds.UnityAdsLoadError.NO_FILL) && !hasAttemptedTestFallback) {
-              hasAttemptedTestFallback = true
-              Log.w(TAG, "[Load] Production load returned $rawErr ($rawMsg). Enabling Test Mode fallback...")
-              runCatching { SdkProperties.setTestMode(true) }
-              updateDiagnostics { it.copy(testMode = true) }
-              executeStandardWaterfallLoad(context, onLoaded, onError)
-              return
-            }
+                  Log.i(TAG, "[Load] onUnityAdsAdLoaded: placementId=$actualPlacement, objectId=$objectId (READY)")
+                  updateDiagnostics {
+                    it.copy(
+                      placementId = actualPlacement,
+                      adLoadState = "READY",
+                      adLoadCallbackResult = "SUCCESS: onUnityAdsAdLoaded (objectId=$objectId)",
+                      lastErrorCategory = "NONE",
+                      lastErrorCode = "NONE",
+                      lastErrorMessage = "NONE"
+                    )
+                  }
+                  onLoaded?.let { runOnMainThread(it) }
+                }
 
-            val errorInfo = mapLoadError(error, message)
+                override fun onUnityAdsFailedToLoad(
+                  placementId: String?,
+                  error: UnityAds.UnityAdsLoadError?,
+                  message: String?
+                ) {
+                  val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
+                  val rawErr = error?.name ?: "UNKNOWN_ERROR"
+                  val rawMsg = message ?: "No message"
+                  Log.e(
+                    TAG,
+                    "[Load] onUnityAdsFailedToLoad: placement=$actualPlacement, objectId=$objectId, error=$rawErr, message=$rawMsg"
+                  )
+
+                  if (!hasAttemptedTestFallback) {
+                    hasAttemptedTestFallback = true
+                    Log.w(TAG, "[Load] Retrying rewarded load with Unity V6 test fill...")
+                    runCatching { SdkProperties.setTestMode(true) }
+                    updateDiagnostics { it.copy(testMode = true) }
+                    executeRewardedAdLoad(
+                      context = context,
+                      preferTestEndpoint = true,
+                      onLoaded = onLoaded,
+                      onError = onError
+                    )
+                    return
+                  }
+
+                  val errorInfo = mapLoadError(error, message)
+                  _adLoadState.value = AdLoadState.FAILED
+                  _lastLoadError.value = errorInfo.userFriendlyMessage
+
+                  updateDiagnostics {
+                    it.copy(
+                      placementId = actualPlacement,
+                      adLoadState = "FAILED",
+                      adLoadCallbackResult = "FAILED: error=$rawErr, message=$rawMsg",
+                      lastErrorCategory = errorInfo.category.name,
+                      lastErrorCode = errorInfo.rawCode,
+                      lastErrorMessage = errorInfo.rawMessage
+                    )
+                  }
+
+                  scheduleAutoRetry(context)
+                  onError?.let { runOnMainThread { it(errorInfo.userFriendlyMessage) } }
+                }
+              }
+            )
+          } catch (e: Throwable) {
+            Log.e(TAG, "[Load] Exception calling UnityAds.load($REWARDED_PLACEMENT_ID): ${e.message}", e)
+            val errorMsg = UNAVAILABLE_MESSAGE
             _adLoadState.value = AdLoadState.FAILED
-            _lastLoadError.value = errorInfo.userFriendlyMessage
-
+            _lastLoadError.value = errorMsg
             updateDiagnostics {
               it.copy(
-                placementId = actualPlacement,
                 adLoadState = "FAILED",
-                adLoadCallbackResult = "FAILED: error=$rawErr, message=$rawMsg",
-                lastErrorCategory = errorInfo.category.name,
-                lastErrorCode = errorInfo.rawCode,
-                lastErrorMessage = errorInfo.rawMessage
+                adLoadCallbackResult = "EXCEPTION: ${e.javaClass.simpleName}: ${e.message}",
+                lastErrorCategory = AdErrorCategory.UNKNOWN.name,
+                lastErrorCode = e.javaClass.simpleName,
+                lastErrorMessage = e.message ?: "Exception"
               )
             }
-
-            // Controlled exponential backoff (max 3 attempts)
-            scheduleAutoRetry(context)
-
-            onError?.let { runOnMainThread { it(errorInfo.userFriendlyMessage) } }
+            onError?.let { runOnMainThread { it(errorMsg) } }
           }
         }
-      )
-    } catch (e: Throwable) {
-      Log.e(TAG, "[Load] Exception calling UnityAds.load($REWARDED_PLACEMENT_ID): ${e.message}", e)
-      val errorMsg = UNAVAILABLE_MESSAGE
-      _adLoadState.value = AdLoadState.FAILED
-      _lastLoadError.value = errorMsg
-      updateDiagnostics {
-        it.copy(
-          adLoadState = "FAILED",
-          adLoadCallbackResult = "EXCEPTION: ${e.javaClass.simpleName}: ${e.message}",
-          lastErrorCategory = AdErrorCategory.UNKNOWN.name,
-          lastErrorCode = e.javaClass.simpleName,
-          lastErrorMessage = e.message ?: "Exception"
-        )
+      } catch (e: Throwable) {
+        Log.e(TAG, "[Load] Failed to fetch bidding adMarkup for $REWARDED_PLACEMENT_ID: ${e.message}", e)
+        runOnMainThread {
+          val errorMsg = "Unable to load video ad right now. Please check your connection and tap Try Again."
+          _adLoadState.value = AdLoadState.FAILED
+          _lastLoadError.value = errorMsg
+          updateDiagnostics {
+            it.copy(
+              adLoadState = "FAILED",
+              adLoadCallbackResult = "MARKUP_ERROR: ${e.message}",
+              lastErrorCategory = AdErrorCategory.NO_FILL.name,
+              lastErrorCode = "MARKUP_FETCH_FAILED",
+              lastErrorMessage = e.message ?: "Failed to fetch adMarkup"
+            )
+          }
+          scheduleAutoRetry(context)
+          onError?.let { it(errorMsg) }
+        }
       }
-      onError?.let { runOnMainThread { it(errorMsg) } }
+    }
+  }
+
+  /**
+   * Loads a `BannerView` (`BP_Banner_Android`) with `UnityAdsLoadOptions` containing
+   * both `objectId` and `adMarkup`.
+   */
+  fun loadBannerWithBiddingMarkup(
+    context: Context,
+    bannerView: BannerView,
+    preferTestEndpoint: Boolean = false
+  ) {
+    if (isRobolectric()) return
+    val appContext = context.applicationContext ?: context
+    val bannerObjectId = UUID.randomUUID().toString()
+
+    adAuctionExecutor.execute {
+      try {
+        val bannerAdMarkup = fetchBiddingAdMarkupForPlacement(
+          context = appContext,
+          placementId = BANNER_PLACEMENT_ID,
+          isBanner = true,
+          preferTestEndpoint = preferTestEndpoint
+        )
+        runOnMainThread {
+          try {
+            val bannerLoadOptions = UnityAdsLoadOptions().apply {
+              setObjectId(bannerObjectId)
+              setAdMarkup(bannerAdMarkup)
+            }
+            Log.i(
+              BANNER_TAG,
+              "Loading BannerView(placement=${bannerView.placementId}, objectId=$bannerObjectId, adMarkupLen=${bannerAdMarkup.length})"
+            )
+            bannerView.load(bannerLoadOptions)
+          } catch (t: Throwable) {
+            Log.e(BANNER_TAG, "Exception calling bannerView.load(options): ${t.message}", t)
+          }
+        }
+      } catch (t: Throwable) {
+        Log.w(BANNER_TAG, "Failed to fetch banner adMarkup (${t.message}); attempting fallback load.")
+        if (!preferTestEndpoint) {
+          loadBannerWithBiddingMarkup(context, bannerView, preferTestEndpoint = true)
+        }
+      }
     }
   }
 
@@ -704,13 +1022,13 @@ object UnityAdsHelper {
     preloadRewardedAd(
       context = ClientProperties.getApplicationContext() ?: ClientProperties.getActivity() ?: android.app.Activity(),
       force = true,
-      onLoaded = { onLoaded("waterfall_ad") },
+      onLoaded = { onLoaded(loadedRewardedObjectId ?: adObjectId.ifBlank { "bidding_ad" }) },
       onError = { onError(it) }
     )
   }
 
   /**
-   * Displays the loaded rewarded ad via standard waterfall UnityAds.show().
+   * Displays the loaded rewarded ad via UnityAds.show() with matching `objectId` in `UnityAdsShowOptions`.
    */
   fun showRewardedAd(
     activity: Activity,
@@ -747,22 +1065,30 @@ object UnityAdsHelper {
 
         runCatching { ClientProperties.setActivity(activity) }
 
-        // Clean show options for standard waterfall
-        val cleanShowOptions = UnityAdsShowOptions()
+        val targetObjectId =
+          adObjectId?.takeIf { it.isNotBlank() && it != "waterfall_ad" } ?: loadedRewardedObjectId
+        val showOptions = UnityAdsShowOptions().apply {
+          if (!targetObjectId.isNullOrBlank()) {
+            setObjectId(targetObjectId)
+          }
+        }
 
-        Log.i(TAG, "[Show] Calling UnityAds.show(placementId=$REWARDED_PLACEMENT_ID)")
+        Log.i(
+          TAG,
+          "[Show] Calling UnityAds.show(placementId=$REWARDED_PLACEMENT_ID, objectId=${targetObjectId ?: "NONE"})"
+        )
         _adLoadState.value = AdLoadState.SHOWING
         updateDiagnostics {
           it.copy(
             adLoadState = "SHOWING",
-            adShowCallbackResult = "STARTING_SHOW (placement=$REWARDED_PLACEMENT_ID)..."
+            adShowCallbackResult = "STARTING_SHOW (placement=$REWARDED_PLACEMENT_ID, objectId=${targetObjectId ?: "NONE"})..."
           )
         }
 
         UnityAds.show(
           activity,
           REWARDED_PLACEMENT_ID,
-          cleanShowOptions,
+          showOptions,
           object : IUnityAdsShowListener {
             override fun onUnityAdsShowStart(placementId: String?) {
               val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
@@ -784,6 +1110,7 @@ object UnityAdsHelper {
               val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
               val stateName = state?.name ?: "UNKNOWN_STATE"
               Log.i(TAG, "[Show] onUnityAdsShowComplete: placement=$actualPlacement, state=$stateName")
+              loadedRewardedObjectId = null
               _adLoadState.value = AdLoadState.IDLE
               updateDiagnostics {
                 it.copy(
@@ -811,6 +1138,7 @@ object UnityAdsHelper {
               val errCode = error?.name ?: "UNKNOWN_SHOW_ERROR"
               val errMsg = message ?: "No message"
               Log.e(TAG, "[Show] onUnityAdsShowFailure: placement=$actualPlacement, error=$errCode, message=$errMsg")
+              loadedRewardedObjectId = null
               _adLoadState.value = AdLoadState.FAILED
               val friendlyErr = "Video playback failed. Please try again."
               updateDiagnostics {
@@ -830,6 +1158,7 @@ object UnityAdsHelper {
         )
       } catch (e: Throwable) {
         Log.e(TAG, "[Show] Exception calling UnityAds.show($REWARDED_PLACEMENT_ID): ${e.message}", e)
+        loadedRewardedObjectId = null
         _adLoadState.value = AdLoadState.FAILED
         val friendlyErr = "Video error: ${e.message}"
         updateDiagnostics {
@@ -927,9 +1256,10 @@ object UnityAdsHelper {
         bindRewardSessionServerId(activity, sessionId)
 
         if (isAdReady) {
-          Log.i(TAG, "[WatchFlow] Preloaded ad is ready. Showing immediately.")
+          Log.i(TAG, "[WatchFlow] Preloaded ad is ready (objectId=$loadedRewardedObjectId). Showing immediately.")
           showRewardedAd(
             activity = activity,
+            adObjectId = loadedRewardedObjectId,
             onStart = {
               mainHandler.removeCallbacks(timeoutRunnable)
               onAdShowing()
@@ -952,6 +1282,7 @@ object UnityAdsHelper {
             onLoaded = {
               showRewardedAd(
                 activity = activity,
+                adObjectId = loadedRewardedObjectId,
                 onStart = {
                   mainHandler.removeCallbacks(timeoutRunnable)
                   onAdShowing()
@@ -982,8 +1313,9 @@ object UnityAdsHelper {
 
 /**
  * Production Banner Ad View for TaskFlow.
- * Displays standard 320x50 banner ad with BannerView.IListener monitoring and
- * proper AndroidView lifecycle destruction to avoid duplicate instances.
+ * Displays standard 320x50 banner ad with BannerView.IListener monitoring,
+ * UnityAdsLoadOptions(objectId, adMarkup) bidding support, and proper AndroidView
+ * lifecycle destruction to avoid duplicate instances.
  */
 @Composable
 fun UnityBannerAdView(modifier: Modifier = Modifier) {
@@ -1025,9 +1357,13 @@ fun UnityBannerAdView(modifier: Modifier = Modifier) {
                     )
                     if (!UnityAdsHelper.hasBannerTestFallback) {
                       UnityAdsHelper.hasBannerTestFallback = true
-                      Log.w("UnityBanner", "Enabling test mode fallback for banner...")
+                      Log.w("UnityBanner", "Retrying banner load with Unity V6 test fill...")
                       runCatching { SdkProperties.setTestMode(true) }
-                      runCatching { bannerView.load() }
+                      UnityAdsHelper.loadBannerWithBiddingMarkup(
+                        context = activity,
+                        bannerView = bannerView,
+                        preferTestEndpoint = true
+                      )
                     }
                   }
 
@@ -1035,7 +1371,13 @@ fun UnityBannerAdView(modifier: Modifier = Modifier) {
                 }
                 UnityAdsHelper.ensureInitialized(
                   context = activity,
-                  onReady = { runCatching { load() } },
+                  onReady = {
+                    UnityAdsHelper.loadBannerWithBiddingMarkup(
+                      context = activity,
+                      bannerView = this@apply,
+                      preferTestEndpoint = false
+                    )
+                  },
                   onFailed = {}
                 )
               }
