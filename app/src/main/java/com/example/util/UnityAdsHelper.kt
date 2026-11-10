@@ -328,7 +328,7 @@ object UnityAdsHelper {
         UnityAds.initialize(
           initContext,
           GAME_ID,
-          currentTest,
+          false,
           object : IUnityAdsInitializationListener {
             override fun onInitializationComplete() {
               isInitialized = true
