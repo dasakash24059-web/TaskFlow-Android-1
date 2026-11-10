@@ -455,7 +455,7 @@ service cloud.firestore {
                          request.auth.uid == userId &&
                          (!('userId' in incoming()) || incoming().userId == userId) &&
                          incoming().dateKey == dateKey &&
-                         (incoming().rewardCents == 100 || incoming().rewardCents == 700);
+                         (incoming().rewardCents == 100 || incoming().rewardCents == 500 || incoming().rewardCents == 700);
         allow update, delete: if false;
       }
 
@@ -502,7 +502,7 @@ service cloud.firestore {
                        incoming().sessionId == sessionId &&
                        incoming().userId == request.auth.uid &&
                        (incoming().rewardType == 'WATCH_AND_EARN' || incoming().rewardType == 'DAILY_CHECK_IN') &&
-                       incoming().rewardCents == 100 &&
+                       (incoming().rewardCents == 100 || incoming().rewardCents == 500 || incoming().rewardCents == 700) &&
                        incoming().status == 'PENDING' &&
                        incoming().used == false &&
                        incoming().claimed == false &&

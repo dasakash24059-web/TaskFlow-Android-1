@@ -882,20 +882,45 @@ private fun WatchAdInfoDialog(
           }
         }
 
-        // Error State Banner
+        // Error State Banner with Retry Option
         if (hasError && !watchEarnUiState.errorMessage.isNullOrBlank()) {
           Surface(
             shape = RoundedCornerShape(14.dp),
             color = Color(0xFFFEF2F2),
             modifier = Modifier.fillMaxWidth().testTag("watch_earn_error_banner")
           ) {
-            Text(
-              text = watchEarnUiState.errorMessage,
-              style = MaterialTheme.typography.bodySmall,
-              fontWeight = FontWeight.SemiBold,
-              color = Color(0xFFB91C1C),
-              modifier = Modifier.padding(14.dp)
-            )
+            Column(
+              modifier = Modifier.padding(14.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              Text(
+                text = watchEarnUiState.errorMessage,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFFB91C1C)
+              )
+              if (!isLimitReached && !isLoadingAd && !isClaiming) {
+                OutlinedButton(
+                  onClick = onStartWatchVideo,
+                  shape = RoundedCornerShape(10.dp),
+                  modifier = Modifier.fillMaxWidth().height(40.dp).testTag("retry_watch_ad_button")
+                ) {
+                  Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = "Retry loading video",
+                    tint = Color(0xFFB91C1C),
+                    modifier = Modifier.size(16.dp)
+                  )
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(
+                    text = "Try Again",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFB91C1C)
+                  )
+                }
+              }
+            }
           }
         }
 

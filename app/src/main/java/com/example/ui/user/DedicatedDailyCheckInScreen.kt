@@ -78,27 +78,23 @@ import java.util.Calendar
  *   Day 2 — ₹1
  *   Day 3 — ₹1
  *   Day 4 — ₹1
- *   Day 5 — ₹1 (unlocked when user completes approved tasks worth at least ₹20)
- *   Day 6 — ₹1 (unlocked when user completes approved tasks worth at least ₹20)
- *   Day 7 — ₹7 bonus (total reward for 7 consecutive days = ₹13)
+ *   Day 5 — ₹1
+ *   Day 6 — ₹1
+ *   Day 7 — ₹5 bonus (total reward for 7 consecutive days = ₹11)
  * - Clear status on each card: Available, Claimed, or Locked
- * - Individual working Claim buttons
+ * - Individual working Claim buttons (loads & shows Rewarded Video Ad on all days 1–7)
  * - Next eligible claim countdown and streak rules
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DedicatedDailyCheckInScreen(
   dailyCheckInState: DailyCheckInState,
-  approvedEarningsCents: Long,
+  approvedEarningsCents: Long = 0L,
   onClaimDay: (Int) -> Unit,
   onBack: () -> Unit,
   isBusy: Boolean = false
 ) {
   BackHandler(onBack = onBack)
-
-  val requiredTaskCents = 2000L // ₹20.00
-  val isTaskRequirementMet = approvedEarningsCents >= requiredTaskCents
-  val taskProgress = (approvedEarningsCents.toFloat() / requiredTaskCents.toFloat()).coerceIn(0f, 1f)
 
   val timeRemainingToTomorrow = remember {
     val now = System.currentTimeMillis()
@@ -115,8 +111,6 @@ fun DedicatedDailyCheckInScreen(
   }
 
   val currentStageDay = dailyCheckInState.nextClaimDay
-
-
 
   Scaffold(
     topBar = {
@@ -306,7 +300,7 @@ fun DedicatedDailyCheckInScreen(
                         }
                       }
                       Text(
-                        text = if (day == 7) "₹7" else "₹1",
+                        text = if (day == 7) "₹5" else "₹1",
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White.copy(alpha = 0.9f),
                         fontSize = 10.sp,
@@ -400,96 +394,7 @@ fun DedicatedDailyCheckInScreen(
         }
       }
 
-
-      // 2. Day 5 and Day 6 Task Requirement Card (Hidden during Days 1–4, shown specifically when reaching Day 5 or Day 6)
-      if (currentStageDay == 5 || currentStageDay == 6) {
-        item {
-          val stageTitle = if (currentStageDay == 5) "Day 5 Task Requirement" else "Day 6 Task Requirement"
-          val stageMessage =
-            if (currentStageDay == 5) {
-              "To unlock Day 5 check-in reward (₹1.00), you must complete approved tasks worth at least ₹20.00. Only verified approved tasks are counted."
-            } else {
-              "To unlock Day 6 check-in reward (₹1.00), you must complete approved tasks worth at least ₹20.00. Only verified approved tasks are counted."
-            }
-
-          Card(
-            shape = RoundedCornerShape(20.dp),
-            colors =
-              CardDefaults.cardColors(
-                containerColor =
-                  if (isTaskRequirementMet) {
-                    Color(0xFFECFDF5)
-                  } else {
-                    Color(0xFFFEF2F2)
-                  }
-              ),
-            border =
-              androidx.compose.foundation.BorderStroke(
-                1.dp,
-                if (isTaskRequirementMet) Color(0xFFA7F3D0) else Color(0xFFFECACA)
-              ),
-            modifier = Modifier.fillMaxWidth().testTag("day_5_6_task_requirement_card")
-          ) {
-            Column(
-              modifier = Modifier.fillMaxWidth().padding(18.dp),
-              verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-              ) {
-                Icon(
-                  imageVector = if (isTaskRequirementMet) Icons.Default.CheckCircle else Icons.Default.Info,
-                  contentDescription = null,
-                  tint = if (isTaskRequirementMet) Color(0xFF059669) else Color(0xFFDC2626),
-                  modifier = Modifier.size(20.dp)
-                )
-                Text(
-                  text = stageTitle,
-                  style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.Bold,
-                  color = if (isTaskRequirementMet) Color(0xFF065F46) else Color(0xFF991B1B)
-                )
-              }
-
-              Text(
-                text = stageMessage,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (isTaskRequirementMet) Color(0xFF047857) else Color(0xFF7F1D1D)
-              )
-
-              LinearProgressIndicator(
-                progress = { taskProgress },
-                modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-                color = if (isTaskRequirementMet) Color(0xFF10B981) else Color(0xFFEF4444),
-                trackColor = if (isTaskRequirementMet) Color(0xFFD1FAE5) else Color(0xFFFEE2E2),
-                strokeCap = StrokeCap.Round
-              )
-
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-              ) {
-                Text(
-                  text = "Completed: ${formatRewardInr(approvedEarningsCents)} / ₹20.00",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Bold,
-                  color = if (isTaskRequirementMet) Color(0xFF065F46) else Color(0xFF991B1B)
-                )
-                Text(
-                  text = if (isTaskRequirementMet) "Requirement Met ✓" else "Locked",
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.Bold,
-                  color = if (isTaskRequirementMet) Color(0xFF059669) else Color(0xFFDC2626)
-                )
-              }
-            }
-          }
-        }
-      }
-
-      // 3. Section Title
+      // 2. Section Title
       item {
         Text(
           text = "7-Day Daily Claim Cards",
@@ -499,11 +404,10 @@ fun DedicatedDailyCheckInScreen(
         )
       }
 
-      // 4. Individual 7 Day Cards
+      // 3. Individual 7 Day Cards
       for (day in 1..7) {
         val rewardCents = DailyCheckInConstants.getRewardForDay(day)
         val isDay7Bonus = day == 7
-        val isDay5or6 = day == 5 || day == 6
 
         val isClaimed =
           if (!dailyCheckInState.canCheckInToday) {
@@ -533,7 +437,7 @@ fun DedicatedDailyCheckInScreen(
         }
       }
 
-      // 5. Rules & Streak Explanation Card
+      // 4. Rules & Streak Explanation Card
       item {
         Card(
           shape = RoundedCornerShape(20.dp),
@@ -561,7 +465,7 @@ fun DedicatedDailyCheckInScreen(
               )
             }
             Text(
-              text = "• Days 1–6 reward: ₹1.00 each.\n• Day 7 bonus reward: ₹7.00 after 7 consecutive days (Total ₹13.00).\n• Days 5 & 6 require completing approved tasks worth at least ₹20.00.\n• Next claim opens every calendar day (24-hour interval).\n• Missing a day resets your streak to Day 1.",
+              text = "• Days 1–6 reward: ₹1.00 each.\n• Day 7 bonus reward: ₹5.00 after 7 consecutive days (Total ₹11.00).\n• Complete a video ad when claiming your daily reward.\n• Next claim opens every calendar day (24-hour interval).\n• Missing a day resets your streak to Day 1.",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               lineHeight = 20.sp

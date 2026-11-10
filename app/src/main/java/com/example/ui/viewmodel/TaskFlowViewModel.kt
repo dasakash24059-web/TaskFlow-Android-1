@@ -707,7 +707,11 @@ class TaskFlowViewModel(
       .sumOf { it.rewardCents }
   }
 
-  fun claimDailyCheckIn(day: Int = 0, onSuccess: (Long) -> Unit = {}) {
+  fun claimDailyCheckIn(
+    day: Int = 0,
+    activity: android.app.Activity? = null,
+    onSuccess: (Long) -> Unit = {}
+  ) {
     val currentState = dailyCheckInState.value
     val targetStreak = if (day in 1..7) day else currentState.nextClaimDay
 
@@ -725,7 +729,6 @@ class TaskFlowViewModel(
       return
     }
 
-
     val rewardCents = DailyCheckInConstants.getRewardForDay(targetStreak)
     val todayKey = com.example.data.model.getTodayDateKey()
     val uid = currentUserId
@@ -736,24 +739,83 @@ class TaskFlowViewModel(
       return
     }
 
+    if (_isBusy.value) {
+      return
+    }
+
     viewModelScope.launch {
       _isBusy.value = true
-      repository
-        .claimDailyCheckIn(
-          userId = uid,
-          streakDay = targetStreak,
-          rewardCents = rewardCents,
-          dateKey = todayKey,
-          userName = name
+      if (activity != null) {
+        val sessionResult =
+          repository.createDailyCheckInSession(
+            userId = uid,
+            dateKey = todayKey,
+            streakDay = targetStreak,
+            rewardCents = rewardCents
+          )
+        val sessionId =
+          sessionResult.getOrElse { err ->
+            _isBusy.value = false
+            _bannerMessage.value =
+              err.localizedMessage ?: com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
+            return@launch
+          }
+
+        com.example.util.UnityAdsHelper.loadAndShowRewardedAdForSession(
+          activity = activity,
+          sessionId = sessionId,
+          onAdShowing = {
+            android.util.Log.i("WatchEarnFlow", "[DailyCheckIn] Showing video ad for Day $targetStreak")
+          },
+          onVideoCompleted = {
+            viewModelScope.launch {
+              repository.verifyWatchEarnSessionCompleted(uid, sessionId)
+              repository
+                .claimDailyCheckIn(
+                  userId = uid,
+                  streakDay = targetStreak,
+                  rewardCents = rewardCents,
+                  dateKey = todayKey,
+                  userName = name,
+                  verifiedAdCallbackToken = sessionId
+                )
+                .onSuccess { earned ->
+                  _bannerMessage.value =
+                    "Success! Day $targetStreak check-in claimed: +${formatRewardInr(earned)}"
+                  onSuccess(earned)
+                }
+                .onFailure { error ->
+                  _bannerMessage.value =
+                    error.localizedMessage ?: "Failed to claim check-in reward."
+                }
+              _isBusy.value = false
+            }
+          },
+          onFailed = { errorMsg ->
+            _isBusy.value = false
+            _bannerMessage.value =
+              errorMsg.ifBlank { com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE }
+          }
         )
-        .onSuccess { earned ->
-          _bannerMessage.value = "Success! Day $targetStreak check-in claimed: +${formatRewardInr(earned)}"
-          onSuccess(earned)
-        }
-        .onFailure { error ->
-          _bannerMessage.value = error.localizedMessage ?: "Failed to claim check-in reward."
-        }
-      _isBusy.value = false
+      } else {
+        repository
+          .claimDailyCheckIn(
+            userId = uid,
+            streakDay = targetStreak,
+            rewardCents = rewardCents,
+            dateKey = todayKey,
+            userName = name
+          )
+          .onSuccess { earned ->
+            _bannerMessage.value =
+              "Success! Day $targetStreak check-in claimed: +${formatRewardInr(earned)}"
+            onSuccess(earned)
+          }
+          .onFailure { error ->
+            _bannerMessage.value = error.localizedMessage ?: "Failed to claim check-in reward."
+          }
+        _isBusy.value = false
+      }
     }
   }
 
@@ -783,17 +845,24 @@ class TaskFlowViewModel(
    *   "Claim" button appears (never auto-credits on ad start or completion).
    */
   fun startWatchEarnVideo(activity: android.app.Activity) {
+    android.util.Log.i("WatchEarnFlow", "[Step 1] startWatchEarnVideo invoked by user tap")
     val uid = currentUserId
     if (uid.isBlank()) {
+      android.util.Log.w("WatchEarnFlow", "[Step 1] Blocked: user is not authenticated")
       _bannerMessage.value = "Please sign in to watch videos."
       return
     }
     val currentFlow = _watchEarnUiState.value
     if (currentFlow.isLoadingAd || currentFlow.isClaiming) {
+      android.util.Log.w(
+        "WatchEarnFlow",
+        "[Step 1] Ignored duplicate tap: isLoadingAd=${currentFlow.isLoadingAd}, isClaiming=${currentFlow.isClaiming}"
+      )
       return
     }
     val stats = watchStats.value
     if (stats.videosWatched >= 25L) {
+      android.util.Log.w("WatchEarnFlow", "[Step 1] Daily limit reached: ${stats.videosWatched}/25")
       _watchEarnUiState.value =
         com.example.data.model.WatchEarnUiState(
           status = com.example.data.model.WatchEarnFlowStatus.ERROR,
@@ -813,12 +882,22 @@ class TaskFlowViewModel(
       val sessionResult = repository.createWatchEarnSession(uid, todayKey)
       val sessionId =
         sessionResult.getOrElse { err ->
+          android.util.Log.e(
+            "WatchEarnFlow",
+            "[Step 4] Reward session creation failed: ${err.message}",
+            err
+          )
+          val msg = err.localizedMessage ?: ""
+          val userMessage =
+            if (msg.contains("Daily limit", ignoreCase = true) || msg.contains("sign in", ignoreCase = true)) {
+              msg
+            } else {
+              com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
+            }
           _watchEarnUiState.value =
             com.example.data.model.WatchEarnUiState(
               status = com.example.data.model.WatchEarnFlowStatus.ERROR,
-              errorMessage =
-                err.localizedMessage
-                  ?: com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
+              errorMessage = userMessage
             )
           return@launch
         }
@@ -827,6 +906,7 @@ class TaskFlowViewModel(
         activity = activity,
         sessionId = sessionId,
         onAdShowing = {
+          android.util.Log.i("WatchEarnFlow", "[Step 9] Rewarded video is now showing on screen")
           _watchEarnUiState.value =
             com.example.data.model.WatchEarnUiState(
               status = com.example.data.model.WatchEarnFlowStatus.SHOWING_AD,
@@ -835,10 +915,18 @@ class TaskFlowViewModel(
             )
         },
         onVideoCompleted = {
+          android.util.Log.i(
+            "WatchEarnFlow",
+            "[Step 9] Rewarded video COMPLETED; verifying session on backend before enabling Claim"
+          )
           viewModelScope.launch {
             repository
               .verifyWatchEarnSessionCompleted(uid, sessionId)
               .onSuccess {
+                android.util.Log.i(
+                  "WatchEarnFlow",
+                  "[Step 9] Session verified; transitioning UI to READY_TO_CLAIM"
+                )
                 _watchEarnUiState.value =
                   com.example.data.model.WatchEarnUiState(
                     status = com.example.data.model.WatchEarnFlowStatus.READY_TO_CLAIM,
@@ -847,6 +935,11 @@ class TaskFlowViewModel(
                   )
               }
               .onFailure { err ->
+                android.util.Log.e(
+                  "WatchEarnFlow",
+                  "[Step 9] Session verification failed: ${err.message}",
+                  err
+                )
                 _watchEarnUiState.value =
                   com.example.data.model.WatchEarnUiState(
                     status = com.example.data.model.WatchEarnFlowStatus.ERROR,
@@ -858,6 +951,10 @@ class TaskFlowViewModel(
           }
         },
         onFailed = { errorMsg ->
+          android.util.Log.w(
+            "WatchEarnFlow",
+            "[Step 9] Rewarded ad flow failed; surfacing user message: $errorMsg"
+          )
           _watchEarnUiState.value =
             com.example.data.model.WatchEarnUiState(
               status = com.example.data.model.WatchEarnFlowStatus.ERROR,

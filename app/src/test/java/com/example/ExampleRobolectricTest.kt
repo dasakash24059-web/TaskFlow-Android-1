@@ -1225,12 +1225,12 @@ class ExampleRobolectricTest {
 
   @Test
   fun `verify 7-day daily check-in calculation, streak progression, and 13 rupee total reward`() {
-    // 1. Structure check: Days 1-6 = 100 paise (₹1.00), Day 7 = 700 paise (₹7.00), Total = 1300 paise (₹13.00)
-    assertEquals(1300L, DailyCheckInConstants.TOTAL_7_DAY_CENTS)
+    // 1. Structure check: Days 1-6 = 100 paise (₹1.00), Day 7 = 500 paise (₹5.00), Total = 1100 paise (₹11.00)
+    assertEquals(1100L, DailyCheckInConstants.TOTAL_7_DAY_CENTS)
     for (day in 1..6) {
       assertEquals(100L, DailyCheckInConstants.getRewardForDay(day))
     }
-    assertEquals(700L, DailyCheckInConstants.getRewardForDay(7))
+    assertEquals(500L, DailyCheckInConstants.getRewardForDay(7))
 
     val today = getTodayDateKey()
     val yesterday = getYesterdayDateKey()
@@ -1247,11 +1247,11 @@ class ExampleRobolectricTest {
     assertEquals(4, streakState.nextClaimDay)
     assertEquals(100L, streakState.nextRewardCents)
 
-    // 4. User who checked in yesterday with streak = 6 -> Next is Day 7 big reward (₹7.00)
+    // 4. User who checked in yesterday with streak = 6 -> Next is Day 7 big reward (₹5.00)
     val day7State = calculateDailyCheckInState(lastDate = yesterday, streak = 6L)
     assertTrue(day7State.canCheckInToday)
     assertEquals(7, day7State.nextClaimDay)
-    assertEquals(700L, day7State.nextRewardCents)
+    assertEquals(500L, day7State.nextRewardCents)
 
     // 5. User who already claimed today -> canCheckInToday is false
     val claimedTodayState = calculateDailyCheckInState(lastDate = today, streak = 4L)
@@ -1839,6 +1839,32 @@ class ExampleRobolectricTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("claim_watch_reward_button").assertDoesNotExist()
     composeTestRule.onNodeWithTag("watch_earn_claimed_banner").assertIsDisplayed()
+
+    // 7. Transition to ERROR -> Displays unavailable message and Retry ("Try Again") button without stuck state
+    var retried = false
+    watchStarted = false
+    watchEarnStateHolder.value =
+      com.example.data.model.WatchEarnUiState(
+        status = com.example.data.model.WatchEarnFlowStatus.ERROR,
+        errorMessage = com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
+      )
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("watch_earn_error_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Video is currently unavailable. Please try again later.").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("retry_watch_ad_button").assertIsDisplayed().performClick()
+    retried = watchStarted
+    assertTrue("Expected tapping Try Again button to trigger onStartWatchVideo retry", retried)
+
+    // 8. Verify UnityAds 4.12.0 BoldSDK opportunityId (objectId) configuration & fixed placement IDs
+    assertEquals("800430673", com.example.util.UnityAdsHelper.GAME_ID)
+    assertEquals("BP_Rewarded_Android", com.example.util.UnityAdsHelper.REWARDED_PLACEMENT_ID)
+    assertEquals("BP_Banner_Android", com.example.util.UnityAdsHelper.BANNER_PLACEMENT_ID)
+    assertEquals("BP_Interstitial_Android", com.example.util.UnityAdsHelper.INTERSTITIAL_PLACEMENT_ID)
+    val testOpportunityId = java.util.UUID.randomUUID().toString()
+    val loadOpts = com.unity3d.ads.UnityAdsLoadOptions().apply { setObjectId(testOpportunityId) }
+    val showOpts = com.unity3d.ads.UnityAdsShowOptions().apply { setObjectId(testOpportunityId) }
+    assertEquals(testOpportunityId, loadOpts.data.optString("objectId"))
+    assertEquals(testOpportunityId, showOpts.data.optString("objectId"))
   }
 }
 

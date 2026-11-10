@@ -173,9 +173,9 @@ data class WatchEarnUiState(
 }
 
 object DailyCheckInConstants {
-  // 7-Day Reward Structure: Day 1-6: ₹1 (100 paise), Day 7: ₹7 (700 paise). Total = ₹13 (1300 paise).
-  val REWARDS_CENTS = listOf(100L, 100L, 100L, 100L, 100L, 100L, 700L)
-  const val TOTAL_7_DAY_CENTS = 1300L
+  // 7-Day Reward Structure: Day 1-6: ₹1 (100 paise), Day 7: ₹5 (500 paise). Total = ₹11 (1100 paise).
+  val REWARDS_CENTS = listOf(100L, 100L, 100L, 100L, 100L, 100L, 500L)
+  const val TOTAL_7_DAY_CENTS = 1100L
 
   const val AD_VERIFICATION_REQUIRED_MESSAGE =
     "Daily Check-in is pending. Advertisement completion is required after which rewards can be credited."

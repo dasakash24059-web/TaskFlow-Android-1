@@ -129,7 +129,7 @@ class MainActivity : ComponentActivity() {
     com.example.ui.theme.ThemePreferences.init(applicationContext)
     com.example.util.TaskFlowNotificationHelper.ensureNotificationChannels(applicationContext)
     ensureFirebaseInitialized(applicationContext)
-    com.example.util.UnityAdsHelper.initialize(applicationContext)
+    com.example.util.UnityAdsHelper.initialize(this)
     runCatching { enableEdgeToEdge() }
     setContent {
       val themeMode by com.example.ui.theme.ThemePreferences.currentThemeMode.collectAsStateWithLifecycle()
@@ -662,7 +662,16 @@ private fun AuthenticatedWorkspace(
                     dailyCheckInState = dailyCheckInState,
                     approvedEarningsCents = viewModel.getApprovedTaskEarningsCents(),
                     onClaimDay = { day ->
-                      viewModel.claimDailyCheckIn(day)
+                      val activity =
+                        (context as? android.app.Activity)
+                          ?: run {
+                            var cur = context
+                            while (cur is android.content.ContextWrapper && cur !is android.app.Activity) {
+                              cur = cur.baseContext
+                            }
+                            cur as? android.app.Activity
+                          }
+                      viewModel.claimDailyCheckIn(day = day, activity = activity)
                     },
                     onBack = { viewModel.setDailyCheckInScreenVisible(false) },
                     isBusy = isBusy
@@ -683,7 +692,6 @@ private fun AuthenticatedWorkspace(
                     submissionsState = userSubmissionsState,
                     dailyCheckInState = dailyCheckInState,
                     onClaimDailyCheckIn = {
-                      viewModel.claimDailyCheckIn()
                       viewModel.setDailyCheckInScreenVisible(true)
                     },
                     onNavigateToDailyCheckIn = { viewModel.setDailyCheckInScreenVisible(true) },
@@ -701,7 +709,15 @@ private fun AuthenticatedWorkspace(
                     },
                     watchEarnUiState = watchEarnUiState,
                     onStartWatchVideo = {
-                      val activity = context as? android.app.Activity
+                      val activity =
+                        (context as? android.app.Activity)
+                          ?: run {
+                            var cur = context
+                            while (cur is android.content.ContextWrapper && cur !is android.app.Activity) {
+                              cur = cur.baseContext
+                            }
+                            cur as? android.app.Activity
+                          }
                       if (activity != null) {
                         viewModel.startWatchEarnVideo(activity)
                       }
