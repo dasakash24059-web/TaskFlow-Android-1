@@ -1,0 +1,63 @@
+name: Deploy TaskFlow Website to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'index.html'
+      - 'public/**'
+      - 'version.json'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# CRITICAL: Keep cancel-in-progress: false so a queued or in-flight Pages deployment
+# is never interrupted mid-poll when rapid commits or release tags are pushed.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy-pages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Stage static website files only
+        run: |
+          rm -rf _site
+          mkdir -p _site
+          cp index.html _site/index.html
+          if [ -d public ]; then
+            cp -r public _site/public
+          fi
+          if [ -f version.json ]; then
+            cp version.json _site/version.json
+          fi
+          touch _site/.nojekyll
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '_site'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          timeout: 900000
