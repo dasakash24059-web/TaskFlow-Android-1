@@ -68,6 +68,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -108,7 +109,9 @@ import com.example.data.model.calculateDailyCheckInState
 import com.example.data.model.formatRewardInr
 import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.data.model.WatchStats
+import com.example.util.UnityAdsDiagnosticSnapshot
 import com.example.util.UnityBannerAdView
+import com.example.util.findActivity
 import com.example.ui.components.AppIconThumbnail
 import com.example.ui.components.ClickableTaskLinkCard
 import com.example.ui.components.FullSizeImageDialog
@@ -1018,7 +1021,7 @@ private fun WatchAdInfoDialog(
                 )
                 Text(
                   text =
-                    "2. isInitialized(): ${diagSnapshot.isInitialized} (${diagSnapshot.sdkInitializationState})",
+                    "2. isInitialized(): ${diagSnapshot.isInitialized} (${diagSnapshot.sdkInternalState})",
                   style = MaterialTheme.typography.labelSmall,
                   color = Color(0xFF334155)
                 )
