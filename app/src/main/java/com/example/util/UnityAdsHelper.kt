@@ -377,8 +377,38 @@ object UnityAdsHelper {
   }
 
   /**
-   * Loads `BP_Rewarded_Android` using a dedicated UUID v4 `adObjectId` in `UnityAdsLoadOptions`.
-   * The exact same `adObjectId` is passed to `onLoaded(adObjectId)` and then to `showRewardedAd`.
+   * Checks whether Unity Ads 4.12.0 is running the BoldSDK coroutine flow
+   * (AlternativeFlowReader.invoke() == true) or the Classic WebView bridge flow (false).
+   */
+  fun isBoldSdkAlternativeFlow(): Boolean {
+    return try {
+      val reader = com.unity3d.services.core.misc.Utilities.getService<com.unity3d.ads.core.configuration.AlternativeFlowReader>(
+        com.unity3d.ads.core.configuration.AlternativeFlowReader::class.java
+      )
+      reader?.invoke() == true
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  /**
+   * Loads `BP_Rewarded_Android`.
+   *
+   * Root Cause of "INVALID_ARGUMENT: adMarkup is missing":
+   * In Unity Ads 4.12.0 Classic WebView Bridge mode (the default on Android devices),
+   * calling `UnityAdsLoadOptions.setObjectId(adObjectId)` populates `UnityAdsBaseOptions._data`,
+   * which `BaseLoadModule.buildBaseParameters` serializes directly into `"headerBiddingOptions"`
+   * for the WebView. When the WebView sees a non-empty `headerBiddingOptions` payload without an
+   * `adMarkup` string, it treats the request as an incomplete programmatic bid and throws:
+   * "INVALID_ARGUMENT: adMarkup is missing".
+   *
+   * Fix:
+   * In standard Waterfall mode (`isBoldSdkAlternativeFlow() == false`), load options MUST remain
+   * standard (clean `UnityAdsLoadOptions()` without `setObjectId`), which serializes an empty
+   * `headerBiddingOptions` and allows normal Waterfall ad loading to proceed.
+   * If BoldSDK coroutines are active (`isBoldSdkAlternativeFlow() == true`), `setObjectId(adObjectId)`
+   * is used. If either mode returns an error indicating the other mode ("adMarkup is missing" or
+   * "Object ID cannot be null"), an automatic one-time recovery loads with the alternate configuration.
    */
   fun loadRewardedAd(
     adObjectId: String = UUID.randomUUID().toString(),
@@ -394,81 +424,139 @@ object UnityAdsHelper {
       return
     }
     runOnMainThread {
-      try {
-        val loadOptions =
-          UnityAdsLoadOptions().apply {
-            setObjectId(adObjectId)
-          }
-        Log.i(
-          TAG,
-          "[Step 5] Calling UnityAds.load(placementId=$REWARDED_PLACEMENT_ID, adObjectId=$adObjectId)"
-        )
-        updateDiagnostics {
-          it.copy(
-            placementId = REWARDED_PLACEMENT_ID,
-            adLoadCallbackResult = "LOADING (placement=$REWARDED_PLACEMENT_ID)..."
-          )
+      val isBold = isBoldSdkAlternativeFlow()
+      executeLoadAttempt(
+        adObjectId = adObjectId,
+        useObjectId = isBold,
+        canRetryWithAlternative = true,
+        onLoaded = onLoaded,
+        onError = onError
+      )
+    }
+  }
+
+  private fun executeLoadAttempt(
+    adObjectId: String,
+    useObjectId: Boolean,
+    canRetryWithAlternative: Boolean,
+    onLoaded: (String) -> Unit,
+    onError: (String) -> Unit
+  ) {
+    try {
+      val loadOptions = UnityAdsLoadOptions().apply {
+        if (useObjectId) {
+          setObjectId(adObjectId)
         }
-        UnityAds.load(
-          REWARDED_PLACEMENT_ID,
-          loadOptions,
-          object : IUnityAdsLoadListener {
-            override fun onUnityAdsAdLoaded(placementId: String?) {
-              lastLoadedAdObjectId = adObjectId
-              val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
-              Log.i(
-                TAG,
-                "[Step 6] onUnityAdsAdLoaded: placementId=$actualPlacement, adObjectId=$adObjectId"
+      }
+      val flowDesc = if (isBoldSdkAlternativeFlow()) "BoldSDK" else "ClassicWebView"
+      val modeDesc = if (useObjectId) "WithObjectId($adObjectId)" else "StandardWaterfall"
+      Log.i(
+        TAG,
+        "[Step 5] Calling UnityAds.load(placementId=$REWARDED_PLACEMENT_ID, flow=$flowDesc, mode=$modeDesc)"
+      )
+      updateDiagnostics {
+        it.copy(
+          placementId = REWARDED_PLACEMENT_ID,
+          adLoadCallbackResult = "LOADING (flow=$flowDesc, mode=$modeDesc)..."
+        )
+      }
+      UnityAds.load(
+        REWARDED_PLACEMENT_ID,
+        loadOptions,
+        object : IUnityAdsLoadListener {
+          override fun onUnityAdsAdLoaded(placementId: String?) {
+            lastLoadedAdObjectId = if (useObjectId) adObjectId else ""
+            val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
+            Log.i(
+              TAG,
+              "[Step 6] onUnityAdsAdLoaded: placementId=$actualPlacement, flow=$flowDesc, mode=$modeDesc"
+            )
+            updateDiagnostics {
+              it.copy(
+                placementId = actualPlacement,
+                adLoadCallbackResult = "SUCCESS: onUnityAdsAdLoaded(placement=$actualPlacement, mode=$modeDesc)"
               )
-              updateDiagnostics {
-                it.copy(
-                  placementId = actualPlacement,
-                  adLoadCallbackResult = "SUCCESS: onUnityAdsAdLoaded(placement=$actualPlacement)"
+            }
+            runOnMainThread { onLoaded(lastLoadedAdObjectId ?: "") }
+          }
+
+          override fun onUnityAdsFailedToLoad(
+            placementId: String?,
+            error: UnityAds.UnityAdsLoadError?,
+            message: String?
+          ) {
+            val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
+            val errCode = error?.name ?: "UNKNOWN_LOAD_ERROR"
+            val errMsg = message ?: "No message"
+            Log.e(
+              TAG,
+              "[Step 6] onUnityAdsFailedToLoad: placementId=$actualPlacement, mode=$modeDesc, error=$errCode, message=$errMsg"
+            )
+
+            // Auto-recovery between Classic WebView and BoldSDK flow if option mismatch occurs:
+            if (canRetryWithAlternative) {
+              if (useObjectId && errMsg.contains("adMarkup", ignoreCase = true)) {
+                Log.w(
+                  TAG,
+                  "[Step 6] 'adMarkup is missing' detected with objectId option. Auto-retrying with StandardWaterfall mode..."
                 )
+                runOnMainThread {
+                  executeLoadAttempt(
+                    adObjectId = adObjectId,
+                    useObjectId = false,
+                    canRetryWithAlternative = false,
+                    onLoaded = onLoaded,
+                    onError = onError
+                  )
+                }
+                return
+              } else if (!useObjectId && errMsg.contains("Object ID cannot be null", ignoreCase = true)) {
+                Log.w(
+                  TAG,
+                  "[Step 6] 'Object ID cannot be null' detected in standard mode. Auto-retrying with WithObjectId mode..."
+                )
+                runOnMainThread {
+                  executeLoadAttempt(
+                    adObjectId = adObjectId,
+                    useObjectId = true,
+                    canRetryWithAlternative = false,
+                    onLoaded = onLoaded,
+                    onError = onError
+                  )
+                }
+                return
               }
-              runOnMainThread { onLoaded(adObjectId) }
             }
 
-            override fun onUnityAdsFailedToLoad(
-              placementId: String?,
-              error: UnityAds.UnityAdsLoadError?,
-              message: String?
-            ) {
-              val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
-              val errCode = error?.name ?: "UNKNOWN_LOAD_ERROR"
-              val errMsg = message ?: "No message"
-              Log.e(
-                TAG,
-                "[Step 6] onUnityAdsFailedToLoad: placementId=$actualPlacement, adObjectId=$adObjectId, error=$errCode, message=$errMsg"
+            updateDiagnostics {
+              it.copy(
+                placementId = actualPlacement,
+                adLoadCallbackResult = "FAILED: error=$errCode, message=$errMsg (mode=$modeDesc)"
               )
-              updateDiagnostics {
-                it.copy(
-                  placementId = actualPlacement,
-                  adLoadCallbackResult = "FAILED: error=$errCode, message=$errMsg"
-                )
-              }
-              runOnMainThread { onError(UNAVAILABLE_MESSAGE) }
             }
+            runOnMainThread { onError(UNAVAILABLE_MESSAGE) }
           }
-        )
-      } catch (e: Throwable) {
-        Log.e(
-          TAG,
-          "[Step 5] Exception calling UnityAds.load($REWARDED_PLACEMENT_ID): ${e.message}",
-          e
-        )
-        updateDiagnostics {
-          it.copy(
-            adLoadCallbackResult = "EXCEPTION: ${e.javaClass.simpleName}: ${e.message}"
-          )
         }
-        runOnMainThread { onError(UNAVAILABLE_MESSAGE) }
+      )
+    } catch (e: Throwable) {
+      Log.e(
+        TAG,
+        "[Step 5] Exception calling UnityAds.load($REWARDED_PLACEMENT_ID): ${e.message}",
+        e
+      )
+      updateDiagnostics {
+        it.copy(
+          adLoadCallbackResult = "EXCEPTION: ${e.javaClass.simpleName}: ${e.message}"
+        )
       }
+      runOnMainThread { onError(UNAVAILABLE_MESSAGE) }
     }
   }
 
   /**
-   * Shows `BP_Rewarded_Android` using the exact `adObjectId` that was loaded in `loadRewardedAd`.
+   * Shows `BP_Rewarded_Android` using matching show options.
+   * If `adObjectId` was loaded with a valid UUID (BoldSDK mode), it sets `showOptions.setObjectId(adObjectId)`.
+   * In standard Waterfall mode, clean `UnityAdsShowOptions()` is passed.
    */
   fun showRewardedAd(
     activity: Activity,
@@ -511,32 +599,21 @@ object UnityAdsHelper {
           return@runOnMainThread
         }
 
-        val resolvedAdObjectId = adObjectId?.takeIf { it.isNotBlank() }
-        if (resolvedAdObjectId == null) {
-          Log.e(
-            TAG,
-            "[Step 7] Ad readiness check FAILED: No loaded adObjectId available for UnityAds.show"
-          )
-          updateDiagnostics {
-            it.copy(adShowCallbackResult = "FAILED: MISSING_LOADED_AD_OBJECT_ID")
-          }
-          onFailed(UNAVAILABLE_MESSAGE)
-          return@runOnMainThread
-        }
-
         runCatching { ClientProperties.setActivity(activity) }
 
-        val showOptions =
-          UnityAdsShowOptions().apply {
-            setObjectId(resolvedAdObjectId)
+        val showOptions = UnityAdsShowOptions().apply {
+          if (!adObjectId.isNullOrBlank()) {
+            setObjectId(adObjectId)
           }
+        }
 
+        val showModeDesc = if (!adObjectId.isNullOrBlank()) "WithObjectId($adObjectId)" else "Standard"
         Log.i(
           TAG,
-          "[Step 8] Calling UnityAds.show(placementId=$REWARDED_PLACEMENT_ID, adObjectId=$resolvedAdObjectId)"
+          "[Step 8] Calling UnityAds.show(placementId=$REWARDED_PLACEMENT_ID, mode=$showModeDesc)"
         )
         updateDiagnostics {
-          it.copy(adShowCallbackResult = "STARTING_SHOW (placement=$REWARDED_PLACEMENT_ID)...")
+          it.copy(adShowCallbackResult = "STARTING_SHOW (placement=$REWARDED_PLACEMENT_ID, mode=$showModeDesc)...")
         }
         UnityAds.show(
           activity,
@@ -547,7 +624,7 @@ object UnityAdsHelper {
               val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
               Log.i(
                 TAG,
-                "[Step 9] onUnityAdsShowStart: placementId=$actualPlacement, adObjectId=$resolvedAdObjectId"
+                "[Step 9] onUnityAdsShowStart: placementId=$actualPlacement, mode=$showModeDesc"
               )
               updateDiagnostics {
                 it.copy(adShowCallbackResult = "SHOWING (onUnityAdsShowStart: $actualPlacement)")
@@ -567,7 +644,7 @@ object UnityAdsHelper {
               val stateName = state?.name ?: "UNKNOWN_STATE"
               Log.i(
                 TAG,
-                "[Step 9] onUnityAdsShowComplete: placementId=$actualPlacement, state=$stateName, adObjectId=$resolvedAdObjectId"
+                "[Step 9] onUnityAdsShowComplete: placementId=$actualPlacement, state=$stateName, mode=$showModeDesc"
               )
               updateDiagnostics {
                 it.copy(
@@ -593,7 +670,7 @@ object UnityAdsHelper {
               val errMsg = message ?: "No message"
               Log.e(
                 TAG,
-                "[Step 9] onUnityAdsShowFailure: placementId=$actualPlacement, adObjectId=$resolvedAdObjectId, error=$errCode, message=$errMsg"
+                "[Step 9] onUnityAdsShowFailure: placementId=$actualPlacement, mode=$showModeDesc, error=$errCode, message=$errMsg"
               )
               updateDiagnostics {
                 it.copy(

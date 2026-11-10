@@ -1813,8 +1813,8 @@ class ExampleRobolectricTest {
         statusMessage = "Loading video..."
       )
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("watch_earn_loading_banner").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("watch_ad_action_button").assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("watch_earn_loading_banner").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("watch_ad_action_button").performScrollTo().assertIsNotEnabled()
     composeTestRule.onNodeWithTag("claim_watch_reward_button").assertDoesNotExist()
 
     // 5. Transition to READY_TO_CLAIM after verified video completion -> Claim button is displayed
@@ -1825,8 +1825,8 @@ class ExampleRobolectricTest {
         statusMessage = "Video completed! Tap Claim to receive your reward."
       )
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("watch_earn_ready_to_claim_banner").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("claim_watch_reward_button").assertIsDisplayed().performClick()
+    composeTestRule.onNodeWithTag("watch_earn_ready_to_claim_banner").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("claim_watch_reward_button").performScrollTo().assertIsDisplayed().performClick()
     assertTrue(rewardClaimed)
 
     // 6. Transition to CLAIMED -> Claim button is hidden for that session and confirmation is shown
@@ -1838,7 +1838,7 @@ class ExampleRobolectricTest {
       )
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("claim_watch_reward_button").assertDoesNotExist()
-    composeTestRule.onNodeWithTag("watch_earn_claimed_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("watch_earn_claimed_banner").performScrollTo().assertIsDisplayed()
 
     // 7. Transition to ERROR -> Displays unavailable message and Retry ("Try Again") button without stuck state
     var retried = false
@@ -1849,9 +1849,9 @@ class ExampleRobolectricTest {
         errorMessage = com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
       )
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("watch_earn_error_banner").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Video is currently unavailable. Please try again later.").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("retry_watch_ad_button").assertIsDisplayed().performClick()
+    composeTestRule.onNodeWithTag("watch_earn_error_banner").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Video is currently unavailable. Please try again later.").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("retry_watch_ad_button").performScrollTo().assertIsDisplayed().performClick()
     retried = watchStarted
     assertTrue("Expected tapping Try Again button to trigger onStartWatchVideo retry", retried)
 
