@@ -1026,11 +1026,9 @@ fun UnityBannerAdView(modifier: Modifier = Modifier) {
             View(ctx)
           }
         },
-        update = { view ->
-          // Decoupled reload if placement is valid
-          if (view is BannerView && UnityAdsHelper.isSdkInitialized()) {
-            runCatching { view.load() }
-          }
+        update = { _ ->
+          // No-op during recomposition to prevent duplicate banner load requests.
+          // Initial load is executed exactly once via factory's ensureInitialized listener.
         },
         onRelease = { view ->
           Log.d("UnityBanner", "Disposing BannerView on composable release.")
