@@ -414,7 +414,7 @@ service cloud.firestore {
                                  'balanceCents', 'virtualPoints', 'lastCheckInDate', 'checkInStreak',
                                  'lastCheckInTimestamp', 'updatedAt'
                                ]) &&
-                               (incoming().balanceCents == existing().balanceCents + 100 || incoming().balanceCents == existing().balanceCents + 700)
+                               (incoming().balanceCents == existing().balanceCents + 100 || incoming().balanceCents == existing().balanceCents + 500 || incoming().balanceCents == existing().balanceCents + 700)
                              )
                            )
                          ) ||

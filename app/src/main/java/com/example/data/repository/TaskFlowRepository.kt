@@ -1384,26 +1384,10 @@ class TaskFlowRepository(
   private fun userWatchStatsCollection(userId: String) =
     usersCollection.document(userId).collection("watch_stats")
 
-  private data class LocalSessionRecord(
-    val sessionId: String,
-    val userId: String,
-    val rewardType: String = "WATCH_AND_EARN",
-    val rewardCents: Long = 100L,
-    val createdAtMillis: Long,
-    val expiresAtMillis: Long,
-    val persistedInFirestore: Boolean = false,
-    val createdViaCloudFunction: Boolean = false,
-    @Volatile var status: String = "PENDING",
-    @Volatile var used: Boolean = false,
-    @Volatile var claimed: Boolean = false
-  )
-
-  private val localRewardSessions =
-    java.util.concurrent.ConcurrentHashMap<String, LocalSessionRecord>()
-
   /**
    * Creates a unique, time-limited reward session bound to [userId] for Daily Check-In (Days 1–7,
    * including Day 7 ₹5 bonus) before loading and showing a Unity Rewarded Video ad.
+   * No client-side in-memory session fallback is permitted.
    */
   suspend fun createDailyCheckInSession(
     userId: String,
@@ -1416,7 +1400,22 @@ class TaskFlowRepository(
     require(streakDay in 1..7) { "Invalid streakDay." }
 
     val authUid = authProvider().currentUser?.uid
-    if (!authUid.isNullOrBlank() && authUid != userId) {
+    if (authUid.isNullOrBlank()) {
+      com.example.util.UnityAdsHelper.recordRewardSessionResult(
+        success = false,
+        source = "FirebaseAuth",
+        errorCode = "UNAUTHENTICATED",
+        errorMessage = "FirebaseAuth.currentUser is null"
+      )
+      throw IllegalStateException("Authentication is required to create a reward session.")
+    }
+    if (authUid != userId) {
+      com.example.util.UnityAdsHelper.recordRewardSessionResult(
+        success = false,
+        source = "FirebaseAuth",
+        errorCode = "UID_MISMATCH",
+        errorMessage = "Authenticated UID does not match requested userId"
+      )
       throw IllegalStateException("Authenticated user mismatch.")
     }
 
@@ -1425,81 +1424,79 @@ class TaskFlowRepository(
       "[DailyCheckIn] Starting createRewardSession request for Day $streakDay (rewardCents=$rewardCents)"
     )
 
-    var cloudFunctionSessionId: String? = null
-    if (!authUid.isNullOrBlank()) {
+    var callableError: Throwable? = null
+    val cloudFunctionSessionId =
       runCatching {
-        kotlinx.coroutines.withTimeout(5_000L) {
+        kotlinx.coroutines.withTimeout(6_000L) {
           val callable =
             com.google.firebase.functions.FirebaseFunctions.getInstance()
               .getHttpsCallable("createRewardSession")
           val response =
             callable.call(mapOf("rewardType" to "DAILY_CHECK_IN", "streakDay" to streakDay)).await()
           val dataMap = response.getData() as? Map<*, *>
-          val sid = (dataMap?.get("sessionId") as? String)?.trim().orEmpty()
-          if (sid.isNotBlank()) {
-            cloudFunctionSessionId = sid
-            Log.i("WatchEarnFlow", "[DailyCheckIn] Callable createRewardSession succeeded: sessionId=$sid")
-          }
+          (dataMap?.get("sessionId") as? String)?.trim().orEmpty()
         }
-      }.onFailure { fnErr ->
+      }.onFailure { err ->
+        callableError = err
         Log.w(
           "WatchEarnFlow",
-          "[DailyCheckIn] Callable createRewardSession unavailable (${fnErr.javaClass.simpleName}); using Firestore/authenticated session."
+          "[DailyCheckIn] Callable createRewardSession failed (${err.javaClass.simpleName}: ${err.message})"
         )
-      }
+      }.getOrNull()?.takeIf { it.isNotBlank() }
+
+    if (cloudFunctionSessionId != null) {
+      com.example.util.UnityAdsHelper.recordRewardSessionResult(
+        success = true,
+        source = "CloudFunction:createRewardSession(DAILY_CHECK_IN)"
+      )
+      return@runCatching cloudFunctionSessionId
     }
 
     val randomBytes = ByteArray(16)
     java.security.SecureRandom().nextBytes(randomBytes)
-    val generatedSessionId = randomBytes.joinToString("") { "%02x".format(it) }
-    val sessionId = cloudFunctionSessionId ?: generatedSessionId
-
+    val sessionId = randomBytes.joinToString("") { "%02x".format(it) }
     val nowMillis = System.currentTimeMillis()
-    val expiresAtMillis = nowMillis + 10 * 60 * 1000L
-    val expiresAt = com.google.firebase.Timestamp(java.util.Date(expiresAtMillis))
+    val expiresAt = com.google.firebase.Timestamp(java.util.Date(nowMillis + 10 * 60 * 1000L))
 
     val sessionRef = rewardSessionsCollection.document(sessionId)
-    val persistedInFirestore =
-      runCatching {
-        sessionRef
-          .set(
-            mapOf(
-              "sessionId" to sessionId,
-              "userId" to userId,
-              "rewardType" to "DAILY_CHECK_IN",
-              "rewardCents" to rewardCents,
-              "status" to "PENDING",
-              "used" to false,
-              "claimed" to false,
-              "createdAt" to FieldValue.serverTimestamp(),
-              "expiresAt" to expiresAt
-            )
+    try {
+      sessionRef
+        .set(
+          mapOf(
+            "sessionId" to sessionId,
+            "userId" to userId,
+            "rewardType" to "DAILY_CHECK_IN",
+            "rewardCents" to rewardCents,
+            "status" to "PENDING",
+            "used" to false,
+            "claimed" to false,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "expiresAt" to expiresAt
           )
-          .await()
-        true
-      }.getOrElse { false }
-
-    localRewardSessions[sessionId] =
-      LocalSessionRecord(
-        sessionId = sessionId,
-        userId = userId,
-        rewardType = "DAILY_CHECK_IN",
-        rewardCents = rewardCents,
-        createdAtMillis = nowMillis,
-        expiresAtMillis = expiresAtMillis,
-        persistedInFirestore = persistedInFirestore,
-        createdViaCloudFunction = cloudFunctionSessionId != null,
-        status = "PENDING",
-        used = false,
-        claimed = false
+        )
+        .await()
+      com.example.util.UnityAdsHelper.recordRewardSessionResult(
+        success = true,
+        source = "Firestore:/reward_sessions(DAILY_CHECK_IN)"
       )
-
-    sessionId
+      sessionId
+    } catch (fsErr: Throwable) {
+      val fnMsg = callableError?.let { "${it.javaClass.simpleName}: ${it.message}" } ?: "N/A"
+      val fsCode = (fsErr as? FirebaseFirestoreException)?.code?.name ?: fsErr.javaClass.simpleName
+      com.example.util.UnityAdsHelper.recordRewardSessionResult(
+        success = false,
+        source = "createRewardSession",
+        errorCode = fsCode,
+        errorMessage = "Callable=[$fnMsg], Firestore=[${fsErr.message}]"
+      )
+      throw fsErr
+    }
   }
 
   /**
    * Step 3 & 4 of Watch & Earn: Creates a unique, unpredictable, time-limited reward session
-   * bound to [userId] before loading and showing a Unity Rewarded Video ad.
+   * bound to the authenticated Firebase user before loading and showing a Unity Rewarded Video ad.
+   * Strictly requires server/Firestore persistence — never fabricates untrusted local sessions.
    */
   suspend fun createWatchEarnSession(
     userId: String,
@@ -1509,10 +1506,25 @@ class TaskFlowRepository(
     require(dateKey.isNotBlank()) { "Invalid dateKey." }
 
     val authUid = authProvider().currentUser?.uid
-    if (!authUid.isNullOrBlank() && authUid != userId) {
+    if (authUid.isNullOrBlank()) {
+      com.example.util.UnityAdsHelper.recordRewardSessionResult(
+        success = false,
+        source = "FirebaseAuth",
+        errorCode = "UNAUTHENTICATED",
+        errorMessage = "FirebaseAuth.currentUser is null"
+      )
+      throw IllegalStateException("Authentication is required to create a reward session.")
+    }
+    if (authUid != userId) {
       Log.e(
         "WatchEarnFlow",
         "[Step 3] Session creation rejected: authenticated UID does not match requested userId."
+      )
+      com.example.util.UnityAdsHelper.recordRewardSessionResult(
+        success = false,
+        source = "FirebaseAuth",
+        errorCode = "UID_MISMATCH",
+        errorMessage = "Authenticated UID does not match requested userId"
       )
       throw IllegalStateException("Authenticated user mismatch.")
     }
@@ -1536,14 +1548,20 @@ class TaskFlowRepository(
         "WatchEarnFlow",
         "[Step 3] Session creation blocked: daily limit reached ($currentWatched/25)."
       )
+      com.example.util.UnityAdsHelper.recordRewardSessionResult(
+        success = false,
+        source = "DailyLimitCheck",
+        errorCode = "RESOURCE_EXHAUSTED",
+        errorMessage = "Daily limit reached ($currentWatched/25)"
+      )
       throw IllegalStateException("Daily limit of 25 videos reached (25/25).")
     }
 
-    // 2. Attempt callable Cloud Function 'createRewardSession' first when available
-    var cloudFunctionSessionId: String? = null
-    if (!authUid.isNullOrBlank()) {
+    // 2. Call authenticated backend Cloud Function 'createRewardSession'
+    var callableError: Throwable? = null
+    val cloudFunctionSessionId =
       runCatching {
-        kotlinx.coroutines.withTimeout(5_000L) {
+        kotlinx.coroutines.withTimeout(6_000L) {
           val callable =
             com.google.firebase.functions.FirebaseFunctions.getInstance()
               .getHttpsCallable("createRewardSession")
@@ -1552,92 +1570,90 @@ class TaskFlowRepository(
           val dataMap = response.getData() as? Map<*, *>
           val sid = (dataMap?.get("sessionId") as? String)?.trim().orEmpty()
           if (sid.isNotBlank()) {
-            cloudFunctionSessionId = sid
             Log.i(
               "WatchEarnFlow",
-              "[Step 4] Callable createRewardSession succeeded: sessionId=$sid"
+              "[Step 4] Callable createRewardSession succeeded"
             )
           }
+          sid
         }
       }.onFailure { fnErr ->
+        callableError = fnErr
         Log.w(
           "WatchEarnFlow",
-          "[Step 3] Callable createRewardSession unavailable or failed (${fnErr.javaClass.simpleName}: ${fnErr.message}); falling back to Firestore session creation."
+          "[Step 3] Callable createRewardSession failed (${fnErr.javaClass.simpleName}: ${fnErr.message})"
         )
-      }
+      }.getOrNull()?.takeIf { it.isNotBlank() }
+
+    if (cloudFunctionSessionId != null) {
+      com.example.util.UnityAdsHelper.recordRewardSessionResult(
+        success = true,
+        source = "CloudFunction:createRewardSession(WATCH_AND_EARN)"
+      )
+      return@runCatching cloudFunctionSessionId
     }
 
+    // 3. Persist server-validated session record in /reward_sessions/{sessionId} (enforced by Firestore Security Rules)
     val randomBytes = ByteArray(16)
     java.security.SecureRandom().nextBytes(randomBytes)
-    val generatedSessionId = randomBytes.joinToString("") { "%02x".format(it) }
-    val sessionId = cloudFunctionSessionId ?: generatedSessionId
+    val sessionId = randomBytes.joinToString("") { "%02x".format(it) }
 
     val nowMillis = System.currentTimeMillis()
     val expiresAtMillis = nowMillis + 10 * 60 * 1000L
     val expiresAt = com.google.firebase.Timestamp(java.util.Date(expiresAtMillis))
 
-    // 3. Persist session record in /reward_sessions/{sessionId}
     val sessionRef = rewardSessionsCollection.document(sessionId)
-    val persistedInFirestore =
-      runCatching {
-        sessionRef
-          .set(
-            mapOf(
-              "sessionId" to sessionId,
-              "userId" to userId,
-              "rewardType" to "WATCH_AND_EARN",
-              "rewardCents" to 100L,
-              "status" to "PENDING",
-              "used" to false,
-              "claimed" to false,
-              "createdAt" to FieldValue.serverTimestamp(),
-              "expiresAt" to expiresAt
-            )
+    try {
+      sessionRef
+        .set(
+          mapOf(
+            "sessionId" to sessionId,
+            "userId" to userId,
+            "rewardType" to "WATCH_AND_EARN",
+            "rewardCents" to 100L,
+            "status" to "PENDING",
+            "used" to false,
+            "claimed" to false,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "expiresAt" to expiresAt
           )
-          .await()
-        Log.i(
-          "WatchEarnFlow",
-          "[Step 4] Reward session persisted in Firestore /reward_sessions: sessionId=$sessionId"
         )
-        true
-      }.getOrElse { fsErr ->
-        Log.w(
-          "WatchEarnFlow",
-          "[Step 4] Firestore /reward_sessions write notice (${fsErr.javaClass.simpleName}: ${fsErr.message})."
-        )
-        // If unauthenticated in security rule test, rethrow so rule test verifies denial
-        if (authProvider().currentUser == null) {
-          throw fsErr
-        }
-        false
-      }
-
-    localRewardSessions[sessionId] =
-      LocalSessionRecord(
-        sessionId = sessionId,
-        userId = userId,
-        rewardType = "WATCH_AND_EARN",
-        rewardCents = 100L,
-        createdAtMillis = nowMillis,
-        expiresAtMillis = expiresAtMillis,
-        persistedInFirestore = persistedInFirestore,
-        createdViaCloudFunction = cloudFunctionSessionId != null,
-        status = "PENDING",
-        used = false,
-        claimed = false
+        .await()
+      Log.i(
+        "WatchEarnFlow",
+        "[Step 4] Reward session persisted in Firestore /reward_sessions (expiresAtMillis=$expiresAtMillis)"
       )
-
-    Log.i(
-      "WatchEarnFlow",
-      "[Step 4] Reward session ready (sessionId=$sessionId, persistedInFirestore=$persistedInFirestore, expiresAtMillis=$expiresAtMillis)"
-    )
-    sessionId
+      com.example.util.UnityAdsHelper.recordRewardSessionResult(
+        success = true,
+        source = "Firestore:/reward_sessions(WATCH_AND_EARN)"
+      )
+      sessionId
+    } catch (fsErr: Throwable) {
+      val fnCode =
+        (callableError as? com.google.firebase.functions.FirebaseFunctionsException)?.code?.name
+          ?: callableError?.javaClass?.simpleName
+          ?: "NONE"
+      val fnMsg = callableError?.message ?: "Not called"
+      val fsCode =
+        (fsErr as? FirebaseFirestoreException)?.code?.name ?: fsErr.javaClass.simpleName
+      Log.e(
+        "WatchEarnFlow",
+        "[Step 4] Both callable createRewardSession ($fnCode: $fnMsg) and Firestore /reward_sessions ($fsCode: ${fsErr.message}) failed."
+      )
+      com.example.util.UnityAdsHelper.recordRewardSessionResult(
+        success = false,
+        source = "createRewardSession",
+        errorCode = "CF:$fnCode / FS:$fsCode",
+        errorMessage = "CF=[$fnMsg], FS=[${fsErr.message}]"
+      )
+      throw fsErr
+    }
   }
 
   /**
-   * Step 2 of Watch & Earn: Marks a pending reward session as VERIFIED only after
-   * the full rewarded video completes playback (COMPLETED state).
-   * Does NOT credit wallet balance yet; unlocks the Claim button for this session.
+   * Step 2 of Watch & Earn: Marks a pending reward session in Firestore `/reward_sessions/{sessionId}`
+   * as VERIFIED only after the full rewarded video completes playback (`COMPLETED` state).
+   * Strictly validates ownership, single-use status, and expiration inside an atomic Firestore transaction.
    */
   suspend fun verifyWatchEarnSessionCompleted(
     userId: String,
@@ -1646,74 +1662,40 @@ class TaskFlowRepository(
     require(userId.isNotBlank()) { "User authentication is required." }
     require(sessionId.isNotBlank()) { "Valid reward session ID is required." }
 
-    val localRecord = localRewardSessions[sessionId]
     val sessionRef = rewardSessionsCollection.document(sessionId)
-
-    if (localRecord == null || localRecord.persistedInFirestore) {
-      val updatedInFirestore =
-        runCatching {
-          firestore
-            .runTransaction { transaction ->
-              val snap = transaction.get(sessionRef)
-              if (!snap.exists()) {
-                throw IllegalStateException("Reward session does not exist.")
-              }
-              val ownerId = snap.getString("userId") ?: ""
-              if (ownerId != userId) {
-                throw IllegalStateException("Reward session does not belong to current user.")
-              }
-              val used = snap.getBoolean("used") ?: false
-              val claimed = snap.getBoolean("claimed") ?: false
-              if (used || claimed) {
-                throw IllegalStateException("This reward session has already been used.")
-              }
-              val expiresAt = snap.getTimestamp("expiresAt")
-              if (expiresAt == null || expiresAt.toDate().time <= System.currentTimeMillis()) {
-                throw IllegalStateException("Reward session has expired. Please watch a new video.")
-              }
-              val currentStatus = snap.getString("status") ?: "PENDING"
-              if (currentStatus == "PENDING") {
-                transaction.update(
-                  sessionRef,
-                  mapOf(
-                    "status" to "VERIFIED",
-                    "used" to false,
-                    "claimed" to false
-                  )
-                )
-              }
-            }
-            .await()
-          true
-        }.getOrElse { err ->
-          if (localRecord == null || localRecord.persistedInFirestore) {
-            Log.e(
-              "WatchEarnFlow",
-              "Failed to verify session in Firestore ($sessionId): ${err.message}",
-              err
-            )
-            throw err
-          }
-          false
+    firestore
+      .runTransaction { transaction ->
+        val snap = transaction.get(sessionRef)
+        if (!snap.exists()) {
+          throw IllegalStateException("Reward session does not exist.")
         }
-      if (updatedInFirestore) {
-        Log.i("WatchEarnFlow", "Reward session verified in Firestore: sessionId=$sessionId")
+        val ownerId = snap.getString("userId") ?: ""
+        if (ownerId != userId) {
+          throw IllegalStateException("Reward session does not belong to current user.")
+        }
+        val used = snap.getBoolean("used") ?: false
+        val claimed = snap.getBoolean("claimed") ?: false
+        if (used || claimed) {
+          throw IllegalStateException("This reward session has already been used.")
+        }
+        val expiresAt = snap.getTimestamp("expiresAt")
+        if (expiresAt == null || expiresAt.toDate().time <= System.currentTimeMillis()) {
+          throw IllegalStateException("Reward session has expired. Please watch a new video.")
+        }
+        val currentStatus = snap.getString("status") ?: "PENDING"
+        if (currentStatus == "PENDING") {
+          transaction.update(
+            sessionRef,
+            mapOf(
+              "status" to "VERIFIED",
+              "used" to false,
+              "claimed" to false
+            )
+          )
+        }
       }
-    }
-
-    if (localRecord != null) {
-      if (localRecord.userId != userId) {
-        throw IllegalStateException("Reward session does not belong to current user.")
-      }
-      if (localRecord.used || localRecord.claimed || localRecord.status == "CLAIMED") {
-        throw IllegalStateException("This reward session has already been used.")
-      }
-      if (localRecord.expiresAtMillis <= System.currentTimeMillis()) {
-        throw IllegalStateException("Reward session has expired. Please watch a new video.")
-      }
-      localRecord.status = "VERIFIED"
-      Log.i("WatchEarnFlow", "Reward session marked VERIFIED for claim: sessionId=$sessionId")
-    }
+      .await()
+    Log.i("WatchEarnFlow", "Reward session verified in Firestore: sessionId=$sessionId")
   }
 
   /**
@@ -1731,22 +1713,6 @@ class TaskFlowRepository(
     require(sessionId.isNotBlank()) { "sessionId must not be blank" }
     require(dateKey.isNotBlank()) { "Invalid dateKey" }
 
-    val localRecord = localRewardSessions[sessionId]
-    if (localRecord != null) {
-      if (localRecord.userId != userId) {
-        throw IllegalStateException("Reward session belongs to another user.")
-      }
-      if (localRecord.used || localRecord.claimed || localRecord.status == "CLAIMED") {
-        throw IllegalStateException("Reward has already been claimed for this video.")
-      }
-      if (localRecord.status != "VERIFIED") {
-        throw IllegalStateException("Video completion has not been verified yet.")
-      }
-      if (localRecord.expiresAtMillis <= System.currentTimeMillis()) {
-        throw IllegalStateException("Reward session has expired.")
-      }
-    }
-
     val sessionRef = rewardSessionsCollection.document(sessionId)
     val userRef = usersCollection.document(userId)
     val statId = "${userId}_$dateKey"
@@ -1755,47 +1721,44 @@ class TaskFlowRepository(
     val transactionRef = transactionsCollection.document()
 
     val rewardCents = 100L // ₹1.00 per verified video
-    val useFirestoreSessionDoc = localRecord == null || localRecord.persistedInFirestore
 
     firestore
       .runTransaction { transaction ->
-        if (useFirestoreSessionDoc) {
-          val sessionSnap = transaction.get(sessionRef)
-          if (!sessionSnap.exists()) {
-            throw IllegalStateException("Invalid reward session.")
-          }
-          val sessionOwner = sessionSnap.getString("userId") ?: ""
-          if (sessionOwner != userId) {
-            throw IllegalStateException("Reward session belongs to another user.")
-          }
-          val used = sessionSnap.getBoolean("used") ?: false
-          val claimed = sessionSnap.getBoolean("claimed") ?: false
-          val status = sessionSnap.getString("status") ?: ""
-          if (used || claimed || status == "CLAIMED") {
-            throw IllegalStateException("Reward has already been claimed for this video.")
-          }
-          if (status != "VERIFIED") {
-            throw IllegalStateException("Video completion has not been verified yet.")
-          }
-          val expiresAt = sessionSnap.getTimestamp("expiresAt")
-          if (expiresAt == null || expiresAt.toDate().time <= System.currentTimeMillis()) {
-            throw IllegalStateException("Reward session has expired.")
-          }
+        val sessionSnap = transaction.get(sessionRef)
+        if (!sessionSnap.exists()) {
+          throw IllegalStateException("Invalid reward session.")
+        }
+        val sessionOwner = sessionSnap.getString("userId") ?: ""
+        if (sessionOwner != userId) {
+          throw IllegalStateException("Reward session belongs to another user.")
+        }
+        val used = sessionSnap.getBoolean("used") ?: false
+        val claimed = sessionSnap.getBoolean("claimed") ?: false
+        val status = sessionSnap.getString("status") ?: ""
+        val s2sVerified = sessionSnap.getBoolean("s2sVerified") ?: false
+        if (used || claimed || status == "CLAIMED") {
+          throw IllegalStateException("Reward has already been claimed for this video.")
+        }
+        if (status != "VERIFIED" && !s2sVerified) {
+          throw IllegalStateException("Video completion has not been verified yet.")
+        }
+        val expiresAt = sessionSnap.getTimestamp("expiresAt")
+        if (expiresAt == null || expiresAt.toDate().time <= System.currentTimeMillis()) {
+          throw IllegalStateException("Reward session has expired.")
         }
 
         val subStatSnap = transaction.get(userWatchStatRef)
-        val topStatSnap =
-          if (useFirestoreSessionDoc) transaction.get(watchStatRef) else null
+        val topStatSnap = transaction.get(watchStatRef)
 
         val currentVideos =
           maxOf(
             subStatSnap.getLong("videosWatched") ?: 0L,
-            topStatSnap?.getLong("videosWatched") ?: 0L
+            topStatSnap.getLong("videosWatched") ?: 0L
           )
         val currentEarned =
           maxOf(
             subStatSnap.getLong("totalEarnedCents") ?: 0L,
-            topStatSnap?.getLong("totalEarnedCents") ?: 0L
+            topStatSnap.getLong("totalEarnedCents") ?: 0L
           )
 
         if (currentVideos >= 25L) {
@@ -1809,18 +1772,16 @@ class TaskFlowRepository(
         val newEarned = currentEarned + rewardCents
 
         // 1. Mark session as CLAIMED & used=true (single-use enforcement)
-        if (useFirestoreSessionDoc) {
-          transaction.update(
-            sessionRef,
-            mapOf(
-              "status" to "CLAIMED",
-              "used" to true,
-              "claimed" to true
-            )
+        transaction.update(
+          sessionRef,
+          mapOf(
+            "status" to "CLAIMED",
+            "used" to true,
+            "claimed" to true
           )
-        }
+        )
 
-        // 2A. Update /users/{userId}/watch_stats/{dateKey} (always permitted by user subcollection rules)
+        // 2A. Update /users/{userId}/watch_stats/{dateKey}
         if (subStatSnap.exists()) {
           transaction.update(
             userWatchStatRef,
@@ -1845,31 +1806,29 @@ class TaskFlowRepository(
           )
         }
 
-        // 2B. Also update top-level /watch_stats/{statId} when session doc is persisted
-        if (useFirestoreSessionDoc && topStatSnap != null) {
-          if (topStatSnap.exists()) {
-            transaction.update(
-              watchStatRef,
-              mapOf(
-                "userId" to userId,
-                "dateKey" to dateKey,
-                "videosWatched" to newVideos,
-                "totalEarnedCents" to newEarned,
-                "updatedAt" to FieldValue.serverTimestamp()
-              )
+        // 2B. Update top-level /watch_stats/{statId}
+        if (topStatSnap.exists()) {
+          transaction.update(
+            watchStatRef,
+            mapOf(
+              "userId" to userId,
+              "dateKey" to dateKey,
+              "videosWatched" to newVideos,
+              "totalEarnedCents" to newEarned,
+              "updatedAt" to FieldValue.serverTimestamp()
             )
-          } else {
-            transaction.set(
-              watchStatRef,
-              mapOf(
-                "userId" to userId,
-                "dateKey" to dateKey,
-                "videosWatched" to 1L,
-                "totalEarnedCents" to 100L,
-                "updatedAt" to FieldValue.serverTimestamp()
-              )
+          )
+        } else {
+          transaction.set(
+            watchStatRef,
+            mapOf(
+              "userId" to userId,
+              "dateKey" to dateKey,
+              "videosWatched" to 1L,
+              "totalEarnedCents" to 100L,
+              "updatedAt" to FieldValue.serverTimestamp()
             )
-          }
+          )
         }
 
         // 3. Credit user wallet balance
@@ -1898,15 +1857,9 @@ class TaskFlowRepository(
       }
       .await()
 
-    if (localRecord != null) {
-      localRecord.status = "CLAIMED"
-      localRecord.used = true
-      localRecord.claimed = true
-    }
-
     Log.i(
       "WatchEarnFlow",
-      "Claimed verified Watch & Earn reward (+100 paise) for sessionId=$sessionId"
+      "Claimed verified Watch & Earn reward (+100 paise)"
     )
     rewardCents
   }

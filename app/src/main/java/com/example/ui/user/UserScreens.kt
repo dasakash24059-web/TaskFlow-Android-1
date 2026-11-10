@@ -707,6 +707,11 @@ private fun WatchAdInfoDialog(
   val isClaiming = watchEarnUiState.isClaiming
   val isClaimed = watchEarnUiState.isClaimed
   val hasError = watchEarnUiState.hasError
+  val diagSnapshot by com.example.util.UnityAdsHelper.diagnosticState.collectAsState()
+  var showDiagnostics by remember { mutableStateOf(false) }
+  val context = LocalContext.current
+  val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+  var copiedFeedback by remember { mutableStateOf(false) }
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -971,6 +976,128 @@ private fun WatchAdInfoDialog(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
+        }
+
+        // Diagnostic Mode (Live Device Runtime Logs)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          TextButton(
+            onClick = { showDiagnostics = !showDiagnostics },
+            modifier = Modifier.fillMaxWidth().testTag("toggle_unity_diagnostics_button")
+          ) {
+            Text(
+              text =
+                if (showDiagnostics || hasError) "Hide Unity Ads Diagnostic Mode"
+                else "Show Unity Ads Diagnostic Mode",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = Color(0xFF4C1D95)
+            )
+          }
+
+          if (showDiagnostics || hasError) {
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = Color(0xFFF1F5F9),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFCBD5E1)),
+              modifier = Modifier.fillMaxWidth().testTag("unity_diagnostics_panel")
+            ) {
+              Column(
+                modifier = Modifier.padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+              ) {
+                Text(
+                  text = "Unity Ads Runtime Diagnostics",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Bold,
+                  color = Color(0xFF0F172A)
+                )
+                Text(
+                  text = "1. SDK Version: ${diagSnapshot.sdkVersion}",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFF334155)
+                )
+                Text(
+                  text =
+                    "2. isInitialized(): ${diagSnapshot.isInitialized} (${diagSnapshot.sdkInitializationState})",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFF334155)
+                )
+                Text(
+                  text = "3. Init Callback: ${diagSnapshot.initCallbackResult}",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFF334155)
+                )
+                Text(
+                  text = "4. Reward Session: ${diagSnapshot.rewardSessionResult}",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFF334155)
+                )
+                Text(
+                  text =
+                    "5. Placement ID: ${diagSnapshot.placementId} (Game ID: ${diagSnapshot.gameId}, testMode: ${diagSnapshot.testMode})",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFF334155)
+                )
+                Text(
+                  text = "6. Ad Load Callback: ${diagSnapshot.adLoadCallbackResult}",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.SemiBold,
+                  color = Color(0xFF0F172A)
+                )
+                Text(
+                  text = "7. Ad Show Callback: ${diagSnapshot.adShowCallbackResult}",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFF334155)
+                )
+
+                Row(
+                  modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                  OutlinedButton(
+                    onClick = {
+                      val act = context.findActivity()
+                      if (act != null) {
+                        com.example.util.UnityAdsHelper.runDiagnosticLoadProbe(act)
+                      }
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    modifier =
+                      Modifier.weight(1f)
+                        .height(36.dp)
+                        .testTag("run_ad_load_probe_button")
+                  ) {
+                    Text(
+                      text = "Test Ad Load",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.Bold
+                    )
+                  }
+                  OutlinedButton(
+                    onClick = {
+                      clipboardManager.setText(
+                        androidx.compose.ui.text.AnnotatedString(
+                          diagSnapshot.toFormattedReport()
+                        )
+                      )
+                      copiedFeedback = true
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    modifier =
+                      Modifier.weight(1f)
+                        .height(36.dp)
+                        .testTag("copy_diagnostics_button")
+                  ) {
+                    Text(
+                      text = if (copiedFeedback) "Copied!" else "Copy Logs",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.Bold
+                    )
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

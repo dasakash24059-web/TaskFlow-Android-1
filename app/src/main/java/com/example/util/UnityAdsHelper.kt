@@ -31,9 +31,16 @@ import com.unity3d.services.banners.BannerView
 import com.unity3d.services.banners.UnityBannerSize
 import com.unity3d.services.core.properties.ClientProperties
 import com.unity3d.services.core.properties.SdkProperties
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 fun Context.findActivity(): Activity? {
   var current: Context? = this
@@ -44,8 +51,39 @@ fun Context.findActivity(): Activity? {
   return null
 }
 
+/**
+ * Live runtime diagnostic snapshot recorded on the physical Android device.
+ * Never stores secrets, HMAC keys, auth tokens, or personal user PII.
+ */
+data class UnityAdsDiagnosticSnapshot(
+  val sdkVersion: String = "Unknown",
+  val isInitialized: Boolean = false,
+  val sdkInternalState: String = "NOT_INITIALIZED",
+  val initCallbackResult: String = "NOT_CALLED",
+  val rewardSessionResult: String = "NOT_REQUESTED",
+  val placementId: String = UnityAdsHelper.REWARDED_PLACEMENT_ID,
+  val gameId: String = UnityAdsHelper.GAME_ID,
+  val testMode: Boolean = UnityAdsHelper.TEST_MODE,
+  val adLoadCallbackResult: String = "NOT_REQUESTED",
+  val adShowCallbackResult: String = "NOT_REQUESTED",
+  val lastUpdatedTime: String = ""
+) {
+  fun toFormattedReport(): String = buildString {
+    appendLine("=== TaskFlow Unity Ads Runtime Diagnostics ===")
+    appendLine("Timestamp: ${lastUpdatedTime.ifBlank { "N/A" }}")
+    appendLine("1. Unity SDK Version: $sdkVersion")
+    appendLine("2. UnityAds.isInitialized(): $isInitialized (state=$sdkInternalState)")
+    appendLine("3. Initialization Callback: $initCallbackResult")
+    appendLine("4. Reward Session Result: $rewardSessionResult")
+    appendLine("5. Actual Placement ID: $placementId (GameID=$gameId, testMode=$testMode)")
+    appendLine("6. Ad Load Callback: $adLoadCallbackResult")
+    appendLine("7. Ad Show Callback: $adShowCallbackResult")
+  }
+}
+
 object UnityAdsHelper {
   private const val TAG = "UnityAdsHelper"
+  private const val DIAG_TAG = "UnityAdsDiag"
 
   const val GAME_ID = "800430673"
   const val REWARDED_PLACEMENT_ID = "BP_Rewarded_Android"
@@ -60,12 +98,60 @@ object UnityAdsHelper {
 
   @Volatile private var isInitialized = false
   @Volatile private var isInitializing = false
-  @Volatile private var lastLoadedObjectId: String? = null
+  @Volatile private var lastLoadedAdObjectId: String? = null
   private val isAdOperationInProgress = AtomicBoolean(false)
 
   private val pendingInitCallbacks = CopyOnWriteArrayList<Pair<() -> Unit, (String) -> Unit>>()
 
+  private val _diagnosticState = MutableStateFlow(UnityAdsDiagnosticSnapshot())
+  val diagnosticState: StateFlow<UnityAdsDiagnosticSnapshot> = _diagnosticState.asStateFlow()
+
+  private fun nowTimestamp(): String =
+    SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+
   private fun isRobolectric(): Boolean = Build.FINGERPRINT == "robolectric"
+
+  private fun readSdkVersionSafe(): String =
+    runCatching { UnityAds.version }.getOrDefault("4.12.0")
+
+  private fun readSdkInternalStateSafe(): String =
+    runCatching { SdkProperties.getCurrentInitializationState()?.name ?: "UNKNOWN" }
+      .getOrDefault("UNKNOWN")
+
+  private fun updateDiagnostics(transform: (UnityAdsDiagnosticSnapshot) -> UnityAdsDiagnosticSnapshot) {
+    _diagnosticState.update { current ->
+      val updated =
+        transform(
+          current.copy(
+            sdkVersion = readSdkVersionSafe(),
+            isInitialized = isSdkInitialized(),
+            sdkInternalState = readSdkInternalStateSafe(),
+            placementId = REWARDED_PLACEMENT_ID,
+            gameId = GAME_ID,
+            testMode = TEST_MODE,
+            lastUpdatedTime = nowTimestamp()
+          )
+        )
+      Log.i(DIAG_TAG, updated.toFormattedReport().replace("\n", " | "))
+      updated
+    }
+  }
+
+  fun recordRewardSessionResult(
+    success: Boolean,
+    source: String,
+    errorCode: String? = null,
+    errorMessage: String? = null
+  ) {
+    val summary =
+      if (success) {
+        "SUCCESS (source=$source)"
+      } else {
+        "FAILED (source=$source, code=${errorCode ?: "ERROR"}, message=${errorMessage ?: "Unknown error"})"
+      }
+    Log.i(DIAG_TAG, "[Step 4] RewardSessionResult: $summary")
+    updateDiagnostics { it.copy(rewardSessionResult = summary) }
+  }
 
   private fun runOnMainThread(block: () -> Unit) {
     if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -105,11 +191,25 @@ object UnityAdsHelper {
     if (isRobolectric()) {
       isInitialized = true
       isInitializing = false
-      Log.d(TAG, "[Step 2] Robolectric environment detected; marking Unity Ads initialized.")
+      updateDiagnostics {
+        it.copy(
+          isInitialized = true,
+          sdkInternalState = "INITIALIZED_SUCCESSFULLY",
+          initCallbackResult = "SUCCESS (Robolectric)"
+        )
+      }
       return
     }
     if (isSdkInitialized()) {
       Log.d(TAG, "[Step 2] Unity Ads SDK is already initialized (gameId=$GAME_ID).")
+      updateDiagnostics {
+        it.copy(
+          isInitialized = true,
+          initCallbackResult =
+            if (it.initCallbackResult == "NOT_CALLED") "SUCCESS (Already Initialized)"
+            else it.initCallbackResult
+        )
+      }
       val callbacks = pendingInitCallbacks.toList()
       pendingInitCallbacks.clear()
       callbacks.forEach { (onReady, _) -> onReady() }
@@ -129,9 +229,9 @@ object UnityAdsHelper {
           runCatching { ClientProperties.setActivity(activity) }
         }
 
-        // In Unity Ads 4.12.0, if a previous initialize() call failed (e.g. offline at app start),
-        // SdkProperties remains in INITIALIZED_FAILED and blocks future initialize() calls with
-        // "Unity Ads SDK failed to initialize due to previous failed reason" unless reset to NOT_INITIALIZED.
+        // In Unity Ads 4.12.0, if an earlier initialize() call failed (e.g., offline at startup),
+        // SdkProperties stays in INITIALIZED_FAILED and rejects subsequent initialize() calls unless
+        // reset to NOT_INITIALIZED.
         runCatching {
           if (
             SdkProperties.getCurrentInitializationState() ==
@@ -146,10 +246,14 @@ object UnityAdsHelper {
         }
 
         val initContext: Context = activity ?: context.applicationContext ?: context
+        val sdkVer = readSdkVersionSafe()
         Log.i(
           TAG,
-          "[Step 2] Starting UnityAds.initialize(gameId=$GAME_ID, testMode=$TEST_MODE, version=${runCatching { UnityAds.version }.getOrDefault("4.12.0")}, hasActivity=${activity != null})"
+          "[Step 2] Calling UnityAds.initialize(gameId=$GAME_ID, testMode=$TEST_MODE, sdkVersion=$sdkVer, hasActivity=${activity != null})"
         )
+        updateDiagnostics {
+          it.copy(initCallbackResult = "INITIALIZING (gameId=$GAME_ID, testMode=$TEST_MODE)")
+        }
 
         UnityAds.initialize(
           initContext,
@@ -159,7 +263,13 @@ object UnityAdsHelper {
             override fun onInitializationComplete() {
               isInitialized = true
               isInitializing = false
-              Log.i(TAG, "[Step 2] Unity Ads initialization COMPLETE for Game ID $GAME_ID")
+              Log.i(TAG, "[Step 2] onInitializationComplete() -> UnityAds.isInitialized=${isSdkInitialized()}")
+              updateDiagnostics {
+                it.copy(
+                  isInitialized = true,
+                  initCallbackResult = "COMPLETE (onInitializationComplete)"
+                )
+              }
               val callbacks = pendingInitCallbacks.toList()
               pendingInitCallbacks.clear()
               callbacks.forEach { (onReady, _) ->
@@ -173,10 +283,18 @@ object UnityAdsHelper {
             ) {
               isInitialized = false
               isInitializing = false
+              val errCode = error?.name ?: "UNKNOWN_INIT_ERROR"
+              val errMsg = message ?: "No message"
               Log.e(
                 TAG,
-                "[Step 2] Unity Ads initialization FAILED: error=$error, message=$message"
+                "[Step 2] onInitializationFailed: error=$errCode, message=$errMsg"
               )
+              updateDiagnostics {
+                it.copy(
+                  isInitialized = false,
+                  initCallbackResult = "FAILED: error=$errCode, message=$errMsg"
+                )
+              }
               val callbacks = pendingInitCallbacks.toList()
               pendingInitCallbacks.clear()
               callbacks.forEach { (_, onFailed) ->
@@ -188,7 +306,13 @@ object UnityAdsHelper {
       } catch (e: Throwable) {
         isInitialized = false
         isInitializing = false
-        Log.e(TAG, "[Step 2] Exception during Unity Ads initialization: ${e.message}", e)
+        Log.e(TAG, "[Step 2] Exception during UnityAds.initialize: ${e.message}", e)
+        updateDiagnostics {
+          it.copy(
+            isInitialized = false,
+            initCallbackResult = "EXCEPTION: ${e.javaClass.simpleName}: ${e.message}"
+          )
+        }
         val callbacks = pendingInitCallbacks.toList()
         pendingInitCallbacks.clear()
         callbacks.forEach { (_, onFailed) ->
@@ -205,12 +329,22 @@ object UnityAdsHelper {
   ) {
     if (isSdkInitialized()) {
       isInitialized = true
-      Log.d(TAG, "[Step 2] Unity Ads SDK verified initialized.")
+      updateDiagnostics {
+        it.copy(
+          isInitialized = true,
+          initCallbackResult =
+            if (it.initCallbackResult == "NOT_CALLED") "COMPLETE (Already Initialized)"
+            else it.initCallbackResult
+        )
+      }
       runOnMainThread { onReady() }
       return
     }
     if (!isNetworkAvailable(context)) {
       Log.e(TAG, "[Step 2] Cannot initialize Unity Ads: device has no active internet connection.")
+      updateDiagnostics {
+        it.copy(initCallbackResult = "FAILED: NO_INTERNET_CONNECTION")
+      }
       runOnMainThread { onFailed(UNAVAILABLE_MESSAGE) }
       return
     }
@@ -220,8 +354,15 @@ object UnityAdsHelper {
   }
 
   /**
-   * Binds the server-generated reward session ID to Unity Ads PlayerMetaData.setServerId(sessionId)
-   * so Unity S2S callbacks pass sid=<sessionId> to the verification endpoint.
+   * Binds the backend-created reward session ID (`sessionId`) to `PlayerMetaData.setServerId(sessionId)`.
+   *
+   * Identifier separation:
+   * - `userId`: Authenticated Firebase UID (`FirebaseAuth.currentUser.uid`), verified on the backend.
+   * - `sessionId`: Unpredictable server-created session ID stored in `/reward_sessions/{sessionId}`.
+   * - `sid`: Unity S2S Server ID parameter set via `PlayerMetaData.setServerId(sessionId)` so Unity's
+   *   S2S callback passes `?sid=<sessionId>&oid=<oid>&hmac=<hmac>` to `unityAdsS2SCallback`.
+   * - `adObjectId`: Separate UUID v4 used only for local SDK `UnityAdsLoadOptions`/`UnityAdsShowOptions`
+   *   pairing in Unity Ads 4.12.0.
    */
   fun bindRewardSessionServerId(context: Context, sessionId: String) {
     if (isRobolectric()) return
@@ -229,43 +370,63 @@ object UnityAdsHelper {
       val playerMetaData = PlayerMetaData(context)
       playerMetaData.setServerId(sessionId)
       playerMetaData.commit()
-      Log.d(TAG, "[Step 4] Bound PlayerMetaData.setServerId for active reward session.")
+      Log.d(TAG, "[Step 4] Committed PlayerMetaData.setServerId(sessionId) for S2S sid mapping.")
     } catch (e: Throwable) {
       Log.e(TAG, "[Step 4] Failed to commit PlayerMetaData serverId: ${e.message}", e)
     }
   }
 
+  /**
+   * Loads `BP_Rewarded_Android` using a dedicated UUID v4 `adObjectId` in `UnityAdsLoadOptions`.
+   * The exact same `adObjectId` is passed to `onLoaded(adObjectId)` and then to `showRewardedAd`.
+   */
   fun loadRewardedAd(
-    objectId: String = UUID.randomUUID().toString(),
+    adObjectId: String = UUID.randomUUID().toString(),
     onLoaded: (String) -> Unit,
     onError: (String) -> Unit
   ) {
     if (isRobolectric()) {
-      lastLoadedObjectId = objectId
-      onLoaded(objectId)
+      lastLoadedAdObjectId = adObjectId
+      updateDiagnostics {
+        it.copy(adLoadCallbackResult = "SUCCESS: onUnityAdsAdLoaded (Robolectric)")
+      }
+      onLoaded(adObjectId)
       return
     }
     runOnMainThread {
       try {
         val loadOptions =
           UnityAdsLoadOptions().apply {
-            setObjectId(objectId)
+            setObjectId(adObjectId)
           }
         Log.i(
           TAG,
-          "[Step 5] Ad loading started: placementId=$REWARDED_PLACEMENT_ID, objectId=$objectId"
+          "[Step 5] Calling UnityAds.load(placementId=$REWARDED_PLACEMENT_ID, adObjectId=$adObjectId)"
         )
+        updateDiagnostics {
+          it.copy(
+            placementId = REWARDED_PLACEMENT_ID,
+            adLoadCallbackResult = "LOADING (placement=$REWARDED_PLACEMENT_ID)..."
+          )
+        }
         UnityAds.load(
           REWARDED_PLACEMENT_ID,
           loadOptions,
           object : IUnityAdsLoadListener {
             override fun onUnityAdsAdLoaded(placementId: String?) {
-              lastLoadedObjectId = objectId
+              lastLoadedAdObjectId = adObjectId
+              val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
               Log.i(
                 TAG,
-                "[Step 6] Ad loaded successfully: placementId=$placementId, objectId=$objectId"
+                "[Step 6] onUnityAdsAdLoaded: placementId=$actualPlacement, adObjectId=$adObjectId"
               )
-              runOnMainThread { onLoaded(objectId) }
+              updateDiagnostics {
+                it.copy(
+                  placementId = actualPlacement,
+                  adLoadCallbackResult = "SUCCESS: onUnityAdsAdLoaded(placement=$actualPlacement)"
+                )
+              }
+              runOnMainThread { onLoaded(adObjectId) }
             }
 
             override fun onUnityAdsFailedToLoad(
@@ -273,10 +434,19 @@ object UnityAdsHelper {
               error: UnityAds.UnityAdsLoadError?,
               message: String?
             ) {
+              val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
+              val errCode = error?.name ?: "UNKNOWN_LOAD_ERROR"
+              val errMsg = message ?: "No message"
               Log.e(
                 TAG,
-                "[Step 6] Ad loading FAILED: placementId=$placementId, objectId=$objectId, error=$error, message=$message"
+                "[Step 6] onUnityAdsFailedToLoad: placementId=$actualPlacement, adObjectId=$adObjectId, error=$errCode, message=$errMsg"
               )
+              updateDiagnostics {
+                it.copy(
+                  placementId = actualPlacement,
+                  adLoadCallbackResult = "FAILED: error=$errCode, message=$errMsg"
+                )
+              }
               runOnMainThread { onError(UNAVAILABLE_MESSAGE) }
             }
           }
@@ -284,23 +454,34 @@ object UnityAdsHelper {
       } catch (e: Throwable) {
         Log.e(
           TAG,
-          "[Step 5] Exception while starting UnityAds.load($REWARDED_PLACEMENT_ID): ${e.message}",
+          "[Step 5] Exception calling UnityAds.load($REWARDED_PLACEMENT_ID): ${e.message}",
           e
         )
+        updateDiagnostics {
+          it.copy(
+            adLoadCallbackResult = "EXCEPTION: ${e.javaClass.simpleName}: ${e.message}"
+          )
+        }
         runOnMainThread { onError(UNAVAILABLE_MESSAGE) }
       }
     }
   }
 
+  /**
+   * Shows `BP_Rewarded_Android` using the exact `adObjectId` that was loaded in `loadRewardedAd`.
+   */
   fun showRewardedAd(
     activity: Activity,
-    objectId: String? = lastLoadedObjectId,
+    adObjectId: String? = lastLoadedAdObjectId,
     onStart: () -> Unit = {},
     onComplete: () -> Unit,
     onSkipped: () -> Unit = {},
     onFailed: (String) -> Unit
   ) {
     if (isRobolectric()) {
+      updateDiagnostics {
+        it.copy(adShowCallbackResult = "COMPLETED (Robolectric)")
+      }
       onStart()
       onComplete()
       return
@@ -312,6 +493,9 @@ object UnityAdsHelper {
             TAG,
             "[Step 7] Ad readiness check FAILED: Activity is finishing or destroyed before UnityAds.show"
           )
+          updateDiagnostics {
+            it.copy(adShowCallbackResult = "FAILED: ACTIVITY_FINISHING_OR_DESTROYED")
+          }
           onFailed(UNAVAILABLE_MESSAGE)
           return@runOnMainThread
         }
@@ -320,47 +504,76 @@ object UnityAdsHelper {
             TAG,
             "[Step 7] Ad readiness check FAILED: UnityAds SDK is not initialized before UnityAds.show"
           )
+          updateDiagnostics {
+            it.copy(adShowCallbackResult = "FAILED: SDK_NOT_INITIALIZED")
+          }
+          onFailed(UNAVAILABLE_MESSAGE)
+          return@runOnMainThread
+        }
+
+        val resolvedAdObjectId = adObjectId?.takeIf { it.isNotBlank() }
+        if (resolvedAdObjectId == null) {
+          Log.e(
+            TAG,
+            "[Step 7] Ad readiness check FAILED: No loaded adObjectId available for UnityAds.show"
+          )
+          updateDiagnostics {
+            it.copy(adShowCallbackResult = "FAILED: MISSING_LOADED_AD_OBJECT_ID")
+          }
           onFailed(UNAVAILABLE_MESSAGE)
           return@runOnMainThread
         }
 
         runCatching { ClientProperties.setActivity(activity) }
 
-        val resolvedObjectId = objectId?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
         val showOptions =
           UnityAdsShowOptions().apply {
-            setObjectId(resolvedObjectId)
+            setObjectId(resolvedAdObjectId)
           }
 
         Log.i(
           TAG,
-          "[Step 8] Ad show started: placementId=$REWARDED_PLACEMENT_ID, objectId=$resolvedObjectId"
+          "[Step 8] Calling UnityAds.show(placementId=$REWARDED_PLACEMENT_ID, adObjectId=$resolvedAdObjectId)"
         )
+        updateDiagnostics {
+          it.copy(adShowCallbackResult = "STARTING_SHOW (placement=$REWARDED_PLACEMENT_ID)...")
+        }
         UnityAds.show(
           activity,
           REWARDED_PLACEMENT_ID,
           showOptions,
           object : IUnityAdsShowListener {
             override fun onUnityAdsShowStart(placementId: String?) {
+              val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
               Log.i(
                 TAG,
-                "[Step 9] Ad playback started (onUnityAdsShowStart): placementId=$placementId, objectId=$resolvedObjectId"
+                "[Step 9] onUnityAdsShowStart: placementId=$actualPlacement, adObjectId=$resolvedAdObjectId"
               )
+              updateDiagnostics {
+                it.copy(adShowCallbackResult = "SHOWING (onUnityAdsShowStart: $actualPlacement)")
+              }
               runOnMainThread { onStart() }
             }
 
             override fun onUnityAdsShowClick(placementId: String?) {
-              Log.d(TAG, "[Step 9] Ad clicked: placementId=$placementId")
+              Log.d(TAG, "[Step 9] onUnityAdsShowClick: placementId=$placementId")
             }
 
             override fun onUnityAdsShowComplete(
               placementId: String?,
               state: UnityAds.UnityAdsShowCompletionState?
             ) {
+              val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
+              val stateName = state?.name ?: "UNKNOWN_STATE"
               Log.i(
                 TAG,
-                "[Step 9] Ad show completed: placementId=$placementId, state=$state, objectId=$resolvedObjectId"
+                "[Step 9] onUnityAdsShowComplete: placementId=$actualPlacement, state=$stateName, adObjectId=$resolvedAdObjectId"
               )
+              updateDiagnostics {
+                it.copy(
+                  adShowCallbackResult = "COMPLETE: state=$stateName (placement=$actualPlacement)"
+                )
+              }
               runOnMainThread {
                 if (state == UnityAds.UnityAdsShowCompletionState.COMPLETED) {
                   onComplete()
@@ -375,10 +588,18 @@ object UnityAdsHelper {
               error: UnityAds.UnityAdsShowError?,
               message: String?
             ) {
+              val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
+              val errCode = error?.name ?: "UNKNOWN_SHOW_ERROR"
+              val errMsg = message ?: "No message"
               Log.e(
                 TAG,
-                "[Step 9] Ad show FAILED: placementId=$placementId, objectId=$resolvedObjectId, error=$error, message=$message"
+                "[Step 9] onUnityAdsShowFailure: placementId=$actualPlacement, adObjectId=$resolvedAdObjectId, error=$errCode, message=$errMsg"
               )
+              updateDiagnostics {
+                it.copy(
+                  adShowCallbackResult = "FAILED: error=$errCode, message=$errMsg"
+                )
+              }
               runOnMainThread { onFailed(UNAVAILABLE_MESSAGE) }
             }
           }
@@ -386,12 +607,37 @@ object UnityAdsHelper {
       } catch (e: Throwable) {
         Log.e(
           TAG,
-          "[Step 8] Exception showing rewarded ad ($REWARDED_PLACEMENT_ID): ${e.message}",
+          "[Step 8] Exception calling UnityAds.show($REWARDED_PLACEMENT_ID): ${e.message}",
           e
         )
+        updateDiagnostics {
+          it.copy(adShowCallbackResult = "EXCEPTION: ${e.javaClass.simpleName}: ${e.message}")
+        }
         runOnMainThread { onFailed(UNAVAILABLE_MESSAGE) }
       }
     }
+  }
+
+  /**
+   * Diagnostic-only ad load probe:
+   * Allows testing `ensureInitialized` -> `UnityAds.load("BP_Rewarded_Android")` on a physical device
+   * to record the exact `IUnityAdsLoadListener` callback result in `diagnosticState` even when
+   * backend session creation fails or when the user taps "Test Ad Load (Diagnostic)".
+   * NEVER shows an ad for reward and NEVER unlocks the Claim button.
+   */
+  fun runDiagnosticLoadProbe(activity: Activity, onDone: () -> Unit = {}) {
+    ensureInitialized(
+      context = activity,
+      onReady = {
+        val probeAdObjectId = UUID.randomUUID().toString()
+        loadRewardedAd(
+          adObjectId = probeAdObjectId,
+          onLoaded = { onDone() },
+          onError = { onDone() }
+        )
+      },
+      onFailed = { onDone() }
+    )
   }
 
   /**
@@ -399,9 +645,9 @@ object UnityAdsHelper {
    * - Guards against duplicate concurrent requests
    * - Enforces a timeout so loading state can never get stuck permanently
    * - Ensures Unity Ads SDK initialization completes first
-   * - Binds sessionId via PlayerMetaData.setServerId(sessionId)
-   * - Loads BP_Rewarded_Android with a valid UUID objectId in UnityAdsLoadOptions
-   * - Shows BP_Rewarded_Android with the matching UUID objectId in UnityAdsShowOptions only after load succeeds
+   * - Binds sessionId via PlayerMetaData.setServerId(sessionId) for S2S sid callback
+   * - Loads BP_Rewarded_Android with a valid UUID v4 adObjectId in UnityAdsLoadOptions
+   * - Shows BP_Rewarded_Android with the matching UUID v4 adObjectId in UnityAdsShowOptions only after load succeeds
    */
   fun loadAndShowRewardedAdForSession(
     activity: Activity,
@@ -423,6 +669,9 @@ object UnityAdsHelper {
           TAG,
           "[Step 6] Ad operation timed out after ${AD_OPERATION_TIMEOUT_MS}ms for placement $REWARDED_PLACEMENT_ID"
         )
+        updateDiagnostics {
+          it.copy(adLoadCallbackResult = "TIMEOUT after ${AD_OPERATION_TIMEOUT_MS}ms")
+        }
         onFailed(UNAVAILABLE_MESSAGE)
       }
     }
@@ -446,6 +695,9 @@ object UnityAdsHelper {
 
     if (!isNetworkAvailable(activity)) {
       Log.e(TAG, "[Step 2] Device is offline; cannot load Unity rewarded video.")
+      updateDiagnostics {
+        it.copy(adLoadCallbackResult = "FAILED: DEVICE_OFFLINE")
+      }
       finishWithFailure(UNAVAILABLE_MESSAGE)
       return
     }
@@ -456,17 +708,16 @@ object UnityAdsHelper {
         bindRewardSessionServerId(activity, sessionId)
         val adObjectId = UUID.randomUUID().toString()
         loadRewardedAd(
-          objectId = adObjectId,
-          onLoaded = { loadedObjectId ->
+          adObjectId = adObjectId,
+          onLoaded = { loadedAdObjectId ->
             Log.d(
               TAG,
-              "[Step 7] Ad readiness verified (sdkInitialized=${isSdkInitialized()}, activityValid=${!activity.isFinishing && !activity.isDestroyed}, objectId=$loadedObjectId)"
+              "[Step 7] Ad readiness verified (sdkInitialized=${isSdkInitialized()}, activityValid=${!activity.isFinishing && !activity.isDestroyed}, adObjectId=$loadedAdObjectId)"
             )
             showRewardedAd(
               activity = activity,
-              objectId = loadedObjectId,
+              adObjectId = loadedAdObjectId,
               onStart = {
-                // Once playback starts, remove the load timeout so user can watch full video
                 mainHandler.removeCallbacks(timeoutRunnable)
                 onAdShowing()
               },

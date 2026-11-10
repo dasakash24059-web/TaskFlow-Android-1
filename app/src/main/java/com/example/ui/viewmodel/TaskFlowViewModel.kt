@@ -755,6 +755,7 @@ class TaskFlowViewModel(
           )
         val sessionId =
           sessionResult.getOrElse { err ->
+            com.example.util.UnityAdsHelper.runDiagnosticLoadProbe(activity)
             _isBusy.value = false
             _bannerMessage.value =
               err.localizedMessage ?: com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
@@ -887,6 +888,7 @@ class TaskFlowViewModel(
             "[Step 4] Reward session creation failed: ${err.message}",
             err
           )
+          com.example.util.UnityAdsHelper.runDiagnosticLoadProbe(activity)
           val msg = err.localizedMessage ?: ""
           val userMessage =
             if (msg.contains("Daily limit", ignoreCase = true) || msg.contains("sign in", ignoreCase = true)) {
