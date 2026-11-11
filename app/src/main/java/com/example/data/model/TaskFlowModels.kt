@@ -172,6 +172,13 @@ data class WatchEarnUiState(
     get() = status == WatchEarnFlowStatus.ERROR
 }
 
+data class SpinEarnUiState(
+  val spinsUsed: Int = 0,
+  val lastSpinResult: Long = 0,
+  val isSpinning: Boolean = false,
+  val activeSessionId: String = ""
+)
+
 object DailyCheckInConstants {
   // 7-Day Reward Structure: Day 1-6: ₹1 (100 paise), Day 7: ₹5 (500 paise). Total = ₹11 (1100 paise).
   val REWARDS_CENTS = listOf(100L, 100L, 100L, 100L, 100L, 100L, 500L)
@@ -257,7 +264,8 @@ data class UserProfile(
   val displayName: String = "",
   val role: String = "user",
   val approvalStatus: String = "approved",
-  val balanceCents: Long = 0L,
+  val balanceCents: Long = 0L, // Legacy
+  val balanceCoins: Long = 0L, // New
   val virtualPoints: Long = 0L,
   val completedTasksCount: Long = 0L,
   val assignedTaskId: String = "",
@@ -266,6 +274,25 @@ data class UserProfile(
   @ServerTimestamp val lastCheckInTimestamp: Timestamp? = null,
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+// Helper to convert legacy cents to coins
+fun UserProfile.getEffectiveBalanceCoins(): Long {
+    if (balanceCoins > 0) return balanceCoins
+    return balanceCents / 125 // Migration: 125 Coins = ₹1 (100 paise) -> 1.25 Coins = 1 paise
+}
+
+data class TransactionRecord(
+  @DocumentId val id: String = "",
+  val userId: String = "",
+  val userName: String = "",
+  val type: String = TransactionType.DAILY_CHECKIN,
+  val title: String = "",
+  val amountCents: Long = 0L, // Legacy
+  val amountCoins: Long = 0L, // New
+  val status: String = "CREDITED",
+  val referenceId: String = "",
+  @ServerTimestamp val createdAt: Timestamp? = null
 )
 
 data class TaskItem(
@@ -278,7 +305,8 @@ data class TaskItem(
   val requiredProof: String = "",
   val taskLink: String = "",
   val category: String = "App Install",
-  val rewardCents: Long = 0L,
+  val rewardCents: Long = 0L, // Legacy
+  val rewardCoins: Long = 0L, // New
   val assignedUserId: String = "",
   val assignedUserName: String = "",
   val assignedUserEmail: String = "",
@@ -293,7 +321,6 @@ data class TaskItem(
   @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
   fun isAvailableForNewSubmission(): Boolean =
-    isActive && status == TaskStatus.PENDING
 }
 
 data class SubmissionItem(
@@ -302,7 +329,8 @@ data class SubmissionItem(
   val taskTitle: String = "",
   val appName: String = "",
   val appIconUrl: String = "",
-  val rewardCents: Long = 0L,
+  val rewardCents: Long = 0L, // Legacy
+  val rewardCoins: Long = 0L, // New
   val userId: String = "",
   val userName: String = "",
   val userEmail: String = "",
@@ -331,6 +359,7 @@ data class SubmissionItem(
       taskLink = existingTask?.taskLink ?: "",
       category = existingTask?.category ?: "App Install",
       rewardCents = if (rewardCents > 0L) rewardCents else (existingTask?.rewardCents ?: 0L),
+      rewardCoins = if (rewardCoins > 0L) rewardCoins else (existingTask?.rewardCoins ?: 0L),
       assignedUserId = userId,
       assignedUserName = userName,
       assignedUserEmail = userEmail,
@@ -346,6 +375,7 @@ data class SubmissionItem(
     )
   }
 }
+
 
 /**
  * Merges active/existing tasks from `/tasks` with the user's preserved `/submissions` documents

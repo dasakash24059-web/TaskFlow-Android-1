@@ -1044,6 +1044,39 @@ class TaskFlowViewModel(
     }
   }
 
+  fun createSpinSession(onSuccess: (String, Int) -> Unit) {
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository.createSpinSession()
+        .onSuccess { sessionId ->
+          // In a real implementation, we'd get the spinNumber from the response, but this is a stub
+          onSuccess(sessionId, 0)
+        }
+        .onFailure { _bannerMessage.value = it.localizedMessage ?: "Failed to start spin." }
+      _isBusy.value = false
+    }
+  }
+
+  fun claimSpinReward(sessionId: String, onSuccess: (Long) -> Unit) {
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository.claimSpinReward(sessionId)
+        .onSuccess { reward ->
+           _bannerMessage.value = "Spin reward claimed: +$reward Coins"
+           onSuccess(reward)
+        }
+        .onFailure { _bannerMessage.value = it.localizedMessage ?: "Failed to claim spin reward." }
+      _isBusy.value = false
+    }
+  }
+
+  private val _spinEarnUiState = MutableStateFlow(com.example.data.model.SpinEarnUiState())
+  val spinEarnUiState: StateFlow<com.example.data.model.SpinEarnUiState> = _spinEarnUiState.asStateFlow()
+
+  fun updateSpinState(newState: com.example.data.model.SpinEarnUiState) {
+      _spinEarnUiState.value = newState
+  }
+
   fun updateUserDisplayNameByAdmin(user: UserProfile, newName: String) {
     val uid = user.userId.ifBlank { user.id }
     val cleaned = newName.trim()

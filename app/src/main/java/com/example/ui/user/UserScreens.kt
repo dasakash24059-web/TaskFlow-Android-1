@@ -401,25 +401,39 @@ fun UserHomeScreen(
     }
 
     // 2. Daily Check-in & Watch & Earn Cards Side-by-Side Horizontal Grid (Original Top Position)
+    // 2. Explore Rewards Area (4 Options)
     item {
-      Row(
-        modifier = Modifier.fillMaxWidth().height(138.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-      ) {
-        DailyCheckInCard(
-          dailyCheckInState = dailyCheckInState,
-          onClaimDailyCheckIn = onClaimDailyCheckIn,
-          onOpenCalendar = onNavigateToDailyCheckIn,
-          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_daily_checkin_card")
-        )
-        WatchAndEarnCard(
-          onWatchAdClicked = {
-            onOpenWatchDialog()
-            showWatchAdDialog = true
-          },
-          onShowInterstitialClicked = onShowInterstitial,
-          modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_watch_earn_card")
-        )
+      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+          modifier = Modifier.fillMaxWidth().height(138.dp),
+          horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+          DailyCheckInCard(
+            dailyCheckInState = dailyCheckInState,
+            onClaimDailyCheckIn = onClaimDailyCheckIn,
+            onOpenCalendar = onNavigateToDailyCheckIn,
+            modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_daily_checkin_card")
+          )
+          WatchAndEarnCard(
+            onWatchAdClicked = {
+              onOpenWatchDialog()
+              showWatchAdDialog = true
+            },
+            onShowInterstitialClicked = onShowInterstitial,
+            modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_watch_earn_card")
+          )
+        }
+        Row(
+          modifier = Modifier.fillMaxWidth().height(138.dp),
+          horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+          SpinAndEarnCard(
+            modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_spin_earn_card")
+          )
+          OfferWallCard(
+            modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_offer_wall_card")
+          )
+        }
       }
     }
 
@@ -985,6 +999,90 @@ private fun WatchAdInfoDialog(
       }
     }
   )
+}
+
+@Composable
+private fun SpinAndEarnCard(
+  modifier: Modifier = Modifier
+) {
+  Card(
+    modifier = modifier.clip(RoundedCornerShape(26.dp)).clickable(onClick = { /* TODO */ }),
+    shape = RoundedCornerShape(26.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 14.dp),
+      verticalArrangement = Arrangement.Center,
+      horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+      Surface(
+        shape = CircleShape,
+        color = Color(0xFFFEE2E2),
+        modifier = Modifier.size(58.dp)
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.Refresh, // Placeholder for spin
+            contentDescription = "Spin & Earn",
+            tint = Color(0xFFDC2626),
+            modifier = Modifier.size(30.dp)
+          )
+        }
+      }
+      Spacer(modifier = Modifier.height(10.dp))
+      Text(
+        text = "Spin &\nEarn",
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+        lineHeight = 18.sp,
+        color = MaterialTheme.colorScheme.onSurface
+      )
+    }
+  }
+}
+
+@Composable
+private fun OfferWallCard(
+  modifier: Modifier = Modifier
+) {
+  Card(
+    modifier = modifier.clip(RoundedCornerShape(26.dp)).clickable(onClick = { /* TODO */ }),
+    shape = RoundedCornerShape(26.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 14.dp),
+      verticalArrangement = Arrangement.Center,
+      horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+      Surface(
+        shape = CircleShape,
+        color = Color(0xFFD1FAE5),
+        modifier = Modifier.size(58.dp)
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.Campaign,
+            contentDescription = "Offer Wall",
+            tint = Color(0xFF059669),
+            modifier = Modifier.size(30.dp)
+          )
+        }
+      }
+      Spacer(modifier = Modifier.height(10.dp))
+      Text(
+        text = "Offer\nWall",
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+        lineHeight = 18.sp,
+        color = MaterialTheme.colorScheme.onSurface
+      )
+    }
+  }
 }
 
 @Composable

@@ -45,8 +45,8 @@ const unityS2SSecret = defineSecret("UNITY_S2S_SECRET");
 const unityAdsSecret = defineSecret("UNITY_ADS_SECRET");
 
 const DAILY_VIDEO_LIMIT = 25;
-const DAILY_EARN_LIMIT_CENTS = 4000;
-const WATCH_EARN_REWARD_CENTS = Math.floor(Math.random() * (100 - 50 + 1)) + 50;
+const DAILY_EARN_LIMIT_COINS = 5000;
+const WATCH_EARN_REWARD_COINS = Math.floor(Math.random() * (125 - 63 + 1)) + 63;
 
 /**
  * Resolves the mandatory Unity S2S secret from environment or Secret Manager.
@@ -608,8 +608,8 @@ exports.claimRewardSession = onCall(async (request) => {
       );
     }
 
-    const rewardCents = Number(session.rewardCents || WATCH_EARN_REWARD_CENTS);
-    if (currentEarned + rewardCents > DAILY_EARN_LIMIT_CENTS) {
+    const rewardCoins = Number(session.rewardCoins || WATCH_EARN_REWARD_COINS);
+    if (currentEarned + rewardCoins > DAILY_EARN_LIMIT_COINS) {
       throw new HttpsError(
         "resource-exhausted",
         "Daily earnings limit exceeded."
@@ -617,8 +617,8 @@ exports.claimRewardSession = onCall(async (request) => {
     }
 
     const newVideos = currentVideos + 1;
-    const newEarnedCents = currentEarned + rewardCents;
-    const newBalanceCents = currentBalanceCents + rewardCents;
+    const newEarnedCoins = currentEarned + rewardCoins;
+    const newBalanceCoins = currentBalanceCoins + rewardCoins;
 
     // 1. Mark session as CLAIMED & single-use
     transaction.update(sessionRef, {
@@ -632,8 +632,7 @@ exports.claimRewardSession = onCall(async (request) => {
       userId,
       dateKey: today,
       videosWatched: newVideos,
-      totalEarnedCents: newEarnedCents,
-      totalEarnedPoints: newVideos,
+      totalEarnedCoins: newEarnedCoins,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
 
@@ -643,8 +642,7 @@ exports.claimRewardSession = onCall(async (request) => {
 
     // 3. Credit user wallet balance
     transaction.update(userRef, {
-      balanceCents: admin.firestore.FieldValue.increment(rewardCents),
-      virtualPoints: admin.firestore.FieldValue.increment(1),
+      balanceCoins: admin.firestore.FieldValue.increment(rewardCoins),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
@@ -652,7 +650,7 @@ exports.claimRewardSession = onCall(async (request) => {
     transaction.set(leaderboardRef, {
       userId,
       displayName,
-      balanceCents: newBalanceCents,
+      balanceCoins: newBalanceCoins,
       completedTasksCount,
       approvalStatus: "approved",
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -665,7 +663,7 @@ exports.claimRewardSession = onCall(async (request) => {
       userName: displayName,
       type: "WATCH_EARN",
       title: `Watch & Earn Video Reward (${newVideos}/${DAILY_VIDEO_LIMIT})`,
-      amountCents: rewardCents,
+      amountCoins: rewardCoins,
       status: "CREDITED",
       referenceId: sessionId,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
@@ -674,10 +672,10 @@ exports.claimRewardSession = onCall(async (request) => {
     return {
       success: true,
       rewardType: "WATCH_AND_EARN",
-      rewardCents,
+      rewardCoins,
       videosWatched: newVideos,
-      totalEarnedCents: newEarnedCents,
-      newBalanceCents,
+      totalEarnedCoins: newEarnedCoins,
+      newBalanceCoins,
       dateKey: today
     };
   });
@@ -802,6 +800,69 @@ exports.claimDailyCheckIn = onCall(async (request) => {
       dateKey: today
     };
   });
+});
+
+/**
+ * 5. SPIN & EARN (Callable Function)
+ * Logic for Spin & Earn: 
+ * - 50 spins/day.
+ * - Ad pattern: 1st free, then (2 rewarded ads -> 1 interstitial screen ad) repeating.
+ */
+exports.createSpinSession = onCall(async (request) => {
+  if (!request.auth || !request.auth.uid) {
+    throw new HttpsError("unauthenticated", "User must be logged in.");
+  }
+  const userId = request.auth.uid;
+  const now = new Date();
+  const today = getTodayDateString(now);
+
+  // Spin Tracking
+  const spinStatsRef = db.collection("users").doc(userId).collection("spin_stats").doc(today);
+  
+  return await db.runTransaction(async (transaction) => {
+    const spinSnap = await transaction.get(spinStatsRef);
+    const spinsUsed = spinSnap.exists ? spinSnap.data().spinsUsed || 0 : 0;
+    
+    if (spinsUsed >= 50) {
+      throw new HttpsError("resource-exhausted", "Daily spin limit (50) reached.");
+    }
+    
+    const sessionId = crypto.randomBytes(16).toString("hex");
+    transaction.set(spinStatsRef, {
+        spinsUsed: spinsUsed + 1,
+        lastSpinAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    
+    return { sessionId, spinNumber: spinsUsed + 1 };
+  });
+});
+
+exports.claimSpinReward = onCall(async (request) => {
+  if (!request.auth || !request.auth.uid) {
+    throw new HttpsError("unauthenticated", "User must be logged in.");
+  }
+  const userId = request.auth.uid;
+  const sessionId = request.data.sessionId;
+  
+  // Verify spin session, then credit 63-125 coins
+  const rewardCoins = Math.floor(Math.random() * (125 - 63 + 1)) + 63;
+  
+  await db.runTransaction(async (transaction) => {
+      transaction.update(db.collection("users").doc(userId), {
+          balanceCoins: admin.firestore.FieldValue.increment(rewardCoins)
+      });
+      // Add transaction history
+      const txRef = db.collection("transactions").doc();
+      transaction.set(txRef, {
+        userId,
+        type: "SPIN_EARN",
+        title: "Spin & Earn Reward",
+        amountCoins: rewardCoins,
+        status: "CREDITED",
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+  });
+  return { success: true, rewardCoins };
 });
 
 exports._verifyUnityS2SSignature = verifyUnityS2SSignature;

@@ -97,6 +97,10 @@ interface RewardCloudFunctionsClient {
   suspend fun claimDailyCheckIn(
     streakDay: Int? = null
   ): ClaimedRewardResult
+
+  suspend fun createSpinSession(): String
+
+  suspend fun claimSpinReward(sessionId: String): Long
 }
 
 class FirebaseRewardCloudFunctionsClient(
@@ -132,6 +136,18 @@ class FirebaseRewardCloudFunctionsClient(
         dateKey = dateKey
       )
     }
+
+  override suspend fun createSpinSession(): String = withTimeout(10_000L) {
+    val response = functionsProvider().getHttpsCallable("createSpinSession").call().await()
+    val dataMap = response.getData() as Map<*, *>
+    dataMap["sessionId"] as String
+  }
+
+  override suspend fun claimSpinReward(sessionId: String): Long = withTimeout(10_000L) {
+    val response = functionsProvider().getHttpsCallable("claimSpinReward").call(mapOf("sessionId" to sessionId)).await()
+    val dataMap = response.getData() as Map<*, *>
+    (dataMap["rewardCoins"] as Number).toLong()
+  }
 
   override suspend fun createRewardSession(
     rewardType: String,
@@ -857,7 +873,7 @@ class TaskFlowRepository(
     require(cleanedLink.isEmpty() || isValidTaskUrl(cleanedLink)) {
       "Task link must be a valid HTTPS URL (e.g., https://play.google.com/...)."
     }
-    require(rewardCents in 1..10_000_000) { "Reward must be greater than ₹0.00." }
+    require(rewardCoins in 1..10_000_000) { "Reward must be greater than 0 Coins." }
     require(assignedUserId.isNotBlank()) { "An assigned user must be selected." }
 
     val docRef = tasksCollection.document()
@@ -871,7 +887,8 @@ class TaskFlowRepository(
         "requiredProof" to cleanedRequiredProof,
         "taskLink" to cleanedLink,
         "category" to cleanedCat,
-        "rewardCents" to rewardCents,
+        "rewardCents" to 0L, // Legacy
+        "rewardCoins" to rewardCoins, // New
         "assignedUserId" to assignedUserId,
         "assignedUserName" to assignedUserName.trim().ifEmpty { "Assigned User" },
         "assignedUserEmail" to assignedUserEmail.trim().ifEmpty { "user@taskflow.app" },
@@ -1398,10 +1415,10 @@ class TaskFlowRepository(
     require(cleanedMethod in WithdrawalMethod.ALL) {
       "Please select a valid withdrawal method (Bank Account or UPI ID)."
     }
-    require(amountCents >= MIN_WITHDRAWAL_CENTS) {
-      "Minimum withdrawal amount is ₹200.00."
+    require(amountCoins >= 25_000L) { // 25,000 Coins = ₹200
+      "Minimum withdrawal amount is 25,000 Coins (₹200.00)."
     }
-    require(amountCents <= 10_000_000L) {
+    require(amountCoins <= 12_500_000L) { // 125 * 100,000
       "Maximum single demo withdrawal request is ₹1,00,000.00."
     }
 
@@ -1938,6 +1955,14 @@ class TaskFlowRepository(
       "A server-verified reward session ID is required to claim Watch & Earn rewards."
     }
     claimVerifiedWatchEarnSession(userId, userName, sessionId, dateKey).getOrThrow()
+  }
+
+  suspend fun createSpinSession(): Result<String> = runCatching {
+    rewardFunctionsClient.createSpinSession()
+  }
+
+  suspend fun claimSpinReward(sessionId: String): Result<Long> = runCatching {
+    rewardFunctionsClient.claimSpinReward(sessionId)
   }
 
   fun observeWatchStats(uid: String, dateKey: String): Flow<com.example.data.model.WatchStats> =
