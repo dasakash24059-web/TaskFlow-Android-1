@@ -282,18 +282,6 @@ fun UserProfile.getEffectiveBalanceCoins(): Long {
     return balanceCents / 125 // Migration: 125 Coins = ₹1 (100 paise) -> 1.25 Coins = 1 paise
 }
 
-data class TransactionRecord(
-  @DocumentId val id: String = "",
-  val userId: String = "",
-  val userName: String = "",
-  val type: String = TransactionType.DAILY_CHECKIN,
-  val title: String = "",
-  val amountCents: Long = 0L, // Legacy
-  val amountCoins: Long = 0L, // New
-  val status: String = "CREDITED",
-  val referenceId: String = "",
-  @ServerTimestamp val createdAt: Timestamp? = null
-)
 
 data class TaskItem(
   @DocumentId val id: String = "",
@@ -320,7 +308,7 @@ data class TaskItem(
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
-  fun isAvailableForNewSubmission(): Boolean =
+  fun isAvailableForNewSubmission(): Boolean = status == TaskStatus.PENDING && isActive
 }
 
 data class SubmissionItem(

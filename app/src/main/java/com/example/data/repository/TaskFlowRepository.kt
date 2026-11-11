@@ -873,7 +873,7 @@ class TaskFlowRepository(
     require(cleanedLink.isEmpty() || isValidTaskUrl(cleanedLink)) {
       "Task link must be a valid HTTPS URL (e.g., https://play.google.com/...)."
     }
-    require(rewardCoins in 1..10_000_000) { "Reward must be greater than 0 Coins." }
+    require(rewardCents in 1..10_000_000) { "Reward must be greater than 0 Coins." }
     require(assignedUserId.isNotBlank()) { "An assigned user must be selected." }
 
     val docRef = tasksCollection.document()
@@ -887,8 +887,8 @@ class TaskFlowRepository(
         "requiredProof" to cleanedRequiredProof,
         "taskLink" to cleanedLink,
         "category" to cleanedCat,
-        "rewardCents" to 0L, // Legacy
-        "rewardCoins" to rewardCoins, // New
+        "rewardCents" to rewardCents, // Legacy
+        "rewardCoins" to rewardCents, // New (map to rewardCents)
         "assignedUserId" to assignedUserId,
         "assignedUserName" to assignedUserName.trim().ifEmpty { "Assigned User" },
         "assignedUserEmail" to assignedUserEmail.trim().ifEmpty { "user@taskflow.app" },
@@ -1415,10 +1415,10 @@ class TaskFlowRepository(
     require(cleanedMethod in WithdrawalMethod.ALL) {
       "Please select a valid withdrawal method (Bank Account or UPI ID)."
     }
-    require(amountCoins >= 25_000L) { // 25,000 Coins = ₹200
+    require(amountCents >= 25_000L) { // 25,000 Coins = ₹200
       "Minimum withdrawal amount is 25,000 Coins (₹200.00)."
     }
-    require(amountCoins <= 12_500_000L) { // 125 * 100,000
+    require(amountCents <= 12_500_000L) { // 125 * 100,000
       "Maximum single demo withdrawal request is ₹1,00,000.00."
     }
 
