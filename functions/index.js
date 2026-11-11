@@ -46,7 +46,7 @@ const unityAdsSecret = defineSecret("UNITY_ADS_SECRET");
 
 const DAILY_VIDEO_LIMIT = 25;
 const DAILY_EARN_LIMIT_CENTS = 4000;
-const WATCH_EARN_REWARD_CENTS = 100;
+const WATCH_EARN_REWARD_CENTS = Math.floor(Math.random() * (100 - 50 + 1)) + 50;
 
 /**
  * Resolves the mandatory Unity S2S secret from environment or Secret Manager.

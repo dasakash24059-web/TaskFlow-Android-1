@@ -147,7 +147,7 @@ object UnityAdsHelper {
   private const val DIAG_TAG = "UnityAdsDiag"
 
   // Verified Unity Dashboard Android Project Game ID
-  const val GAME_ID = "6091982"
+  const val GAME_ID = "800430673"
   const val REWARDED_PLACEMENT_ID = "BP_Rewarded_Android"
   const val BANNER_PLACEMENT_ID = "BP_Banner_Android"
   const val INTERSTITIAL_PLACEMENT_ID = "BP_Interstitial_Android"

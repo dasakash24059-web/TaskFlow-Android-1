@@ -669,7 +669,7 @@ private fun WatchAndEarnCard(
           horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
           Text(
-            text = "Up to ₹25",
+            text = "Earn Rewards",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             color = Color(0xFF5B21B6)
@@ -750,7 +750,7 @@ private fun WatchAdInfoDialog(
             color = Color(0xFFEDE9FE)
           ) {
             Text(
-              text = "Up to ₹25",
+              text = "Earn Rewards",
               style = MaterialTheme.typography.labelMedium,
               fontWeight = FontWeight.Bold,
               color = Color(0xFF6D28D9),
