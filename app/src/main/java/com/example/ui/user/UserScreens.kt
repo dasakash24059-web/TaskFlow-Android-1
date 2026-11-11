@@ -540,6 +540,7 @@ private fun DailyCheckInCard(
   Card(
     modifier =
       modifier
+        .testTag("home_daily_checkin_card")
         .clip(RoundedCornerShape(26.dp))
         .clickable {
           onClaimDailyCheckIn()
@@ -570,7 +571,7 @@ private fun DailyCheckInCard(
       }
       Spacer(modifier = Modifier.height(10.dp))
       Text(
-        text = "Check-in\nDaily",
+        text = "Daily Check-in",
         style = MaterialTheme.typography.titleSmall,
         fontWeight = FontWeight.Bold,
         textAlign = TextAlign.Center,
@@ -588,7 +589,7 @@ private fun WatchAndEarnCard(
   modifier: Modifier = Modifier
 ) {
   Card(
-    modifier = modifier.clip(RoundedCornerShape(26.dp)),
+    modifier = modifier.testTag("home_watch_earn_card").clip(RoundedCornerShape(26.dp)),
     shape = RoundedCornerShape(26.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
@@ -620,15 +621,13 @@ private fun WatchAndEarnCard(
         )
       }
 
-      // Interstitial Ad Button
-      Button(
-        onClick = onShowInterstitialClicked,
-        shape = RoundedCornerShape(50),
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4C1D95)),
-        modifier = Modifier.fillMaxWidth().height(32.dp).testTag("interstitial_ad_button")
-      ) {
-        Text("Play Interstitial", style = MaterialTheme.typography.labelSmall)
-      }
+      Text(
+        text = "Up to ₹25",
+        style = MaterialTheme.typography.labelSmall,
+        color = Color(0xFF6B21A8),
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.testTag("watch_earn_badge")
+      )
 
       Button(
         onClick = onWatchAdClicked,

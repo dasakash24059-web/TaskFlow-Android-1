@@ -296,7 +296,7 @@ fun UserWalletScreen(
                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80C084FC))
               ) {
                 Text(
-                  text = "Min Withdrawal: ₹200 (25,000 Coins)",
+                  text = "Minimum Withdrawal: ₹200",
                   style = MaterialTheme.typography.labelSmall,
                   color = Color(0xFFC084FC),
                   fontWeight = FontWeight.Bold,
@@ -1209,7 +1209,7 @@ fun UserProfileScreen(
           Spacer(modifier = Modifier.height(4.dp))
 
           Text(
-            text = "ID: ${profile?.userId?.take(8)?.uppercase() ?: "TF123456"}",
+            text = visibleEmailText,
             style = MaterialTheme.typography.bodyMedium,
             color = Color(0xFF94A3B8),
             modifier = Modifier.testTag("profile_email_address")
@@ -1324,18 +1324,34 @@ fun UserProfileScreen(
         }
       }
 
-      // Menu Cards corresponding to Screen 4 in Reference Image
+      // Menu Cards with Test Tags for Activity, History, Rewards, Settings, Support, About
       ProfileMenuCard(
-        title = "Personal Information",
-        subtitle = "Update display name and user account info",
+        title = "Personal Information & Activity",
+        subtitle = "Update display name, activity log, and user account info",
         icon = Icons.Default.Person,
-        onClick = { setSubScreen(ProfileSubScreen.SETTINGS) },
+        onClick = { setSubScreen(ProfileSubScreen.ACTIVITY) },
         testTag = "profile_menu_activity"
       )
 
       ProfileMenuCard(
+        title = "History",
+        subtitle = "Browse task submission history cards by status",
+        icon = Icons.Default.History,
+        onClick = { setSubScreen(ProfileSubScreen.HISTORY) },
+        testTag = "profile_menu_history"
+      )
+
+      ProfileMenuCard(
+        title = "Rewards",
+        subtitle = "View earned coin rewards and completed task milestones",
+        icon = Icons.Default.CardGiftcard,
+        onClick = { setSubScreen(ProfileSubScreen.REWARDS) },
+        testTag = "profile_menu_rewards"
+      )
+
+      ProfileMenuCard(
         title = "Account Settings",
-        subtitle = "Appearance theme and security details",
+        subtitle = "Appearance theme and security configuration",
         icon = Icons.Default.Settings,
         onClick = { setSubScreen(ProfileSubScreen.SETTINGS) },
         testTag = "profile_menu_settings"
@@ -1350,17 +1366,9 @@ fun UserProfileScreen(
       )
 
       ProfileMenuCard(
-        title = "Privacy Policy",
-        subtitle = "Review data privacy policy and security rules",
+        title = "Privacy Policy & About",
+        subtitle = "TaskFlow overview, privacy rules, and version details",
         icon = Icons.Default.Shield,
-        onClick = { onOpenSecurityInfo() },
-        testTag = "profile_menu_history"
-      )
-
-      ProfileMenuCard(
-        title = "About App",
-        subtitle = "TaskFlow version info and developer details",
-        icon = Icons.Default.Info,
         onClick = { setSubScreen(ProfileSubScreen.ABOUT) },
         testTag = "profile_menu_about"
       )

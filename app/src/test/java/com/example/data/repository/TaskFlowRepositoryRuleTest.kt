@@ -224,6 +224,10 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
         dateKey = today
       )
     }
+
+    override suspend fun createSpinSession(): String = "spin_${UUID.randomUUID()}"
+
+    override suspend fun claimSpinReward(sessionId: String): Long = 100L
   }
 
   @Test
