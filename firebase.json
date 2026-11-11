@@ -6,6 +6,10 @@
     {
       "database": "(default)",
       "rules": "firestore.rules"
+    },
+    {
+      "database": "ai-studio-android-taskflow-f47fe501-b47e-4e0e-8222-905e3d5397ff",
+      "rules": "firestore.rules"
     }
   ],
   "storage": {

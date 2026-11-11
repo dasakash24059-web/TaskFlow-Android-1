@@ -32,14 +32,24 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Task
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,6 +59,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -77,6 +88,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
+import com.example.data.model.NotificationItem
 import com.example.data.model.WatchStats
 import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.data.repository.TaskFlowRepository
@@ -360,6 +372,10 @@ private fun AuthenticatedWorkspace(
   val showSecuritySheet by viewModel.showSecuritySheet.collectAsStateWithLifecycle()
   val openWithdrawOnWalletNavigation by viewModel.openWithdrawOnWalletNavigation.collectAsStateWithLifecycle()
   val isDailyCheckInScreenVisible by viewModel.isDailyCheckInScreenVisible.collectAsStateWithLifecycle()
+  val campaignsState by viewModel.campaignsState.collectAsStateWithLifecycle()
+  val userNotifications by viewModel.userNotificationsState.collectAsStateWithLifecycle()
+  val showNotificationDialog by viewModel.showNotificationDialog.collectAsStateWithLifecycle()
+  val showSupportTicketDialog by viewModel.showSupportTicketDialog.collectAsStateWithLifecycle()
 
   BackHandler(
     enabled =
@@ -456,6 +472,26 @@ private fun AuthenticatedWorkspace(
           }
         },
         actions = {
+          val unreadCount = userNotifications.count { !it.isRead }
+          IconButton(
+            onClick = { viewModel.setNotificationDialogVisible(true) },
+            modifier = Modifier.testTag("top_bar_notifications_button")
+          ) {
+            BadgedBox(
+              badge = {
+                if (unreadCount > 0) {
+                  Badge { Text(unreadCount.toString()) }
+                }
+              }
+            ) {
+              Icon(
+                imageVector = Icons.Default.Notifications,
+                contentDescription = "Notifications",
+                tint = MaterialTheme.colorScheme.onSurface
+              )
+            }
+          }
+
           // Only show Admin Mode Switcher & Security Info to verified Admin accounts
           if (isAdminAuthorized) {
             Surface(
@@ -587,6 +623,13 @@ private fun AuthenticatedWorkspace(
             icon = { Icon(Icons.Default.Payment, contentDescription = null) },
             label = { Text("Withdrawals") },
             modifier = Modifier.testTag("nav_admin_withdrawals")
+          )
+          NavigationBarItem(
+            selected = activeAdminTab == AdminTab.CAMPAIGNS,
+            onClick = { viewModel.setAdminTab(AdminTab.CAMPAIGNS) },
+            icon = { Icon(Icons.Default.Campaign, contentDescription = null) },
+            label = { Text("Campaigns") },
+            modifier = Modifier.testTag("nav_admin_campaigns")
           )
         }
       }
@@ -813,6 +856,9 @@ private fun AuthenticatedWorkspace(
                         viewModel.setProfileSubScreen(ProfileSubScreen.SUPPORT)
                       }
                     }
+                  },
+                  onSubmitSupportTicket = { subject, message, category ->
+                    viewModel.createSupportTicket(subject, message, category)
                   }
                 )
               }
@@ -913,10 +959,116 @@ private fun AuthenticatedWorkspace(
                 appIconUrl = appIconUrl,
                 requiredProof = requiredProof
               )
+            },
+            campaignsState = campaignsState,
+            onCreateCampaign = { title, client, desc, budget, target, cat, reward ->
+              viewModel.createCampaign(title, client, desc, budget, target, cat, reward)
+            },
+            onUpdateCampaignStatus = { campaignId, status ->
+              viewModel.updateCampaignStatus(campaignId, status)
             }
           )
         }
       }
     }
+
+    if (showNotificationDialog) {
+      NotificationListDialog(
+        notifications = userNotifications,
+        onDismiss = { viewModel.setNotificationDialogVisible(false) },
+        onMarkRead = { viewModel.markNotificationRead(it) }
+      )
+    }
   }
 }
+
+@Composable
+fun NotificationListDialog(
+  notifications: List<NotificationItem>,
+  onDismiss: () -> Unit,
+  onMarkRead: (String) -> Unit
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        Icon(Icons.Default.Notifications, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Text("Notifications", fontWeight = FontWeight.Bold)
+      }
+    },
+    text = {
+      if (notifications.isEmpty()) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(24.dp),
+          horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+          Text(
+            text = "No notifications yet.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            text = "You will receive updates when tasks are reviewed or check-ins are credited.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+          )
+        }
+      } else {
+        LazyColumn(
+          modifier = Modifier.fillMaxWidth().height(320.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          items(notifications, key = { it.id }) { item ->
+            Card(
+              modifier = Modifier.fillMaxWidth(),
+              shape = RoundedCornerShape(12.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = if (item.isRead) MaterialTheme.colorScheme.surface
+                else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+              )
+            ) {
+              Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                  )
+                  if (!item.isRead) {
+                    TextButton(
+                      onClick = { onMarkRead(item.id) },
+                      modifier = Modifier.height(28.dp)
+                    ) {
+                      Text("Mark read", style = MaterialTheme.typography.labelSmall)
+                    }
+                  }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                  text = item.body,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+              }
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      TextButton(onClick = onDismiss) {
+        Text("Close")
+      }
+    }
+  )
+}
+

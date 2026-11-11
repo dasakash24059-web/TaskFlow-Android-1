@@ -1,5 +1,5 @@
 {
-  "summary":  "Updated Firestore Security Rules including /reward_sessions/{sessionId}, /watch_stats/{statId}, /users/{userId}/watch_stats/{dateKey}, and /processed_transactions/{txId} for the 2-step Watch & Earn verification and claim flow.",
-  "updatedAt":  "2026-11-09T16:57:49.800747787Z",
+  "summary":  "Master implementation Firestore Security Rules for TaskFlow. Fully supports multi-user task submissions, atomic admin review, campaigns, in-app notifications, support tickets, safe public leaderboard projection, and zero-trust wallet balance protection.",
+  "updatedAt":  "2026-11-11T09:06:04.132866693Z",
   "userFacing":  true
 }

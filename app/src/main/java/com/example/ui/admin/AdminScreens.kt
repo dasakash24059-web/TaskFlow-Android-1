@@ -34,15 +34,21 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Business
+import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Task
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -75,6 +81,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.model.CampaignItem
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskCategories
@@ -125,7 +132,10 @@ fun AdminDashboardScreen(
   onUpdateTaskExtended:
     ((String, String, String, String, String, UserProfile, String, String, String, String, String) -> Unit)? =
     null,
-  onUpdateUserName: ((UserProfile, String) -> Unit)? = null
+  onUpdateUserName: ((UserProfile, String) -> Unit)? = null,
+  campaignsState: UiState<List<CampaignItem>> = UiState.Success(emptyList()),
+  onCreateCampaign: ((String, String, String, Long, Long, String, Long) -> Unit)? = null,
+  onUpdateCampaignStatus: ((String, String) -> Unit)? = null
 ) {
   if (!isAdminAuthorized) {
     UnauthorizedAdminGate(currentUserEmail = currentUserEmail)
@@ -180,50 +190,33 @@ fun AdminDashboardScreen(
         .sortedByDescending { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
     }
 
-  // Merge tasks and /submissions records so any submission in /submissions/{taskId} is always visible to Admin even if the task is deleted
+  // Merge tasks and /submissions records so every submission (legacy or multi-user) is reviewable independently
   val mergedReviewTasks =
     remember(tasks, submissions) {
-      val taskById = tasks.associateBy { it.id }.toMutableMap()
-      submissions.forEach { sub ->
-        val key = sub.taskId.ifBlank { sub.id }
-        val existingTask = taskById[key]
-        if (existingTask != null) {
-          taskById[key] =
-            existingTask.copy(
-              status = sub.status.ifBlank { existingTask.status },
-              assignedUserId = sub.userId.ifBlank { existingTask.assignedUserId },
-              assignedUserName = sub.userName.ifBlank { existingTask.assignedUserName },
-              assignedUserEmail = sub.userEmail.ifBlank { existingTask.assignedUserEmail },
-              proofText = sub.proofText.ifBlank { existingTask.proofText },
-              proofImageUrl = sub.proofImageUrl.ifBlank { existingTask.proofImageUrl },
-              proofStoragePath = sub.proofStoragePath.ifBlank { existingTask.proofStoragePath },
-              adminFeedback = sub.adminFeedback.ifBlank { existingTask.adminFeedback },
-              updatedAt = sub.updatedAt ?: existingTask.updatedAt
+      val taskById = tasks.associateBy { it.id }
+      if (submissions.isNotEmpty()) {
+        val reviewItems = mutableListOf<TaskItem>()
+        val seenSubmissionDocIds = mutableSetOf<String>()
+
+        submissions.forEach { sub ->
+          val docId = sub.id.ifBlank { if (sub.userId.isNotBlank()) "${sub.taskId}_${sub.userId}" else sub.taskId }
+          seenSubmissionDocIds.add(docId)
+          val existingTask = taskById[sub.taskId]
+          reviewItems.add(
+            sub.toHistoryTaskItem(existingTask).copy(
+              id = docId,
+              status = sub.status.ifBlank { TaskStatus.SUBMITTED }
             )
-        } else if (key.isNotBlank()) {
-          taskById[key] =
-            TaskItem(
-              id = key,
-              title = sub.taskTitle.ifBlank { "Submitted Task" },
-              appName = sub.appName,
-              appIconUrl = sub.appIconUrl,
-              description = "Submitted proof for ${sub.taskTitle}",
-              rewardCents = sub.rewardCents,
-              assignedUserId = sub.userId,
-              assignedUserName = sub.userName,
-              assignedUserEmail = sub.userEmail,
-              status = sub.status.ifBlank { TaskStatus.SUBMITTED },
-              proofText = sub.proofText,
-              proofImageUrl = sub.proofImageUrl,
-              proofStoragePath = sub.proofStoragePath,
-              adminFeedback = sub.adminFeedback,
-              createdAt = sub.createdAt,
-              updatedAt = sub.updatedAt
-            )
+          )
         }
-      }
-      taskById.values.sortedByDescending {
-        it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L
+
+        tasks.filter { it.status == TaskStatus.SUBMITTED && !seenSubmissionDocIds.contains(it.id) }.forEach {
+          reviewItems.add(it)
+        }
+
+        reviewItems.sortedByDescending { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
+      } else {
+        tasks.filter { it.status != TaskStatus.PENDING }
       }
     }
 
@@ -392,6 +385,13 @@ fun AdminDashboardScreen(
               AdminWithdrawalRequestsSection(withdrawalRequests = withdrawalRequests)
             }
           }
+        }
+        AdminTab.CAMPAIGNS -> {
+          AdminCampaignsTabContent(
+            campaignsState = campaignsState,
+            onCreateCampaign = onCreateCampaign,
+            onUpdateCampaignStatus = onUpdateCampaignStatus
+          )
         }
       }
     }
@@ -2202,4 +2202,357 @@ private fun UnauthorizedAdminGate(currentUserEmail: String) {
       }
     }
   }
+}
+
+@Composable
+fun AdminCampaignsTabContent(
+  campaignsState: UiState<List<CampaignItem>>,
+  onCreateCampaign: ((String, String, String, Long, Long, String, Long) -> Unit)?,
+  onUpdateCampaignStatus: ((String, String) -> Unit)?
+) {
+  var showCreateDialog by remember { mutableStateOf(false) }
+  val campaigns = (campaignsState as? UiState.Success)?.data ?: emptyList()
+
+  if (showCreateDialog) {
+    CampaignEditorDialog(
+      onDismiss = { showCreateDialog = false },
+      onSave = { title, client, desc, budget, target, cat, reward ->
+        onCreateCampaign?.invoke(title, client, desc, budget, target, cat, reward)
+        showCreateDialog = false
+      }
+    )
+  }
+
+  LazyColumn(
+    modifier = Modifier.fillMaxSize().testTag("admin_campaigns_list"),
+    verticalArrangement = Arrangement.spacedBy(14.dp),
+    contentPadding = PaddingValues(bottom = 32.dp)
+  ) {
+    item {
+      Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = "Client & Partner Campaigns",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold
+            )
+            Text(
+              text = "Manage advertiser budgets, targets, and live task campaigns.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+          Button(
+            onClick = { showCreateDialog = true },
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.testTag("admin_new_campaign_button")
+          ) {
+            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Launch")
+          }
+        }
+      }
+    }
+
+    if (campaigns.isEmpty()) {
+      item {
+        Card(
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(16.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+          Column(
+            modifier = Modifier.fillMaxWidth().padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+          ) {
+            Icon(
+              imageVector = Icons.Default.Campaign,
+              contentDescription = null,
+              modifier = Modifier.size(48.dp),
+              tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+              text = "No Active Campaigns",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = "Tap 'Launch' above to configure your first sponsor or partner campaign.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              textAlign = TextAlign.Center
+            )
+          }
+        }
+      }
+    } else {
+      items(campaigns, key = { it.id }) { campaign ->
+        CampaignCardItem(
+          campaign = campaign,
+          onUpdateStatus = { newStatus ->
+            onUpdateCampaignStatus?.invoke(campaign.id, newStatus)
+          }
+        )
+      }
+    }
+  }
+}
+
+@Composable
+fun CampaignCardItem(
+  campaign: CampaignItem,
+  onUpdateStatus: (String) -> Unit
+) {
+  val progress = if (campaign.targetSubmissions > 0L) {
+    (campaign.completedSubmissions.toFloat() / campaign.targetSubmissions.toFloat()).coerceIn(0f, 1f)
+  } else 0f
+
+  Card(
+    modifier = Modifier.fillMaxWidth().testTag("campaign_card_${campaign.id}"),
+    shape = RoundedCornerShape(18.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+  ) {
+    Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = campaign.title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+          )
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+          ) {
+            Icon(
+              imageVector = Icons.Default.Business,
+              contentDescription = null,
+              modifier = Modifier.size(14.dp),
+              tint = MaterialTheme.colorScheme.primary
+            )
+            Text(
+              text = campaign.clientName,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.primary
+            )
+            Text("•", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            Text(
+              text = campaign.category,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
+
+        Surface(
+          shape = RoundedCornerShape(8.dp),
+          color = when (campaign.status.uppercase(Locale.US)) {
+            "ACTIVE" -> MaterialTheme.colorScheme.primaryContainer
+            "PAUSED" -> MaterialTheme.colorScheme.tertiaryContainer
+            else -> MaterialTheme.colorScheme.surfaceVariant
+          }
+        ) {
+          Text(
+            text = campaign.status.uppercase(Locale.US),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            color = when (campaign.status.uppercase(Locale.US)) {
+              "ACTIVE" -> MaterialTheme.colorScheme.onPrimaryContainer
+              "PAUSED" -> MaterialTheme.colorScheme.onTertiaryContainer
+              else -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+          )
+        }
+      }
+
+      if (campaign.description.isNotBlank()) {
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+          text = campaign.description,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis
+        )
+      }
+
+      Spacer(modifier = Modifier.height(12.dp))
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+      ) {
+        Column {
+          Text("Budget", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text(formatRewardInr(campaign.budgetCents), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        }
+        Column {
+          Text("Spent", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text(formatRewardInr(campaign.spentCents), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        }
+        Column {
+          Text("Reward/Task", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text(formatRewardInr(campaign.rewardPerTaskCents), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        }
+        Column {
+          Text("Target", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text("${campaign.completedSubmissions}/${campaign.targetSubmissions}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        }
+      }
+
+      Spacer(modifier = Modifier.height(8.dp))
+      LinearProgressIndicator(
+        progress = { progress },
+        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+      )
+
+      Spacer(modifier = Modifier.height(12.dp))
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        if (campaign.status.equals("ACTIVE", ignoreCase = true)) {
+          OutlinedButton(
+            onClick = { onUpdateStatus("PAUSED") },
+            shape = RoundedCornerShape(8.dp)
+          ) {
+            Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(14.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Pause")
+          }
+        } else if (campaign.status.equals("PAUSED", ignoreCase = true)) {
+          Button(
+            onClick = { onUpdateStatus("ACTIVE") },
+            shape = RoundedCornerShape(8.dp)
+          ) {
+            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Resume")
+          }
+        }
+        if (!campaign.status.equals("COMPLETED", ignoreCase = true)) {
+          Spacer(modifier = Modifier.width(8.dp))
+          OutlinedButton(
+            onClick = { onUpdateStatus("COMPLETED") },
+            shape = RoundedCornerShape(8.dp)
+          ) {
+            Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(14.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Complete")
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+fun CampaignEditorDialog(
+  onDismiss: () -> Unit,
+  onSave: (title: String, client: String, desc: String, budgetCents: Long, target: Long, category: String, rewardCents: Long) -> Unit
+) {
+  var title by remember { mutableStateOf("") }
+  var clientName by remember { mutableStateOf("") }
+  var description by remember { mutableStateOf("") }
+  var budgetStr by remember { mutableStateOf("5000") } // ₹5,000
+  var targetStr by remember { mutableStateOf("100") } // 100 submissions
+  var rewardStr by remember { mutableStateOf("25") } // ₹25 per task
+  var category by remember { mutableStateOf("App Install") }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("Launch Partner Campaign", fontWeight = FontWeight.Bold) },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        OutlinedTextField(
+          value = title,
+          onValueChange = { title = it },
+          label = { Text("Campaign Title") },
+          placeholder = { Text("e.g. Swiggy App Install Q4") },
+          modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+          value = clientName,
+          onValueChange = { clientName = it },
+          label = { Text("Client / Partner Name") },
+          placeholder = { Text("e.g. Swiggy India") },
+          modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+          value = description,
+          onValueChange = { description = it },
+          label = { Text("Description & Goal") },
+          placeholder = { Text("Target 100 new verified installs") },
+          modifier = Modifier.fillMaxWidth(),
+          minLines = 2
+        )
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          OutlinedTextField(
+            value = budgetStr,
+            onValueChange = { budgetStr = it.filter { ch -> ch.isDigit() } },
+            label = { Text("Total Budget (₹)") },
+            modifier = Modifier.weight(1f)
+          )
+          OutlinedTextField(
+            value = rewardStr,
+            onValueChange = { rewardStr = it.filter { ch -> ch.isDigit() } },
+            label = { Text("Per Task (₹)") },
+            modifier = Modifier.weight(1f)
+          )
+        }
+        OutlinedTextField(
+          value = targetStr,
+          onValueChange = { targetStr = it.filter { ch -> ch.isDigit() } },
+          label = { Text("Target Submissions") },
+          modifier = Modifier.fillMaxWidth()
+        )
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = {
+          val budget = (budgetStr.toLongOrNull() ?: 5000L) * 100L
+          val target = targetStr.toLongOrNull() ?: 100L
+          val reward = (rewardStr.toLongOrNull() ?: 25L) * 100L
+          onSave(title, clientName, description, budget, target, category, reward)
+        },
+        enabled = title.isNotBlank() && clientName.isNotBlank()
+      ) {
+        Text("Launch Campaign")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text("Cancel")
+      }
+    }
+  )
 }

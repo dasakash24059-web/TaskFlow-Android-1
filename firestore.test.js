@@ -349,9 +349,9 @@ test("4. Mandatory text + photo proof enforcement (including second user account
   });
   await assertFails(photoOnlyBatch.commit());
 
-  // 4c. Valid Atomic Task Submission by second user account (Alice) with BOTH written proofText AND uploaded photo -> MUST SUCCEED
-  const submitBatch = aliceDb.batch();
-  submitBatch.update(aliceDb.collection("tasks").doc(taskId), {
+  // 4c. Pending user (Alice with approvalStatus == 'pending') attempting valid atomic task submission -> MUST FAIL
+  const pendingUserBatch = aliceDb.batch();
+  pendingUserBatch.update(aliceDb.collection("tasks").doc(taskId), {
     assignedUserId: ALICE_UID,
     assignedUserName: "Alice",
     assignedUserEmail: ALICE_EMAIL,
@@ -361,7 +361,7 @@ test("4. Mandatory text + photo proof enforcement (including second user account
     proofStoragePath: sampleStoragePath,
     updatedAt: ts,
   });
-  submitBatch.set(aliceDb.collection("submissions").doc(taskId), {
+  pendingUserBatch.set(aliceDb.collection("submissions").doc(taskId), {
     taskId: taskId,
     taskTitle: "QA Check",
     appName: "TaskFlow Companion",
@@ -377,6 +377,45 @@ test("4. Mandatory text + photo proof enforcement (including second user account
     adminFeedback: "",
     createdAt: ts,
     updatedAt: ts,
+  });
+  await assertFails(pendingUserBatch.commit());
+
+  // 4d. Admin approves Alice (approvalStatus -> 'approved'), then Alice submits BOTH written proofText AND uploaded photo -> MUST SUCCEED
+  await assertSucceeds(
+    adminDb.collection("users").doc(ALICE_UID).update({
+      approvalStatus: "approved",
+      updatedAt: new Date(),
+    })
+  );
+
+  const submitTs = new Date();
+  const submitBatch = aliceDb.batch();
+  submitBatch.update(aliceDb.collection("tasks").doc(taskId), {
+    assignedUserId: ALICE_UID,
+    assignedUserName: "Alice",
+    assignedUserEmail: ALICE_EMAIL,
+    status: "submitted",
+    proofText: "Completed QA check across Android screens.",
+    proofImageUrl: sampleImageUrl,
+    proofStoragePath: sampleStoragePath,
+    updatedAt: submitTs,
+  });
+  submitBatch.set(aliceDb.collection("submissions").doc(taskId), {
+    taskId: taskId,
+    taskTitle: "QA Check",
+    appName: "TaskFlow Companion",
+    appIconUrl: "https://example.com/icon.png",
+    rewardCents: 1500,
+    userId: ALICE_UID,
+    userName: "Alice",
+    userEmail: ALICE_EMAIL,
+    proofText: "Completed QA check across Android screens.",
+    proofImageUrl: sampleImageUrl,
+    proofStoragePath: sampleStoragePath,
+    status: "submitted",
+    adminFeedback: "",
+    createdAt: submitTs,
+    updatedAt: submitTs,
   });
   await assertSucceeds(submitBatch.commit());
 
@@ -1047,5 +1086,466 @@ test("8. Admin task deactivate/reactivate controls, blocked submissions on deact
   await assertSucceeds(aliceDb.collection("submissions").doc(taskId).get());
   await assertSucceeds(adminDb.collection("submissions").doc(taskId).get());
 });
+
+test("9. Phase 1 Wallet, Check-in, Watch Stats & Reward Session Security: blocks all client-side balanceCents increments (+100/+500/+700) and client writes to reward_sessions, check_ins, watch_stats, and forged transactions", async () => {
+  const ts = nowTimestamp();
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await db.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      email: ALICE_EMAIL,
+      displayName: "Alice",
+      role: "user",
+      approvalStatus: "approved",
+      balanceCents: 0,
+      completedTasksCount: 0,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("reward_sessions").doc("session_srv_1").set({
+      sessionId: "session_srv_1",
+      userId: ALICE_UID,
+      rewardType: "WATCH_AND_EARN",
+      rewardCents: 100,
+      status: "PENDING",
+      s2sVerified: false,
+      used: false,
+      claimed: false,
+      createdAt: ts,
+      expiresAt: new Date(Date.now() + 600000),
+    });
+  });
+
+  const aliceDb = testEnv
+    .authenticatedContext(ALICE_UID, {
+      email: ALICE_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  // 1. Client attempting the old +100, +500, or +700 balanceCents self-increment loophole -> MUST FAIL
+  for (const amount of [100, 500, 700, 5000]) {
+    await assertFails(
+      aliceDb.collection("users").doc(ALICE_UID).update({
+        balanceCents: amount,
+        checkInStreak: 1,
+        lastCheckInDate: "2026-11-11",
+        lastCheckInTimestamp: new Date(),
+        updatedAt: new Date(),
+      })
+    );
+  }
+
+  // 2. Client attempting to create or update /users/{uid}/check_ins/{dateKey} directly -> MUST FAIL
+  await assertFails(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("check_ins")
+      .doc("2026-11-11")
+      .set({
+        userId: ALICE_UID,
+        dateKey: "2026-11-11",
+        streakDay: 1,
+        rewardCents: 100,
+        claimedAt: ts,
+      })
+  );
+
+  // 3. Client attempting to create or update /users/{uid}/watch_stats/{dateKey} or /watch_stats/{statId} -> MUST FAIL
+  await assertFails(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("watch_stats")
+      .doc("2026-11-11")
+      .set({
+        userId: ALICE_UID,
+        dateKey: "2026-11-11",
+        videosWatched: 1,
+        totalEarnedCents: 100,
+        updatedAt: ts,
+      })
+  );
+  await assertFails(
+    aliceDb
+      .collection("watch_stats")
+      .doc(`${ALICE_UID}_2026-11-11`)
+      .set({
+        userId: ALICE_UID,
+        dateKey: "2026-11-11",
+        videosWatched: 1,
+        totalEarnedCents: 100,
+        updatedAt: ts,
+      })
+  );
+
+  // 4. Client attempting to create or verify or claim /reward_sessions/{sessionId} -> MUST FAIL
+  await assertFails(
+    aliceDb.collection("reward_sessions").doc("client_fake_session").set({
+      sessionId: "client_fake_session",
+      userId: ALICE_UID,
+      rewardType: "WATCH_AND_EARN",
+      rewardCents: 100,
+      status: "PENDING",
+      used: false,
+      claimed: false,
+      createdAt: ts,
+      expiresAt: new Date(Date.now() + 600000),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("reward_sessions").doc("session_srv_1").update({
+      status: "VERIFIED",
+      s2sVerified: true,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("reward_sessions").doc("session_srv_1").update({
+      status: "CLAIMED",
+      used: true,
+      claimed: true,
+    })
+  );
+
+  // Owner can still read their own reward session
+  await assertSucceeds(
+    aliceDb.collection("reward_sessions").doc("session_srv_1").get()
+  );
+
+  // 5. Client attempting to fabricate a CREDITED reward transaction in /transactions -> MUST FAIL
+  await assertFails(
+    aliceDb.collection("transactions").doc("forged_tx_1").set({
+      userId: ALICE_UID,
+      userName: "Alice",
+      type: "DAILY_CHECKIN",
+      title: "Day 7 Daily Check-in Reward",
+      amountCents: 500,
+      status: "CREDITED",
+      referenceId: "2026-11-11",
+      createdAt: ts,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("transactions").doc("forged_tx_2").set({
+      userId: ALICE_UID,
+      userName: "Alice",
+      type: "WATCH_EARN",
+      title: "Watch & Earn Video Reward (1/25)",
+      amountCents: 100,
+      status: "CREDITED",
+      referenceId: "session_srv_1",
+      createdAt: ts,
+    })
+  );
+});
+
+test("10. Phase 1 User Approval Security: pending and suspended users cannot submit task proofs or create withdrawal requests", async () => {
+  const ts = nowTimestamp();
+  const pendingUid = "pending_user_99";
+  const suspendedUid = "suspended_user_99";
+  const taskId = "task_approval_gate_1";
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await db.collection("users").doc(pendingUid).set({
+      userId: pendingUid,
+      email: "pending@example.com",
+      displayName: "Pending User",
+      role: "user",
+      approvalStatus: "pending",
+      balanceCents: 30000,
+      completedTasksCount: 0,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("users").doc(suspendedUid).set({
+      userId: suspendedUid,
+      email: "suspended@example.com",
+      displayName: "Suspended User",
+      role: "user",
+      approvalStatus: "suspended",
+      balanceCents: 30000,
+      completedTasksCount: 0,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("tasks").doc(taskId).set({
+      title: "Approval Gate Task",
+      appName: "Gate App",
+      appIconUrl: "https://example.com/icon.png",
+      description: "Verify approval gate",
+      instructions: "1. Open app",
+      requiredProof: "Screenshot",
+      taskLink: "https://play.google.com/store/apps/details?id=com.example.gate",
+      category: "App Install",
+      rewardCents: 1500,
+      assignedUserId: ADMIN_UID,
+      assignedUserName: "Admin",
+      assignedUserEmail: ADMIN_EMAIL,
+      status: "pending",
+      isActive: true,
+      proofText: "",
+      proofImageUrl: "",
+      proofStoragePath: "",
+      adminFeedback: "",
+      createdBy: ADMIN_UID,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+  });
+
+  const pendingDb = testEnv
+    .authenticatedContext(pendingUid, {
+      email: "pending@example.com",
+      email_verified: true,
+    })
+    .firestore();
+  const suspendedDb = testEnv
+    .authenticatedContext(suspendedUid, {
+      email: "suspended@example.com",
+      email_verified: true,
+    })
+    .firestore();
+
+  // Pending user attempting to create a withdrawal request -> MUST FAIL
+  await assertFails(
+    pendingDb.collection("withdrawal_requests").doc("req_pending_1").set({
+      requestId: "req_pending_1",
+      userId: pendingUid,
+      userName: "Pending User",
+      amountCents: 25000,
+      method: "UPI ID",
+      status: "pending_demo",
+      isDemo: true,
+      createdAt: ts,
+    })
+  );
+
+  // Suspended user attempting to create a withdrawal request -> MUST FAIL
+  await assertFails(
+    suspendedDb.collection("withdrawal_requests").doc("req_suspended_1").set({
+      requestId: "req_suspended_1",
+      userId: suspendedUid,
+      userName: "Suspended User",
+      amountCents: 25000,
+      method: "UPI ID",
+      status: "pending_demo",
+      isDemo: true,
+      createdAt: ts,
+    })
+  );
+});
+
+test("11. Phase 1 Leaderboard Permissions & Privacy: non-admin cannot list /users or read private emails, but can query /leaderboard containing only public fields", async () => {
+  const ts = nowTimestamp();
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await db.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      email: ALICE_EMAIL,
+      displayName: "Alice",
+      role: "user",
+      approvalStatus: "approved",
+      balanceCents: 4500,
+      completedTasksCount: 3,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("users").doc(BOB_UID).set({
+      userId: BOB_UID,
+      email: BOB_EMAIL,
+      displayName: "Bob",
+      role: "user",
+      approvalStatus: "approved",
+      balanceCents: 2500,
+      completedTasksCount: 2,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("leaderboard").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      displayName: "Alice",
+      balanceCents: 4500,
+      completedTasksCount: 3,
+      approvalStatus: "approved",
+      updatedAt: ts,
+    });
+    await db.collection("leaderboard").doc(BOB_UID).set({
+      userId: BOB_UID,
+      displayName: "Bob",
+      balanceCents: 2500,
+      completedTasksCount: 2,
+      approvalStatus: "approved",
+      updatedAt: ts,
+    });
+  });
+
+  const aliceDb = testEnv
+    .authenticatedContext(ALICE_UID, {
+      email: ALICE_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  const adminDb = testEnv
+    .authenticatedContext(ADMIN_UID, {
+      email: ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  // 1. Non-admin user attempting to list /users or query /users for leaderboard -> MUST FAIL (prevents private email exposure)
+  await assertFails(aliceDb.collection("users").get());
+  await assertFails(
+    aliceDb.collection("users").where("approvalStatus", "==", "approved").get()
+  );
+  await assertFails(aliceDb.collection("users").doc(BOB_UID).get());
+
+  // 2. Admin can still list /users -> MUST SUCCEED
+  await assertSucceeds(adminDb.collection("users").get());
+
+  // 3. Non-admin user can query /leaderboard where approvalStatus == 'approved' -> MUST SUCCEED and contain NO email
+  const leaderboardSnap = await assertSucceeds(
+    aliceDb
+      .collection("leaderboard")
+      .where("approvalStatus", "==", "approved")
+      .get()
+  );
+  if (leaderboardSnap.docs.length !== 2) {
+    throw new Error(`Expected 2 leaderboard docs, got ${leaderboardSnap.docs.length}`);
+  }
+  for (const doc of leaderboardSnap.docs) {
+    if ("email" in doc.data()) {
+      throw new Error("Leaderboard document must never expose email");
+    }
+  }
+
+  // 4. Attempting to write an email field or tampered balanceCents to /leaderboard/{uid} -> MUST FAIL
+  await assertFails(
+    aliceDb.collection("leaderboard").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      email: ALICE_EMAIL,
+      displayName: "Alice",
+      balanceCents: 4500,
+      completedTasksCount: 3,
+      approvalStatus: "approved",
+      updatedAt: new Date(),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("leaderboard").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      displayName: "Alice",
+      balanceCents: 999999,
+      completedTasksCount: 3,
+      approvalStatus: "approved",
+      updatedAt: new Date(),
+    })
+  );
+
+  // 5. Valid atomic displayName update on /users/{uid} and /leaderboard/{uid} -> MUST SUCCEED
+  const syncTs = new Date();
+  const syncBatch = aliceDb.batch();
+  syncBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    displayName: "Alice Pro",
+    updatedAt: syncTs,
+  });
+  syncBatch.set(aliceDb.collection("leaderboard").doc(ALICE_UID), {
+    userId: ALICE_UID,
+    displayName: "Alice Pro",
+    balanceCents: 4500,
+    completedTasksCount: 3,
+    approvalStatus: "approved",
+    updatedAt: syncTs,
+  });
+  await assertSucceeds(syncBatch.commit());
+});
+
+test("12. Phase 1 Server-Side Daily Check-In & Day 7 Reward Calculation + Unity S2S Signature Verification", async () => {
+  const crypto = require("node:crypto");
+  const {
+    _verifyUnityS2SSignature,
+    _getDailyCheckInRewardCents,
+    _calculateServerDailyCheckInState,
+  } = require("./functions/index.js");
+
+  // 1. Days 1-6 = 100 paise (₹1.00), Day 7 = 500 paise (₹5.00)
+  for (let d = 1; d <= 6; d++) {
+    if (_getDailyCheckInRewardCents(d) !== 100) {
+      throw new Error(`Expected Day ${d} reward to be 100 paise`);
+    }
+  }
+  if (_getDailyCheckInRewardCents(7) !== 500) {
+    throw new Error("Expected Day 7 reward to be 500 paise (₹5.00)");
+  }
+
+  // 2. Server-side streak progression & duplicate same-day check-in prevention
+  const today = "2026-11-11";
+  const yesterday = "2026-11-10";
+
+  // Consecutive Day 6 -> Day 7 (500 paise)
+  const day7State = _calculateServerDailyCheckInState(yesterday, 6, today, yesterday);
+  if (!day7State.canCheckInToday || day7State.expectedStreakDay !== 7 || day7State.rewardCents !== 500) {
+    throw new Error(`Unexpected Day 7 state: ${JSON.stringify(day7State)}`);
+  }
+
+  // Duplicate check-in on the same date -> canCheckInToday is false
+  const duplicateTodayState = _calculateServerDailyCheckInState(today, 7, today, yesterday);
+  if (duplicateTodayState.canCheckInToday !== false) {
+    throw new Error("Expected duplicate check-in on the same date to be blocked");
+  }
+
+  // After Day 7 -> rolls over to Day 1 (100 paise) on the next day
+  const rolloverState = _calculateServerDailyCheckInState(yesterday, 7, today, yesterday);
+  if (!rolloverState.canCheckInToday || rolloverState.expectedStreakDay !== 1 || rolloverState.rewardCents !== 100) {
+    throw new Error(`Unexpected rollover state after Day 7: ${JSON.stringify(rolloverState)}`);
+  }
+
+  // Missed day -> resets streak to Day 1 (100 paise)
+  const missedDayState = _calculateServerDailyCheckInState("2026-11-05", 5, today, yesterday);
+  if (!missedDayState.canCheckInToday || missedDayState.expectedStreakDay !== 1 || missedDayState.rewardCents !== 100) {
+    throw new Error(`Unexpected missed-day state: ${JSON.stringify(missedDayState)}`);
+  }
+
+  // 3. Mandatory UNITY_S2S_SECRET & HMAC-MD5 Signature Verification
+  const secret = "mandatory_prod_s2s_secret_99";
+  const queryParams = {
+    adid: "800430673",
+    oid: "order_778899",
+    sid: "session_abcdef123456",
+  };
+  const paramString = Object.keys(queryParams)
+    .sort()
+    .map((k) => `${k}=${queryParams[k]}`)
+    .join(",");
+  const validHmac = crypto.createHmac("md5", secret).update(paramString).digest("hex");
+
+  // Missing or empty secret -> MUST return false
+  if (_verifyUnityS2SSignature({ ...queryParams, hmac: validHmac }, "") !== false) {
+    throw new Error("Empty S2S secret must never be accepted");
+  }
+  if (_verifyUnityS2SSignature({ ...queryParams, hmac: validHmac }, null) !== false) {
+    throw new Error("Null S2S secret must never be accepted");
+  }
+  // Missing hmac -> MUST return false
+  if (_verifyUnityS2SSignature(queryParams, secret) !== false) {
+    throw new Error("Unsigned S2S callback must never be accepted");
+  }
+  // Wrong signature -> MUST return false
+  if (_verifyUnityS2SSignature({ ...queryParams, hmac: "0".repeat(32) }, secret) !== false) {
+    throw new Error("Forged S2S signature must never be accepted");
+  }
+  // Valid signature -> MUST return true
+  if (_verifyUnityS2SSignature({ ...queryParams, hmac: validHmac }, secret) !== true) {
+    throw new Error("Valid Unity S2S HMAC-MD5 signature must be accepted");
+  }
+});
+
 
 

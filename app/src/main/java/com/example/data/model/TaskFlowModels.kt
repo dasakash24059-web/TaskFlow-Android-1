@@ -197,13 +197,15 @@ data class DailyCheckInState(
 
 fun getTodayDateKey(): String {
   val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+  sdf.timeZone = java.util.TimeZone.getTimeZone("Asia/Kolkata")
   return sdf.format(java.util.Date())
 }
 
 fun getYesterdayDateKey(): String {
-  val cal = java.util.Calendar.getInstance()
+  val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Kolkata"))
   cal.add(java.util.Calendar.DATE, -1)
   val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+  sdf.timeZone = java.util.TimeZone.getTimeZone("Asia/Kolkata")
   return sdf.format(cal.time)
 }
 
@@ -471,5 +473,45 @@ data class UpdateDownloadProgress(
     return String.format(Locale.US, "%.1f MB / %.1f MB", mbDownloaded, mbTotal)
   }
 }
+
+data class CampaignItem(
+  @DocumentId val id: String = "",
+  val title: String = "",
+  val clientName: String = "",
+  val description: String = "",
+  val budgetCents: Long = 0L,
+  val spentCents: Long = 0L,
+  val targetSubmissions: Long = 0L,
+  val completedSubmissions: Long = 0L,
+  val status: String = "ACTIVE", // ACTIVE, PAUSED, COMPLETED
+  val category: String = "App Install",
+  val rewardPerTaskCents: Long = 0L,
+  @ServerTimestamp val createdAt: Timestamp? = null,
+  @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+data class NotificationItem(
+  @DocumentId val id: String = "",
+  val userId: String = "",
+  val title: String = "",
+  val body: String = "",
+  val type: String = "INFO", // REWARD, TASK, DAILY_CHECKIN, SYSTEM
+  val isRead: Boolean = false,
+  val referenceId: String = "",
+  @ServerTimestamp val createdAt: Timestamp? = null
+)
+
+data class SupportTicket(
+  @DocumentId val id: String = "",
+  val userId: String = "",
+  val userEmail: String = "",
+  val userName: String = "",
+  val subject: String = "",
+  val message: String = "",
+  val status: String = "OPEN", // OPEN, RESOLVED, CLOSED
+  val adminNotes: String = "",
+  @ServerTimestamp val createdAt: Timestamp? = null,
+  @ServerTimestamp val updatedAt: Timestamp? = null
+)
 
 

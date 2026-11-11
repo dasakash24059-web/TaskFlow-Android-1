@@ -374,7 +374,7 @@ class ExampleRobolectricTest {
             submittedText = text
             submittedUri = uri
           },
-          userApprovalStatus = "pending",
+          userApprovalStatus = "approved",
           currentUserId = "user_2",
           initialSelectedImageUri = fakePhotoUri
         )
@@ -1854,7 +1854,7 @@ class ExampleRobolectricTest {
     assertTrue("Expected tapping Try Again button to trigger onStartWatchVideo retry", retried)
 
     // 8. Verify UnityAds 4.12.0 BoldSDK opportunityId (objectId) configuration & fixed placement IDs
-    assertEquals("800430673", com.example.util.UnityAdsHelper.GAME_ID)
+    assertEquals("6091982", com.example.util.UnityAdsHelper.GAME_ID)
     assertEquals("BP_Rewarded_Android", com.example.util.UnityAdsHelper.REWARDED_PLACEMENT_ID)
     assertEquals("BP_Banner_Android", com.example.util.UnityAdsHelper.BANNER_PLACEMENT_ID)
     assertEquals("BP_Interstitial_Android", com.example.util.UnityAdsHelper.INTERSTITIAL_PLACEMENT_ID)

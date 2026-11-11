@@ -15,23 +15,32 @@ service firebase.storage {
           request.auth.token.email == 'dasakash24059@gmail.com' &&
           ('email_verified' in request.auth.token) &&
           request.auth.token.email_verified == true
-        ) ||
-        firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid))
+        )
       );
     }
 
     // Proof images uploaded for task submissions:
-    // - Associated with userId and taskId
-    // - Only the submitting user can upload their own proof image (< 10 MB, image/* only)
-    // - Only the submitting user and authorized Admin can read/access the proof image
+    // Path: /submissions/{userId}/{taskId}/{fileName}
+    //
+    // Security Guarantees:
+    // 1. Strictly requires Firebase Authentication (request.auth != null).
+    // 2. Isolates uploads exclusively to the authenticated user's own path (/submissions/{userId}/...).
+    // 3. Independent of cross-database Firestore lookups, guaranteeing compatibility with named databases.
+    // 4. File size restricted to maximum 5 MB (5 * 1024 * 1024 bytes).
+    // 5. Restricts content type to valid image mime-types (image/jpeg, image/png, image/webp).
+    // 6. Immutability: overwrites (update) and deletions (delete) are strictly forbidden to preserve audit proof.
+    // 7. Reads permitted only for the submitting user and authorized Admins for review.
     match /submissions/{userId}/{taskId}/{fileName} {
       allow read: if isSignedIn() && (request.auth.uid == userId || isVerifiedAdmin());
-      allow create, update: if isSignedIn() &&
-                               request.auth.uid == userId &&
-                               request.resource != null &&
-                               request.resource.size < 10 * 1024 * 1024 &&
-                               request.resource.contentType.matches('image/.*');
-      allow delete: if false;
+      allow create: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       taskId is string && taskId.size() > 0 && taskId.size() <= 64 &&
+                       fileName is string && fileName.size() > 0 && fileName.size() <= 128 &&
+                       request.resource != null &&
+                       request.resource.size > 0 &&
+                       request.resource.size <= 5 * 1024 * 1024 &&
+                       request.resource.contentType.matches('image/(jpeg|jpg|png|webp)');
+      allow update, delete: if false;
     }
 
     // Default deny for all other paths

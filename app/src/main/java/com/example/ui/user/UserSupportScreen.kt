@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Help
@@ -75,10 +76,11 @@ data class ChatMessage(
 @Composable
 fun UserSupportScreen(
   onBack: () -> Unit,
-  onNavigateScreen: (String) -> Unit
+  onNavigateScreen: (String) -> Unit,
+  onSubmitTicket: ((String, String, String) -> Unit)? = null
 ) {
   BackHandler(onBack = onBack)
-  var selectedTab by rememberSaveable { mutableStateOf(0) } // 0: FAQ, 1: Assistant Chat
+  var selectedTab by rememberSaveable { mutableStateOf(0) } // 0: FAQ, 1: Assistant Chat, 2: Contact
 
   Column(
     modifier =
@@ -107,7 +109,7 @@ fun UserSupportScreen(
             fontWeight = FontWeight.Bold
           )
           Text(
-            text = "TaskFlow knowledge base & local assistant",
+            text = "Knowledge base, assistant & inquiry tickets",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
@@ -119,23 +121,157 @@ fun UserSupportScreen(
       Tab(
         selected = selectedTab == 0,
         onClick = { selectedTab = 0 },
-        text = { Text("Browse FAQ", fontWeight = FontWeight.SemiBold) },
+        text = { Text("FAQ", fontWeight = FontWeight.SemiBold) },
         icon = { Icon(Icons.AutoMirrored.Filled.Help, contentDescription = null, modifier = Modifier.size(18.dp)) },
         modifier = Modifier.testTag("tab_faq_browse")
       )
       Tab(
         selected = selectedTab == 1,
         onClick = { selectedTab = 1 },
-        text = { Text("Ask Assistant", fontWeight = FontWeight.SemiBold) },
+        text = { Text("Assistant", fontWeight = FontWeight.SemiBold) },
         icon = { Icon(Icons.Default.QuestionAnswer, contentDescription = null, modifier = Modifier.size(18.dp)) },
         modifier = Modifier.testTag("tab_assistant_chat")
       )
+      Tab(
+        selected = selectedTab == 2,
+        onClick = { selectedTab = 2 },
+        text = { Text("Contact", fontWeight = FontWeight.SemiBold) },
+        icon = { Icon(Icons.Default.SupportAgent, contentDescription = null, modifier = Modifier.size(18.dp)) },
+        modifier = Modifier.testTag("tab_contact_support")
+      )
     }
 
-    if (selectedTab == 0) {
-      FaqBrowseView(onNavigateScreen = onNavigateScreen)
-    } else {
-      SupportAssistantChatView(onNavigateScreen = onNavigateScreen)
+    when (selectedTab) {
+      0 -> FaqBrowseView(onNavigateScreen = onNavigateScreen)
+      1 -> SupportAssistantChatView(onNavigateScreen = onNavigateScreen)
+      else -> ContactSupportTicketView(onSubmitTicket = onSubmitTicket)
+    }
+  }
+}
+
+@Composable
+private fun ContactSupportTicketView(
+  onSubmitTicket: ((String, String, String) -> Unit)?
+) {
+  var subject by rememberSaveable { mutableStateOf("") }
+  var category by rememberSaveable { mutableStateOf("Task Issue") }
+  var message by rememberSaveable { mutableStateOf("") }
+  var isSubmitted by rememberSaveable { mutableStateOf(false) }
+
+  val categories = listOf("Task Issue", "Reward / Wallet", "Account Approval", "App Bug", "Other")
+
+  if (isSubmitted) {
+    Card(
+      modifier = Modifier.fillMaxWidth().padding(20.dp),
+      shape = RoundedCornerShape(20.dp),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+      Column(
+        modifier = Modifier.fillMaxWidth().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+      ) {
+        Icon(
+          imageVector = Icons.Default.SupportAgent,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(48.dp)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+          text = "Inquiry Submitted!",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+          text = "Thank you. Your support ticket has been received by our administrative team and will be reviewed promptly.",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(
+          onClick = {
+            subject = ""
+            message = ""
+            isSubmitted = false
+          }
+        ) {
+          Text("Submit Another Inquiry")
+        }
+      }
+    }
+    return
+  }
+
+  Column(
+    modifier = Modifier.fillMaxSize()
+      .verticalScroll(rememberScrollState())
+      .padding(18.dp),
+    verticalArrangement = Arrangement.spacedBy(14.dp)
+  ) {
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(16.dp),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        Icon(Icons.Default.SupportAgent, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Text(
+          text = "Have an issue with a task, reward, or verification? Send a message directly to authorized staff.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      }
+    }
+
+    Text("Category", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    Row(
+      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+      categories.forEach { cat ->
+        FilterChip(
+          selected = category == cat,
+          onClick = { category = cat },
+          label = { Text(cat) }
+        )
+      }
+    }
+
+    OutlinedTextField(
+      value = subject,
+      onValueChange = { subject = it },
+      label = { Text("Subject") },
+      placeholder = { Text("Brief summary of your issue") },
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(12.dp)
+    )
+
+    OutlinedTextField(
+      value = message,
+      onValueChange = { message = it },
+      label = { Text("Detailed Description") },
+      placeholder = { Text("Please describe what happened, task name, or questions...") },
+      modifier = Modifier.fillMaxWidth(),
+      minLines = 4,
+      shape = RoundedCornerShape(12.dp)
+    )
+
+    Button(
+      onClick = {
+        onSubmitTicket?.invoke(subject.trim(), message.trim(), category)
+        isSubmitted = true
+      },
+      enabled = subject.trim().isNotBlank() && message.trim().isNotBlank(),
+      modifier = Modifier.fillMaxWidth().height(48.dp),
+      shape = RoundedCornerShape(12.dp)
+    ) {
+      Text("Submit Support Ticket")
     }
   }
 }

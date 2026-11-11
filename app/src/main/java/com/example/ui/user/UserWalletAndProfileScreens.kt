@@ -1053,7 +1053,8 @@ fun UserProfileScreen(
   submissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList()),
   activeSubScreen: ProfileSubScreen = ProfileSubScreen.MAIN,
   onNavigateSubScreen: ((ProfileSubScreen) -> Unit)? = null,
-  onNavigateScreen: ((String) -> Unit)? = null
+  onNavigateScreen: ((String) -> Unit)? = null,
+  onSubmitSupportTicket: ((String, String, String) -> Unit)? = null
 ) {
   var internalSubScreen by rememberSaveable { mutableStateOf(ProfileSubScreen.MAIN) }
   val currentSubScreen =
@@ -1122,7 +1123,8 @@ fun UserProfileScreen(
         onBack = { setSubScreen(ProfileSubScreen.MAIN) },
         onNavigateScreen = { target ->
           onNavigateScreen?.invoke(target)
-        }
+        },
+        onSubmitTicket = onSubmitSupportTicket
       )
       return
     }

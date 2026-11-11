@@ -146,13 +146,14 @@ object UnityAdsHelper {
   private const val BANNER_TAG = "UnityBanner"
   private const val DIAG_TAG = "UnityAdsDiag"
 
-  const val GAME_ID = "800430673"
+  // Verified Unity Dashboard Android Project Game ID
+  const val GAME_ID = "6091982"
   const val REWARDED_PLACEMENT_ID = "BP_Rewarded_Android"
   const val BANNER_PLACEMENT_ID = "BP_Banner_Android"
   const val INTERSTITIAL_PLACEMENT_ID = "BP_Interstitial_Android"
 
-  // Strict production configuration
-  const val TEST_MODE = false
+  // Controlled test mode enabled until physical device behavior is verified against live dashboard
+  const val TEST_MODE = true
 
   const val UNAVAILABLE_MESSAGE = "Video is currently unavailable. Please try again later."
   private const val AD_OPERATION_TIMEOUT_MS = 25_000L
@@ -455,7 +456,7 @@ object UnityAdsHelper {
   }
 
   /**
-   * Fetches and caches the Unity Publisher Configuration for GAME_ID (800430673) so we have
+   * Fetches and caches the Unity Publisher Configuration for GAME_ID (6091982) so we have
    * valid `token`, `properties`, `projectId`, and placement metadata for V6 auction requests.
    */
   private fun getOrFetchPublisherConfig(context: Context): JSONObject {

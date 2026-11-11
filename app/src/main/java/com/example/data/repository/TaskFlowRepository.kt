@@ -6,12 +6,14 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import android.util.Log
-import com.example.data.model.AdminRecord
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
+import com.example.data.model.CampaignItem
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
+import com.example.data.model.NotificationItem
 import com.example.data.model.SubmissionItem
+import com.example.data.model.SupportTicket
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TransactionRecord
@@ -29,13 +31,16 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.storage.FirebaseStorage
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeout
 
 data class UploadedProofPhoto(
   val downloadUrl: String,
@@ -49,6 +54,174 @@ fun interface ProofPhotoUploader {
     imageUri: Uri,
     onProgress: (Int) -> Unit
   ): UploadedProofPhoto
+}
+
+data class CreatedRewardSession(
+  val sessionId: String,
+  val rewardType: String,
+  val rewardCents: Long,
+  val streakDay: Int? = null,
+  val dateKey: String = ""
+)
+
+data class ClaimedRewardResult(
+  val rewardType: String,
+  val rewardCents: Long,
+  val newBalanceCents: Long = 0L,
+  val streakDay: Int? = null,
+  val videosWatched: Long = 0L,
+  val dateKey: String = ""
+)
+
+/**
+ * Trusted server-side reward operations client backed by Firebase Cloud Functions
+ * (`createRewardSession` and `claimRewardSession`).
+ *
+ * Client-side creation, S2S verification, or wallet crediting for ad rewards is prohibited.
+ */
+interface RewardCloudFunctionsClient {
+  suspend fun createRewardSession(
+    rewardType: String,
+    streakDay: Int? = null
+  ): CreatedRewardSession
+
+  suspend fun awaitSessionVerified(
+    userId: String,
+    sessionId: String
+  )
+
+  suspend fun claimRewardSession(
+    sessionId: String
+  ): ClaimedRewardResult
+
+  suspend fun claimDailyCheckIn(
+    streakDay: Int? = null
+  ): ClaimedRewardResult
+}
+
+class FirebaseRewardCloudFunctionsClient(
+  private val firestore: FirebaseFirestore,
+  private val functionsProvider: () -> FirebaseFunctions = { FirebaseFunctions.getInstance() }
+) : RewardCloudFunctionsClient {
+
+  override suspend fun claimDailyCheckIn(streakDay: Int?): ClaimedRewardResult =
+    withTimeout(10_000L) {
+      val payload = mutableMapOf<String, Any>()
+      if (streakDay != null) {
+        payload["streakDay"] = streakDay
+      }
+      val response =
+        functionsProvider()
+          .getHttpsCallable("claimDailyCheckIn")
+          .call(payload)
+          .await()
+      val dataMap = response.getData() as? Map<*, *>
+        ?: throw IllegalStateException("Empty response from claimDailyCheckIn Cloud Function.")
+      val rewardType = (dataMap["rewardType"] as? String)?.trim().orEmpty().ifEmpty { "DAILY_CHECKIN" }
+      val rewardCents = (dataMap["rewardCents"] as? Number)?.toLong()
+        ?: throw IllegalStateException("Missing rewardCents in claimDailyCheckIn response.")
+      val newBalanceCents = (dataMap["newBalanceCents"] as? Number)?.toLong() ?: 0L
+      val resolvedStreakDay = (dataMap["streakDay"] as? Number)?.toInt() ?: streakDay
+      val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty()
+      ClaimedRewardResult(
+        rewardType = rewardType,
+        rewardCents = rewardCents,
+        newBalanceCents = newBalanceCents,
+        streakDay = resolvedStreakDay,
+        videosWatched = 0L,
+        dateKey = dateKey
+      )
+    }
+
+  override suspend fun createRewardSession(
+    rewardType: String,
+    streakDay: Int?
+  ): CreatedRewardSession = withTimeout(10_000L) {
+    val payload = mutableMapOf<String, Any>("rewardType" to rewardType)
+    if (streakDay != null) {
+      payload["streakDay"] = streakDay
+    }
+    val response =
+      functionsProvider()
+        .getHttpsCallable("createRewardSession")
+        .call(payload)
+        .await()
+    val dataMap = response.getData() as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from createRewardSession Cloud Function.")
+    val sessionId = (dataMap["sessionId"] as? String)?.trim().orEmpty()
+    check(sessionId.isNotBlank()) {
+      "Cloud Function createRewardSession did not return a valid sessionId."
+    }
+    val resolvedType = (dataMap["rewardType"] as? String)?.trim().orEmpty().ifEmpty { rewardType }
+    val resolvedCents = (dataMap["rewardCents"] as? Number)?.toLong() ?: 100L
+    val resolvedStreak = (dataMap["streakDay"] as? Number)?.toInt() ?: streakDay
+    val resolvedDateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty()
+    CreatedRewardSession(
+      sessionId = sessionId,
+      rewardType = resolvedType,
+      rewardCents = resolvedCents,
+      streakDay = resolvedStreak,
+      dateKey = resolvedDateKey
+    )
+  }
+
+  override suspend fun awaitSessionVerified(userId: String, sessionId: String) {
+    val sessionRef = firestore.collection("reward_sessions").document(sessionId)
+    var lastStatus = "PENDING"
+    var isS2sVerified = false
+
+    for (attempt in 1..6) {
+      val snap = withTimeout(5_000L) { sessionRef.get().await() }
+      check(snap.exists()) { "Reward session does not exist." }
+      val ownerId = snap.getString("userId").orEmpty()
+      check(ownerId == userId) { "Reward session does not belong to current user." }
+      val used = snap.getBoolean("used") ?: false
+      val claimed = snap.getBoolean("claimed") ?: false
+      check(!used && !claimed) { "This reward session has already been used." }
+      val expiresAt = snap.getTimestamp("expiresAt")
+      check(expiresAt != null && expiresAt.toDate().time > System.currentTimeMillis()) {
+        "Reward session has expired. Please watch a new video."
+      }
+      lastStatus = snap.getString("status").orEmpty()
+      isS2sVerified = snap.getBoolean("s2sVerified") ?: false
+      if (isS2sVerified && lastStatus == "VERIFIED") {
+        return
+      }
+      if (attempt < 6) {
+        delay(500L)
+      }
+    }
+
+    check(isS2sVerified && lastStatus == "VERIFIED") {
+      "Reward video completion has not been verified by the server yet. Please try claiming in a moment."
+    }
+  }
+
+  override suspend fun claimRewardSession(sessionId: String): ClaimedRewardResult =
+    withTimeout(10_000L) {
+      val response =
+        functionsProvider()
+          .getHttpsCallable("claimRewardSession")
+          .call(mapOf("sessionId" to sessionId))
+          .await()
+      val dataMap = response.getData() as? Map<*, *>
+        ?: throw IllegalStateException("Empty response from claimRewardSession Cloud Function.")
+      val rewardType = (dataMap["rewardType"] as? String)?.trim().orEmpty()
+      val rewardCents = (dataMap["rewardCents"] as? Number)?.toLong()
+        ?: throw IllegalStateException("Missing rewardCents in claimRewardSession response.")
+      val newBalanceCents = (dataMap["newBalanceCents"] as? Number)?.toLong() ?: 0L
+      val streakDay = (dataMap["streakDay"] as? Number)?.toInt()
+      val videosWatched = (dataMap["videosWatched"] as? Number)?.toLong() ?: 0L
+      val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty()
+      ClaimedRewardResult(
+        rewardType = rewardType,
+        rewardCents = rewardCents,
+        newBalanceCents = newBalanceCents,
+        streakDay = streakDay,
+        videosWatched = videosWatched,
+        dateKey = dateKey
+      )
+    }
 }
 
 /**
@@ -176,14 +349,40 @@ class FirebaseStorageProofUploader(
 class TaskFlowRepository(
   private val firestore: FirebaseFirestore,
   private val authProvider: () -> FirebaseAuth = { Firebase.auth },
-  private val photoUploader: ProofPhotoUploader = FirebaseStorageProofUploader()
+  private val photoUploader: ProofPhotoUploader = FirebaseStorageProofUploader(),
+  private val rewardFunctionsClient: RewardCloudFunctionsClient =
+    FirebaseRewardCloudFunctionsClient(firestore)
 ) {
   private val usersCollection = firestore.collection("users")
+  private val leaderboardCollection = firestore.collection("leaderboard")
   private val tasksCollection = firestore.collection("tasks")
   private val submissionsCollection = firestore.collection("submissions")
   private val adminsCollection = firestore.collection("admins")
   private val withdrawalRequestsCollection = firestore.collection("withdrawal_requests")
   private val transactionsCollection = firestore.collection("transactions")
+  private val campaignsCollection = firestore.collection("campaigns")
+  private val supportTicketsCollection = firestore.collection("support_tickets")
+
+  /**
+   * Builds a privacy-safe public leaderboard document containing ONLY non-sensitive public fields
+   * (`userId`, `displayName`, `balanceCents`, `completedTasksCount`, `approvalStatus`, `updatedAt`)
+   * and NEVER `email`.
+   */
+  private fun buildLeaderboardPayload(
+    userId: String,
+    displayName: String,
+    balanceCents: Long,
+    completedTasksCount: Long,
+    approvalStatus: String
+  ): Map<String, Any> =
+    mapOf(
+      "userId" to userId,
+      "displayName" to displayName.trim().ifEmpty { "TaskFlow Member" },
+      "balanceCents" to balanceCents,
+      "completedTasksCount" to completedTasksCount,
+      "approvalStatus" to approvalStatus,
+      "updatedAt" to FieldValue.serverTimestamp()
+    )
 
   /**
    * Checks if the current user is an authorized administrator via `/admins/{uid}` (and bootstrapped owner).
@@ -242,8 +441,8 @@ class TaskFlowRepository(
   }
 
   /**
-   * Ensures the signed-in user has a document in `/users/{userId}` and, if they match the
-   * bootstrapped admin email, also initializes `/admins/{userId}` so security rules recognize them.
+   * Ensures the signed-in user has a document in `/users/{userId}`, syncs `/leaderboard/{userId}`
+   * (without private email), and if they match the bootstrapped admin email, also initializes `/admins/{userId}`.
    */
   suspend fun ensureUserProfile(
     uid: String,
@@ -276,6 +475,7 @@ class TaskFlowRepository(
     }
 
     val userDocRef = usersCollection.document(uid)
+    val leaderboardRef = leaderboardCollection.document(uid)
     val snapshot = userDocRef.get().await()
     if (!snapshot.exists()) {
       val initialRole = if (isBootstrappedAdmin) "admin" else "user"
@@ -294,20 +494,46 @@ class TaskFlowRepository(
           "createdAt" to FieldValue.serverTimestamp(),
           "updatedAt" to FieldValue.serverTimestamp()
         )
-      userDocRef.set(data).await()
+      val batch = firestore.batch()
+      batch.set(userDocRef, data)
+      batch.set(
+        leaderboardRef,
+        buildLeaderboardPayload(
+          userId = uid,
+          displayName = safeName,
+          balanceCents = 0L,
+          completedTasksCount = 0L,
+          approvalStatus = initialApproval
+        )
+      )
+      batch.commit().await()
     } else if (isBootstrappedAdmin) {
       val currentRole = snapshot.getString("role") ?: "user"
       val currentApproval = snapshot.getString("approvalStatus") ?: "pending"
+      val currentName = snapshot.getString("displayName") ?: safeName
+      val currentBalance = snapshot.getLong("balanceCents") ?: 0L
+      val currentCompleted = snapshot.getLong("completedTasksCount") ?: 0L
       if (currentRole != "admin" || currentApproval != "approved") {
-        userDocRef
-          .update(
-            mapOf(
-              "role" to "admin",
-              "approvalStatus" to "approved",
-              "updatedAt" to FieldValue.serverTimestamp()
-            )
+        val batch = firestore.batch()
+        batch.update(
+          userDocRef,
+          mapOf(
+            "role" to "admin",
+            "approvalStatus" to "approved",
+            "updatedAt" to FieldValue.serverTimestamp()
           )
-          .await()
+        )
+        batch.set(
+          leaderboardRef,
+          buildLeaderboardPayload(
+            userId = uid,
+            displayName = currentName,
+            balanceCents = currentBalance,
+            completedTasksCount = currentCompleted,
+            approvalStatus = "approved"
+          )
+        )
+        batch.commit().await()
       }
     }
 
@@ -342,7 +568,7 @@ class TaskFlowRepository(
   }
 
   /**
-   * Updates only the current user's displayName.
+   * Updates only the current user's displayName and syncs `/leaderboard/{uid}`.
    */
   suspend fun updateUserDisplayName(uid: String, newDisplayName: String): Result<Unit> =
     runCatching {
@@ -351,15 +577,28 @@ class TaskFlowRepository(
       require(cleaned.isNotEmpty() && cleaned.length <= 100) {
         "Display name must be between 1 and 100 characters."
       }
-      usersCollection
-        .document(uid)
-        .update(
-          mapOf(
-            "displayName" to cleaned,
-            "updatedAt" to FieldValue.serverTimestamp()
-          )
+      val userRef = usersCollection.document(uid)
+      val userSnap = userRef.get().await()
+      check(userSnap.exists()) { "User profile not found." }
+      val batch = firestore.batch()
+      batch.update(
+        userRef,
+        mapOf(
+          "displayName" to cleaned,
+          "updatedAt" to FieldValue.serverTimestamp()
         )
-        .await()
+      )
+      batch.set(
+        leaderboardCollection.document(uid),
+        buildLeaderboardPayload(
+          userId = uid,
+          displayName = cleaned,
+          balanceCents = userSnap.getLong("balanceCents") ?: 0L,
+          completedTasksCount = userSnap.getLong("completedTasksCount") ?: 0L,
+          approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
+        )
+      )
+      batch.commit().await()
     }
 
   private fun DocumentSnapshot.toTaskItem(): TaskItem? {
@@ -815,9 +1054,9 @@ class TaskFlowRepository(
   /**
    * Submits MANDATORY written text proof AND MANDATORY Gallery photo/screenshot proof for an open task.
    *
-   * Any active (non-suspended) authenticated user can submit proof on an active ('pending' and `isActive == true`) task.
-   * Uploads/persists the selected image first, then atomically updates `/tasks/{taskId}` to `submitted`
-   * (associating the submitting user's UID, name, and email) and creates `/submissions/{taskId}`.
+   * Security Requirement:
+   * ONLY approved (`approvalStatus == "approved"`) authenticated users can submit proof on an active task.
+   * Pending and suspended users are rejected.
    */
   suspend fun submitTaskProof(
     task: TaskItem,
@@ -837,7 +1076,7 @@ class TaskFlowRepository(
       "At least one photo or screenshot from your phone Gallery is mandatory."
     }
 
-    // 1. Ensure user profile exists and is active (not suspended)
+    // 1. Ensure user profile exists and is strictly approved (`approvalStatus == "approved"`)
     val userRef = usersCollection.document(uid)
     val userSnap = userRef.get().await()
     val resolvedEmail =
@@ -847,12 +1086,19 @@ class TaskFlowRepository(
         .trim()
         .ifEmpty { "TaskFlow User" }
 
-    if (!userSnap.exists()) {
-      ensureUserProfile(uid, resolvedEmail, resolvedName).getOrThrow()
-    } else {
-      val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
-      check(approvalStatus != "suspended") {
+    val approvalStatus =
+      if (!userSnap.exists()) {
+        val created = ensureUserProfile(uid, resolvedEmail, resolvedName).getOrThrow()
+        created.approvalStatus
+      } else {
+        userSnap.getString("approvalStatus") ?: "pending"
+      }
+
+    check(approvalStatus == "approved") {
+      if (approvalStatus == "suspended") {
         "Your account is currently suspended and cannot submit task proof."
+      } else {
+        "Your account is pending Admin approval and cannot submit task proof yet."
       }
     }
 
@@ -886,22 +1132,45 @@ class TaskFlowRepository(
     val latestAppIconUrl = latestTaskSnap.getString("appIconUrl") ?: task.appIconUrl
     val latestRewardCents = latestTaskSnap.getLong("rewardCents") ?: task.rewardCents
 
-    // 4. Atomically update /tasks/{taskId} and create /submissions/{taskId}
-    val submissionRef = submissionsCollection.document(task.id)
+    val isSingleAssigneePrivateTask =
+      task.assignedUserId == uid || (latestTaskSnap.getString("assignedUserId") == uid)
+
+    // Compute unique submissionId for multi-user isolation.
+    // For pre-assigned 1:1 private tasks, preserves legacy document ID; for pooled campaign tasks, uses composite ${task.id}_$uid
+    val submissionId = if (isSingleAssigneePrivateTask) task.id else "${task.id}_$uid"
+    val submissionRef = submissionsCollection.document(submissionId)
+
+    // Prevent duplicate submissions by the same user on the same task
+    val existingDirectSub = submissionRef.get().await()
+    check(!existingDirectSub.exists()) {
+      "You have already submitted proof for this task. Duplicate submissions are not allowed."
+    }
+    val existingMultiSub = submissionsCollection.document("${task.id}_$uid").get().await()
+    if (existingMultiSub.exists()) {
+      throw IllegalStateException("You have already submitted proof for this task. Duplicate submissions are not allowed.")
+    }
+    val existingLegacySub = submissionsCollection.document(task.id).get().await()
+    if (existingLegacySub.exists() && existingLegacySub.getString("userId") == uid) {
+      throw IllegalStateException("You have already submitted proof for this task. Duplicate submissions are not allowed.")
+    }
+
+    // 4. Atomically record submission proof with immutable audit trail
     val batch = firestore.batch()
-    batch.update(
-      taskRef,
-      mapOf(
-        "assignedUserId" to uid,
-        "assignedUserName" to resolvedName,
-        "assignedUserEmail" to resolvedEmail.ifEmpty { "user@taskflow.app" },
-        "status" to TaskStatus.SUBMITTED,
-        "proofText" to cleanedProofText,
-        "proofImageUrl" to uploadedPhoto.downloadUrl,
-        "proofStoragePath" to uploadedPhoto.storagePath,
-        "updatedAt" to FieldValue.serverTimestamp()
+    if (isSingleAssigneePrivateTask) {
+      batch.update(
+        taskRef,
+        mapOf(
+          "assignedUserId" to uid,
+          "assignedUserName" to resolvedName,
+          "assignedUserEmail" to resolvedEmail.ifEmpty { "user@taskflow.app" },
+          "status" to TaskStatus.SUBMITTED,
+          "proofText" to cleanedProofText,
+          "proofImageUrl" to uploadedPhoto.downloadUrl,
+          "proofStoragePath" to uploadedPhoto.storagePath,
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
       )
-    )
+    }
     batch.set(
       submissionRef,
       mapOf(
@@ -956,8 +1225,8 @@ class TaskFlowRepository(
 
   /**
    * Reviews a submitted task (Approve or Reject) atomically.
-   * When approved, credits the submitting user's `balanceCents` and increments `completedTasksCount`
-   * in the same batch as updating `/tasks/{taskId}` and `/submissions/{taskId}`.
+   * When approved, credits the submitting user's `balanceCents`, increments `completedTasksCount`,
+   * syncs `/leaderboard/{userId}`, and logs a `TASK_REWARD` transaction in the same batch.
    */
   suspend fun reviewSubmission(
     task: TaskItem,
@@ -971,40 +1240,52 @@ class TaskFlowRepository(
       }
     require(cleanedFeedback.length <= 1000) { "Feedback must be under 1000 characters." }
 
-    val taskRef = tasksCollection.document(task.id)
-    val submissionRef = submissionsCollection.document(task.id)
-
-    val latestTaskSnap = taskRef.get().await()
-    check(latestTaskSnap.exists()) { "Task ${task.id} does not exist." }
-    val currentTaskStatus = latestTaskSnap.getString("status") ?: ""
-    check(currentTaskStatus == TaskStatus.SUBMITTED) {
-      "Task ${task.id} must be in 'Pending Review' status to review (current: $currentTaskStatus)."
+    val directSubRef = submissionsCollection.document(task.id)
+    val directSubSnap = directSubRef.get().await()
+    val (submissionRef, latestSubSnap) = if (directSubSnap.exists()) {
+      directSubRef to directSubSnap
+    } else {
+      val multiId = "${task.id}_${task.assignedUserId.trim()}"
+      val multiSubRef = submissionsCollection.document(multiId)
+      val multiSubSnap = multiSubRef.get().await()
+      if (multiSubSnap.exists()) {
+        multiSubRef to multiSubSnap
+      } else {
+        throw IllegalStateException("Submission record for task ${task.id} does not exist.")
+      }
     }
 
-    val latestSubSnap = submissionRef.get().await()
-    check(latestSubSnap.exists()) {
-      "Submission record for task ${task.id} does not exist."
-    }
     val currentSubStatus = latestSubSnap.getString("status") ?: ""
     check(currentSubStatus == TaskStatus.SUBMITTED) {
-      "Submission ${task.id} has already been reviewed (status: $currentSubStatus)."
+      "Submission ${submissionRef.id} has already been reviewed (status: $currentSubStatus)."
     }
 
+    val actualTaskId = latestSubSnap.getString("taskId") ?: task.id
+    val taskRef = tasksCollection.document(actualTaskId)
+    val latestTaskSnap = taskRef.get().await()
+
     val submittingUserId =
-      (latestSubSnap.getString("userId") ?: latestTaskSnap.getString("assignedUserId") ?: task.assignedUserId)
+      (latestSubSnap.getString("userId")
+          ?: latestTaskSnap.getString("assignedUserId")
+          ?: task.assignedUserId)
         .trim()
-    val rewardCents = latestTaskSnap.getLong("rewardCents") ?: task.rewardCents
+    val rewardCents = latestSubSnap.getLong("rewardCents") ?: latestTaskSnap.getLong("rewardCents") ?: task.rewardCents
     val newStatus = if (approve) TaskStatus.APPROVED else TaskStatus.REJECTED
 
+    val userRef = usersCollection.document(submittingUserId)
+    val userSnap = if (approve && submittingUserId.isNotBlank()) userRef.get().await() else null
+
     val batch = firestore.batch()
-    batch.update(
-      taskRef,
-      mapOf(
-        "status" to newStatus,
-        "adminFeedback" to cleanedFeedback,
-        "updatedAt" to FieldValue.serverTimestamp()
+    if (latestTaskSnap.exists() && latestTaskSnap.getString("status") == TaskStatus.SUBMITTED) {
+      batch.update(
+        taskRef,
+        mapOf(
+          "status" to newStatus,
+          "adminFeedback" to cleanedFeedback,
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
       )
-    )
+    }
     batch.update(
       submissionRef,
       mapOf(
@@ -1015,20 +1296,36 @@ class TaskFlowRepository(
     )
 
     if (approve && submittingUserId.isNotBlank()) {
-      val userRef = usersCollection.document(submittingUserId)
+      val currentBalance = userSnap?.getLong("balanceCents") ?: 0L
+      val currentCompleted = userSnap?.getLong("completedTasksCount") ?: 0L
+      val currentApproval = userSnap?.getString("approvalStatus") ?: "approved"
+      val submittingUserName =
+        (userSnap?.getString("displayName")
+            ?: latestSubSnap.getString("userName")
+            ?: task.assignedUserName)
+          .ifEmpty { "TaskFlow Member" }
+
       batch.update(
         userRef,
         mapOf(
           "balanceCents" to FieldValue.increment(rewardCents),
           "completedTasksCount" to FieldValue.increment(1L),
-          "assignedTaskId" to task.id,
+          "assignedTaskId" to actualTaskId,
           "updatedAt" to FieldValue.serverTimestamp()
         )
       )
+      batch.set(
+        leaderboardCollection.document(submittingUserId),
+        buildLeaderboardPayload(
+          userId = submittingUserId,
+          displayName = submittingUserName,
+          balanceCents = currentBalance + rewardCents,
+          completedTasksCount = currentCompleted + 1L,
+          approvalStatus = currentApproval
+        )
+      )
       val txRef = transactionsCollection.document()
-      val submittingUserName =
-        (latestSubSnap.getString("userName") ?: task.assignedUserName).ifEmpty { "TaskFlow Member" }
-      val taskTitle = (latestTaskSnap.getString("title") ?: task.title).ifEmpty { "Task" }
+      val taskTitle = (latestSubSnap.getString("taskTitle") ?: latestTaskSnap.getString("title") ?: task.title).ifEmpty { "Task" }
       batch.set(
         txRef,
         mapOf(
@@ -1038,7 +1335,7 @@ class TaskFlowRepository(
           "title" to "Task Reward: ${taskTitle.take(60)}",
           "amountCents" to rewardCents,
           "status" to "CREDITED",
-          "referenceId" to task.id,
+          "referenceId" to submissionRef.id,
           "createdAt" to FieldValue.serverTimestamp()
         )
       )
@@ -1048,7 +1345,7 @@ class TaskFlowRepository(
   }
 
   /**
-   * Admin updates a user's `approvalStatus` (`approved`, `pending`, `suspended`).
+   * Admin updates a user's `approvalStatus` (`approved`, `pending`, `suspended`) and syncs `/leaderboard/{userId}`.
    */
   suspend fun updateUserApprovalStatus(userId: String, approvalStatus: String): Result<Unit> =
     runCatching {
@@ -1056,21 +1353,35 @@ class TaskFlowRepository(
       require(approvalStatus in listOf("approved", "pending", "suspended")) {
         "Invalid approvalStatus: $approvalStatus"
       }
-      usersCollection
-        .document(userId)
-        .update(
-          mapOf(
-            "approvalStatus" to approvalStatus,
-            "updatedAt" to FieldValue.serverTimestamp()
-          )
+      val userRef = usersCollection.document(userId)
+      val userSnap = userRef.get().await()
+      check(userSnap.exists()) { "User profile $userId not found." }
+      val batch = firestore.batch()
+      batch.update(
+        userRef,
+        mapOf(
+          "approvalStatus" to approvalStatus,
+          "updatedAt" to FieldValue.serverTimestamp()
         )
-        .await()
+      )
+      batch.set(
+        leaderboardCollection.document(userId),
+        buildLeaderboardPayload(
+          userId = userId,
+          displayName = userSnap.getString("displayName") ?: "TaskFlow Member",
+          balanceCents = userSnap.getLong("balanceCents") ?: 0L,
+          completedTasksCount = userSnap.getLong("completedTasksCount") ?: 0L,
+          approvalStatus = approvalStatus
+        )
+      )
+      batch.commit().await()
     }
 
   /**
    * Submits a safe demo-only withdrawal request to `/withdrawal_requests/{requestId}`.
    *
    * Security & Privacy Guarantees:
+   * - Requires `approvalStatus == "approved"` (pending and suspended users are rejected).
    * - Never collects or stores bank account numbers, IFSC codes, bank names, or UPI IDs in Firestore.
    * - Validates minimum withdrawal amount of ₹200.00 (20,000 paise).
    * - Validates that the requested amount does not exceed the user's available wallet balance.
@@ -1097,8 +1408,12 @@ class TaskFlowRepository(
     val userSnap = usersCollection.document(uid).get().await()
     check(userSnap.exists()) { "User profile not found." }
     val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
-    check(approvalStatus != "suspended") {
-      "Suspended accounts cannot submit withdrawal requests."
+    check(approvalStatus == "approved") {
+      if (approvalStatus == "suspended") {
+        "Suspended accounts cannot submit withdrawal requests."
+      } else {
+        "Pending accounts cannot submit withdrawal requests until approved by Admin."
+      }
     }
     val availableBalanceCents = userSnap.getLong("balanceCents") ?: 0L
     require(amountCents <= availableBalanceCents) {
@@ -1217,7 +1532,12 @@ class TaskFlowRepository(
   }
 
   /**
-   * Claims daily check-in reward for the current user and records the transaction atomically.
+   * Claims daily check-in reward exclusively through the server-side `claimRewardSession` Cloud Function.
+   *
+   * Security Invariants:
+   * - Days 1–6 = 100 paise (₹1.00), Day 7 = 500 paise (₹5.00).
+   * - Requires a server-created & S2S-verified session ID (`verifiedAdCallbackToken`).
+   * - Never performs direct client-side writes to `users.balanceCents`, `check_ins`, or `transactions`.
    */
   suspend fun claimDailyCheckIn(
     userId: String,
@@ -1229,49 +1549,20 @@ class TaskFlowRepository(
   ): Result<Long> = runCatching {
     require(userId.isNotBlank()) { "userId must not be blank" }
     require(streakDay in 1..7) { "streakDay must be between 1 and 7" }
-    require(rewardCents == 100L || rewardCents == 500L || rewardCents == 700L) { "Invalid check-in reward" }
+    val expectedRewardCents = DailyCheckInConstants.getRewardForDay(streakDay)
+    require(rewardCents == expectedRewardCents) {
+      "Invalid check-in reward for Day $streakDay: expected $expectedRewardCents paise."
+    }
     require(dateKey.isNotBlank() && dateKey.length == 10) { "Invalid dateKey format" }
-
-    val userRef = usersCollection.document(userId)
-    val checkInDocRef = userRef.collection("check_ins").document(dateKey)
-    val transactionRef = transactionsCollection.document()
-
-    val batch = firestore.batch()
-    batch.set(
-      checkInDocRef,
-      mapOf(
-        "userId" to userId,
-        "dateKey" to dateKey,
-        "streakDay" to streakDay,
-        "rewardCents" to rewardCents,
-        "claimedAt" to FieldValue.serverTimestamp()
-      )
-    )
-    batch.update(
-      userRef,
-      mapOf(
-        "balanceCents" to FieldValue.increment(rewardCents),
-        "checkInStreak" to streakDay.toLong(),
-        "lastCheckInDate" to dateKey,
-        "lastCheckInTimestamp" to FieldValue.serverTimestamp(),
-        "updatedAt" to FieldValue.serverTimestamp()
-      )
-    )
-    batch.set(
-      transactionRef,
-      mapOf(
-        "userId" to userId,
-        "userName" to userName.trim().ifEmpty { "TaskFlow Member" },
-        "type" to TransactionType.DAILY_CHECKIN,
-        "title" to "Day $streakDay Daily Check-in Reward",
-        "amountCents" to rewardCents,
-        "status" to "CREDITED",
-        "referenceId" to dateKey,
-        "createdAt" to FieldValue.serverTimestamp()
-      )
-    )
-    batch.commit().await()
-    rewardCents
+    val sessionId = verifiedAdCallbackToken?.trim().orEmpty()
+    if (sessionId.isNotBlank()) {
+      rewardFunctionsClient.awaitSessionVerified(userId, sessionId)
+      val claimed = rewardFunctionsClient.claimRewardSession(sessionId)
+      claimed.rewardCents
+    } else {
+      val claimed = rewardFunctionsClient.claimDailyCheckIn(streakDay)
+      claimed.rewardCents
+    }
   }
 
   /**
@@ -1328,12 +1619,29 @@ class TaskFlowRepository(
     awaitClose { listener.remove() }
   }
 
+  private fun DocumentSnapshot.toPublicLeaderboardProfile(): UserProfile? {
+    val uid = (getString("userId") ?: id).trim()
+    if (uid.isEmpty()) return null
+    return UserProfile(
+      id = uid,
+      userId = uid,
+      email = "", // Strictly omitted for privacy on public leaderboard
+      displayName = (getString("displayName") ?: "TaskFlow Member").trim(),
+      role = "user",
+      approvalStatus = getString("approvalStatus") ?: "approved",
+      balanceCents = getLong("balanceCents") ?: 0L,
+      completedTasksCount = getLong("completedTasksCount") ?: 0L,
+      updatedAt = getTimestamp("updatedAt")
+    )
+  }
+
   /**
-   * Observes approved users ordered by balance for the Leaderboard.
+   * Observes approved users ordered by balance from the privacy-safe `/leaderboard` projection
+   * without querying `/users` or exposing private user email addresses.
    */
   fun observeLeaderboardUsers(): Flow<List<UserProfile>> = callbackFlow {
     val listener =
-      usersCollection
+      leaderboardCollection
         .whereEqualTo("approvalStatus", "approved")
         .addSnapshotListener { snapshot, error ->
           if (error != null) {
@@ -1343,7 +1651,7 @@ class TaskFlowRepository(
           val items =
             snapshot
               ?.documents
-              ?.mapNotNull { it.toObject(UserProfile::class.java) }
+              ?.mapNotNull { it.toPublicLeaderboardProfile() }
               ?.sortedByDescending { it.balanceCents }
               ?.take(50)
               ?: emptyList()
@@ -1353,7 +1661,18 @@ class TaskFlowRepository(
   }
 
   /**
-   * Allows an Admin to update any user's display name.
+   * One-shot fetch of the privacy-safe `/leaderboard` entries.
+   */
+  suspend fun getLeaderboardUsers(): Result<List<UserProfile>> = runCatching {
+    val snap = leaderboardCollection.whereEqualTo("approvalStatus", "approved").get().await()
+    snap.documents
+      .mapNotNull { it.toPublicLeaderboardProfile() }
+      .sortedByDescending { it.balanceCents }
+      .take(50)
+  }
+
+  /**
+   * Allows an Admin to update any user's display name and syncs `/leaderboard/{targetUserId}`.
    */
   suspend fun updateUserDisplayNameByAdmin(
     targetUserId: String,
@@ -1364,19 +1683,29 @@ class TaskFlowRepository(
     require(cleaned.isNotEmpty() && cleaned.length <= 100) {
       "Display name must be between 1 and 100 characters."
     }
-    usersCollection
-      .document(targetUserId)
-      .update(
-        mapOf(
-          "displayName" to cleaned,
-          "updatedAt" to FieldValue.serverTimestamp()
-        )
+    val userRef = usersCollection.document(targetUserId)
+    val userSnap = userRef.get().await()
+    check(userSnap.exists()) { "User profile $targetUserId not found." }
+    val batch = firestore.batch()
+    batch.update(
+      userRef,
+      mapOf(
+        "displayName" to cleaned,
+        "updatedAt" to FieldValue.serverTimestamp()
       )
-      .await()
+    )
+    batch.set(
+      leaderboardCollection.document(targetUserId),
+      buildLeaderboardPayload(
+        userId = targetUserId,
+        displayName = cleaned,
+        balanceCents = userSnap.getLong("balanceCents") ?: 0L,
+        completedTasksCount = userSnap.getLong("completedTasksCount") ?: 0L,
+        approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
+      )
+    )
+    batch.commit().await()
   }
-
-  private val rewardSessionsCollection
-    get() = firestore.collection("reward_sessions")
 
   private val watchStatsCollection
     get() = firestore.collection("watch_stats")
@@ -1386,8 +1715,8 @@ class TaskFlowRepository(
 
   /**
    * Creates a unique, time-limited reward session bound to [userId] for Daily Check-In (Days 1–7,
-   * including Day 7 ₹5 bonus) before loading and showing a Unity Rewarded Video ad.
-   * No client-side in-memory session fallback is permitted.
+   * Days 1–6 = 100 paise, Day 7 = 500 paise) exclusively via the `createRewardSession` Cloud Function.
+   * No client-side Firestore or in-memory session fallback is permitted.
    */
   suspend fun createDailyCheckInSession(
     userId: String,
@@ -1396,8 +1725,12 @@ class TaskFlowRepository(
     rewardCents: Long
   ): Result<String> = runCatching {
     require(userId.isNotBlank()) { "User authentication is required." }
-    require(dateKey.isNotBlank()) { "Invalid dateKey." }
+    require(dateKey.isNotBlank() && dateKey.length == 10) { "Invalid dateKey." }
     require(streakDay in 1..7) { "Invalid streakDay." }
+    val expectedReward = DailyCheckInConstants.getRewardForDay(streakDay)
+    require(rewardCents == expectedReward) {
+      "Invalid reward amount for Day $streakDay (expected $expectedReward paise)."
+    }
 
     val authUid = authProvider().currentUser?.uid
     if (authUid.isNullOrBlank()) {
@@ -1419,84 +1752,47 @@ class TaskFlowRepository(
       throw IllegalStateException("Authenticated user mismatch.")
     }
 
+    val userSnap = usersCollection.document(userId).get().await()
+    check(userSnap.exists()) { "User profile not found." }
+    val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
+    check(approvalStatus == "approved") {
+      "Your account must be approved by an administrator before claiming daily check-in rewards."
+    }
+    val lastCheckInDate = userSnap.getString("lastCheckInDate").orEmpty()
+    check(lastCheckInDate != dateKey) {
+      "You have already claimed today's daily check-in reward."
+    }
+
     Log.i(
       "WatchEarnFlow",
-      "[DailyCheckIn] Starting createRewardSession request for Day $streakDay (rewardCents=$rewardCents)"
+      "[DailyCheckIn] Starting createRewardSession Cloud Function for Day $streakDay (rewardCents=$rewardCents)"
     )
 
-    var callableError: Throwable? = null
-    val cloudFunctionSessionId =
-      runCatching {
-        kotlinx.coroutines.withTimeout(6_000L) {
-          val callable =
-            com.google.firebase.functions.FirebaseFunctions.getInstance()
-              .getHttpsCallable("createRewardSession")
-          val response =
-            callable.call(mapOf("rewardType" to "DAILY_CHECK_IN", "streakDay" to streakDay)).await()
-          val dataMap = response.getData() as? Map<*, *>
-          (dataMap?.get("sessionId") as? String)?.trim().orEmpty()
-        }
-      }.onFailure { err ->
-        callableError = err
-        Log.w(
-          "WatchEarnFlow",
-          "[DailyCheckIn] Callable createRewardSession failed (${err.javaClass.simpleName}: ${err.message})"
-        )
-      }.getOrNull()?.takeIf { it.isNotBlank() }
-
-    if (cloudFunctionSessionId != null) {
+    try {
+      val created = rewardFunctionsClient.createRewardSession("DAILY_CHECK_IN", streakDay)
       com.example.util.UnityAdsHelper.recordRewardSessionResult(
         success = true,
         source = "CloudFunction:createRewardSession(DAILY_CHECK_IN)"
       )
-      return@runCatching cloudFunctionSessionId
-    }
-
-    val randomBytes = ByteArray(16)
-    java.security.SecureRandom().nextBytes(randomBytes)
-    val sessionId = randomBytes.joinToString("") { "%02x".format(it) }
-    val nowMillis = System.currentTimeMillis()
-    val expiresAt = com.google.firebase.Timestamp(java.util.Date(nowMillis + 10 * 60 * 1000L))
-
-    val sessionRef = rewardSessionsCollection.document(sessionId)
-    try {
-      sessionRef
-        .set(
-          mapOf(
-            "sessionId" to sessionId,
-            "userId" to userId,
-            "rewardType" to "DAILY_CHECK_IN",
-            "rewardCents" to rewardCents,
-            "status" to "PENDING",
-            "used" to false,
-            "claimed" to false,
-            "createdAt" to FieldValue.serverTimestamp(),
-            "expiresAt" to expiresAt
-          )
-        )
-        .await()
-      com.example.util.UnityAdsHelper.recordRewardSessionResult(
-        success = true,
-        source = "Firestore:/reward_sessions(DAILY_CHECK_IN)"
-      )
-      sessionId
-    } catch (fsErr: Throwable) {
-      val fnMsg = callableError?.let { "${it.javaClass.simpleName}: ${it.message}" } ?: "N/A"
-      val fsCode = (fsErr as? FirebaseFirestoreException)?.code?.name ?: fsErr.javaClass.simpleName
+      created.sessionId
+    } catch (fnErr: Throwable) {
+      val fnCode =
+        (fnErr as? com.google.firebase.functions.FirebaseFunctionsException)?.code?.name
+          ?: fnErr.javaClass.simpleName
       com.example.util.UnityAdsHelper.recordRewardSessionResult(
         success = false,
-        source = "createRewardSession",
-        errorCode = fsCode,
-        errorMessage = "Callable=[$fnMsg], Firestore=[${fsErr.message}]"
+        source = "CloudFunction:createRewardSession(DAILY_CHECK_IN)",
+        errorCode = fnCode,
+        errorMessage = fnErr.message ?: "Cloud Function createRewardSession failed"
       )
-      throw fsErr
+      throw fnErr
     }
   }
 
   /**
    * Step 3 & 4 of Watch & Earn: Creates a unique, unpredictable, time-limited reward session
-   * bound to the authenticated Firebase user before loading and showing a Unity Rewarded Video ad.
-   * Strictly requires server/Firestore persistence — never fabricates untrusted local sessions.
+   * bound to the authenticated Firebase user exclusively via the `createRewardSession` Cloud Function.
+   * No client-side Firestore `/reward_sessions` creation fallback is permitted.
    */
   suspend fun createWatchEarnSession(
     userId: String,
@@ -1529,6 +1825,13 @@ class TaskFlowRepository(
       throw IllegalStateException("Authenticated user mismatch.")
     }
 
+    val userSnap = usersCollection.document(userId).get().await()
+    check(userSnap.exists()) { "User profile not found." }
+    val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
+    check(approvalStatus == "approved") {
+      "Your account must be approved by an administrator before earning ad rewards."
+    }
+
     Log.i("WatchEarnFlow", "[Step 3] Starting Firebase createRewardSession request (dateKey=$dateKey)")
 
     // 1. Check daily 25-video limit across both subcollection (/users/{uid}/watch_stats/{dateKey})
@@ -1558,102 +1861,35 @@ class TaskFlowRepository(
     }
 
     // 2. Call authenticated backend Cloud Function 'createRewardSession'
-    var callableError: Throwable? = null
-    val cloudFunctionSessionId =
-      runCatching {
-        kotlinx.coroutines.withTimeout(6_000L) {
-          val callable =
-            com.google.firebase.functions.FirebaseFunctions.getInstance()
-              .getHttpsCallable("createRewardSession")
-          val response =
-            callable.call(mapOf("rewardType" to "WATCH_AND_EARN")).await()
-          val dataMap = response.getData() as? Map<*, *>
-          val sid = (dataMap?.get("sessionId") as? String)?.trim().orEmpty()
-          if (sid.isNotBlank()) {
-            Log.i(
-              "WatchEarnFlow",
-              "[Step 4] Callable createRewardSession succeeded"
-            )
-          }
-          sid
-        }
-      }.onFailure { fnErr ->
-        callableError = fnErr
-        Log.w(
-          "WatchEarnFlow",
-          "[Step 3] Callable createRewardSession failed (${fnErr.javaClass.simpleName}: ${fnErr.message})"
-        )
-      }.getOrNull()?.takeIf { it.isNotBlank() }
-
-    if (cloudFunctionSessionId != null) {
+    try {
+      val created = rewardFunctionsClient.createRewardSession("WATCH_AND_EARN", null)
       com.example.util.UnityAdsHelper.recordRewardSessionResult(
         success = true,
         source = "CloudFunction:createRewardSession(WATCH_AND_EARN)"
       )
-      return@runCatching cloudFunctionSessionId
-    }
-
-    // 3. Persist server-validated session record in /reward_sessions/{sessionId} (enforced by Firestore Security Rules)
-    val randomBytes = ByteArray(16)
-    java.security.SecureRandom().nextBytes(randomBytes)
-    val sessionId = randomBytes.joinToString("") { "%02x".format(it) }
-
-    val nowMillis = System.currentTimeMillis()
-    val expiresAtMillis = nowMillis + 10 * 60 * 1000L
-    val expiresAt = com.google.firebase.Timestamp(java.util.Date(expiresAtMillis))
-
-    val sessionRef = rewardSessionsCollection.document(sessionId)
-    try {
-      sessionRef
-        .set(
-          mapOf(
-            "sessionId" to sessionId,
-            "userId" to userId,
-            "rewardType" to "WATCH_AND_EARN",
-            "rewardCents" to 100L,
-            "status" to "PENDING",
-            "used" to false,
-            "claimed" to false,
-            "createdAt" to FieldValue.serverTimestamp(),
-            "expiresAt" to expiresAt
-          )
-        )
-        .await()
-      Log.i(
-        "WatchEarnFlow",
-        "[Step 4] Reward session persisted in Firestore /reward_sessions (expiresAtMillis=$expiresAtMillis)"
-      )
-      com.example.util.UnityAdsHelper.recordRewardSessionResult(
-        success = true,
-        source = "Firestore:/reward_sessions(WATCH_AND_EARN)"
-      )
-      sessionId
-    } catch (fsErr: Throwable) {
+      created.sessionId
+    } catch (fnErr: Throwable) {
       val fnCode =
-        (callableError as? com.google.firebase.functions.FirebaseFunctionsException)?.code?.name
-          ?: callableError?.javaClass?.simpleName
-          ?: "NONE"
-      val fnMsg = callableError?.message ?: "Not called"
-      val fsCode =
-        (fsErr as? FirebaseFirestoreException)?.code?.name ?: fsErr.javaClass.simpleName
+        (fnErr as? com.google.firebase.functions.FirebaseFunctionsException)?.code?.name
+          ?: fnErr.javaClass.simpleName
       Log.e(
         "WatchEarnFlow",
-        "[Step 4] Both callable createRewardSession ($fnCode: $fnMsg) and Firestore /reward_sessions ($fsCode: ${fsErr.message}) failed."
+        "[Step 4] Callable createRewardSession failed ($fnCode: ${fnErr.message})"
       )
       com.example.util.UnityAdsHelper.recordRewardSessionResult(
         success = false,
-        source = "createRewardSession",
-        errorCode = "CF:$fnCode / FS:$fsCode",
-        errorMessage = "CF=[$fnMsg], FS=[${fsErr.message}]"
+        source = "CloudFunction:createRewardSession(WATCH_AND_EARN)",
+        errorCode = fnCode,
+        errorMessage = fnErr.message ?: "Cloud Function createRewardSession failed"
       )
-      throw fsErr
+      throw fnErr
     }
   }
 
   /**
-   * Step 2 of Watch & Earn: Marks a pending reward session in Firestore `/reward_sessions/{sessionId}`
-   * as VERIFIED only after the full rewarded video completes playback (`COMPLETED` state).
-   * Strictly validates ownership, single-use status, and expiration inside an atomic Firestore transaction.
+   * Step 2 of Watch & Earn: Confirms that `/reward_sessions/{sessionId}` has been verified by the
+   * Unity S2S callback (`s2sVerified == true && status == "VERIFIED"`).
+   * Never mutates `/reward_sessions` from the client.
    */
   suspend fun verifyWatchEarnSessionCompleted(
     userId: String,
@@ -1662,46 +1898,14 @@ class TaskFlowRepository(
     require(userId.isNotBlank()) { "User authentication is required." }
     require(sessionId.isNotBlank()) { "Valid reward session ID is required." }
 
-    val sessionRef = rewardSessionsCollection.document(sessionId)
-    firestore
-      .runTransaction { transaction ->
-        val snap = transaction.get(sessionRef)
-        if (!snap.exists()) {
-          throw IllegalStateException("Reward session does not exist.")
-        }
-        val ownerId = snap.getString("userId") ?: ""
-        if (ownerId != userId) {
-          throw IllegalStateException("Reward session does not belong to current user.")
-        }
-        val used = snap.getBoolean("used") ?: false
-        val claimed = snap.getBoolean("claimed") ?: false
-        if (used || claimed) {
-          throw IllegalStateException("This reward session has already been used.")
-        }
-        val expiresAt = snap.getTimestamp("expiresAt")
-        if (expiresAt == null || expiresAt.toDate().time <= System.currentTimeMillis()) {
-          throw IllegalStateException("Reward session has expired. Please watch a new video.")
-        }
-        val currentStatus = snap.getString("status") ?: "PENDING"
-        if (currentStatus == "PENDING") {
-          transaction.update(
-            sessionRef,
-            mapOf(
-              "status" to "VERIFIED",
-              "used" to false,
-              "claimed" to false
-            )
-          )
-        }
-      }
-      .await()
-    Log.i("WatchEarnFlow", "Reward session verified in Firestore: sessionId=$sessionId")
+    rewardFunctionsClient.awaitSessionVerified(userId, sessionId)
+    Log.i("WatchEarnFlow", "Confirmed server-side S2S verification for sessionId=$sessionId")
   }
 
   /**
-   * Step 3 of Watch & Earn: Atomically claims a VERIFIED, unused, unexpired reward session
-   * when the user taps the "Claim" button. Marks the session used/claimed so it can never
-   * be claimed more than once, updates daily watch stats, credits wallet balance, and logs a transaction.
+   * Step 3 of Watch & Earn: Claims a server-verified (`s2sVerified == true`), unused, unexpired
+   * reward session exclusively through the `claimRewardSession` Cloud Function when the user taps "Claim".
+   * Never performs direct client-side writes to `users.balanceCents`, `watch_stats`, or `transactions`.
    */
   suspend fun claimVerifiedWatchEarnSession(
     userId: String,
@@ -1713,159 +1917,16 @@ class TaskFlowRepository(
     require(sessionId.isNotBlank()) { "sessionId must not be blank" }
     require(dateKey.isNotBlank()) { "Invalid dateKey" }
 
-    val sessionRef = rewardSessionsCollection.document(sessionId)
-    val userRef = usersCollection.document(userId)
-    val statId = "${userId}_$dateKey"
-    val watchStatRef = watchStatsCollection.document(statId)
-    val userWatchStatRef = userWatchStatsCollection(userId).document(dateKey)
-    val transactionRef = transactionsCollection.document()
-
-    val rewardCents = 100L // ₹1.00 per verified video
-
-    firestore
-      .runTransaction { transaction ->
-        val sessionSnap = transaction.get(sessionRef)
-        if (!sessionSnap.exists()) {
-          throw IllegalStateException("Invalid reward session.")
-        }
-        val sessionOwner = sessionSnap.getString("userId") ?: ""
-        if (sessionOwner != userId) {
-          throw IllegalStateException("Reward session belongs to another user.")
-        }
-        val used = sessionSnap.getBoolean("used") ?: false
-        val claimed = sessionSnap.getBoolean("claimed") ?: false
-        val status = sessionSnap.getString("status") ?: ""
-        val s2sVerified = sessionSnap.getBoolean("s2sVerified") ?: false
-        if (used || claimed || status == "CLAIMED") {
-          throw IllegalStateException("Reward has already been claimed for this video.")
-        }
-        if (status != "VERIFIED" && !s2sVerified) {
-          throw IllegalStateException("Video completion has not been verified yet.")
-        }
-        val expiresAt = sessionSnap.getTimestamp("expiresAt")
-        if (expiresAt == null || expiresAt.toDate().time <= System.currentTimeMillis()) {
-          throw IllegalStateException("Reward session has expired.")
-        }
-
-        val subStatSnap = transaction.get(userWatchStatRef)
-        val topStatSnap = transaction.get(watchStatRef)
-
-        val currentVideos =
-          maxOf(
-            subStatSnap.getLong("videosWatched") ?: 0L,
-            topStatSnap.getLong("videosWatched") ?: 0L
-          )
-        val currentEarned =
-          maxOf(
-            subStatSnap.getLong("totalEarnedCents") ?: 0L,
-            topStatSnap.getLong("totalEarnedCents") ?: 0L
-          )
-
-        if (currentVideos >= 25L) {
-          throw IllegalStateException("Daily limit of 25 watched videos reached.")
-        }
-        if (currentEarned + rewardCents > 4000L) {
-          throw IllegalStateException("Daily Watch & Earn limit reached.")
-        }
-
-        val newVideos = currentVideos + 1L
-        val newEarned = currentEarned + rewardCents
-
-        // 1. Mark session as CLAIMED & used=true (single-use enforcement)
-        transaction.update(
-          sessionRef,
-          mapOf(
-            "status" to "CLAIMED",
-            "used" to true,
-            "claimed" to true
-          )
-        )
-
-        // 2A. Update /users/{userId}/watch_stats/{dateKey}
-        if (subStatSnap.exists()) {
-          transaction.update(
-            userWatchStatRef,
-            mapOf(
-              "userId" to userId,
-              "dateKey" to dateKey,
-              "videosWatched" to newVideos,
-              "totalEarnedCents" to newEarned,
-              "updatedAt" to FieldValue.serverTimestamp()
-            )
-          )
-        } else {
-          transaction.set(
-            userWatchStatRef,
-            mapOf(
-              "userId" to userId,
-              "dateKey" to dateKey,
-              "videosWatched" to 1L,
-              "totalEarnedCents" to 100L,
-              "updatedAt" to FieldValue.serverTimestamp()
-            )
-          )
-        }
-
-        // 2B. Update top-level /watch_stats/{statId}
-        if (topStatSnap.exists()) {
-          transaction.update(
-            watchStatRef,
-            mapOf(
-              "userId" to userId,
-              "dateKey" to dateKey,
-              "videosWatched" to newVideos,
-              "totalEarnedCents" to newEarned,
-              "updatedAt" to FieldValue.serverTimestamp()
-            )
-          )
-        } else {
-          transaction.set(
-            watchStatRef,
-            mapOf(
-              "userId" to userId,
-              "dateKey" to dateKey,
-              "videosWatched" to 1L,
-              "totalEarnedCents" to 100L,
-              "updatedAt" to FieldValue.serverTimestamp()
-            )
-          )
-        }
-
-        // 3. Credit user wallet balance
-        transaction.update(
-          userRef,
-          mapOf(
-            "balanceCents" to FieldValue.increment(rewardCents),
-            "updatedAt" to FieldValue.serverTimestamp()
-          )
-        )
-
-        // 4. Record transaction history entry
-        transaction.set(
-          transactionRef,
-          mapOf(
-            "userId" to userId,
-            "userName" to userName.trim().ifEmpty { "TaskFlow Member" },
-            "type" to TransactionType.WATCH_EARN,
-            "title" to "Watch & Earn Video Reward ($newVideos/25)",
-            "amountCents" to rewardCents,
-            "status" to "CREDITED",
-            "referenceId" to sessionId,
-            "createdAt" to FieldValue.serverTimestamp()
-          )
-        )
-      }
-      .await()
-
+    val claimed = rewardFunctionsClient.claimRewardSession(sessionId.trim())
     Log.i(
       "WatchEarnFlow",
-      "Claimed verified Watch & Earn reward (+100 paise)"
+      "Claimed server-verified Watch & Earn reward (+${claimed.rewardCents} paise)"
     )
-    rewardCents
+    claimed.rewardCents
   }
 
   /**
-   * Convenience wrapper that executes the full verified session claim.
+   * Convenience wrapper that claims a verified Watch & Earn session by ID via the Cloud Function.
    */
   suspend fun claimWatchEarnReward(
     userId: String,
@@ -1873,15 +1934,10 @@ class TaskFlowRepository(
     dateKey: String,
     sessionId: String = ""
   ): Result<Long> = runCatching {
-    val resolvedSessionId =
-      if (sessionId.isNotBlank()) {
-        sessionId
-      } else {
-        val created = createWatchEarnSession(userId, dateKey).getOrThrow()
-        verifyWatchEarnSessionCompleted(userId, created).getOrThrow()
-        created
-      }
-    claimVerifiedWatchEarnSession(userId, userName, resolvedSessionId, dateKey).getOrThrow()
+    require(sessionId.isNotBlank()) {
+      "A server-verified reward session ID is required to claim Watch & Earn rewards."
+    }
+    claimVerifiedWatchEarnSession(userId, userName, sessionId, dateKey).getOrThrow()
   }
 
   fun observeWatchStats(uid: String, dateKey: String): Flow<com.example.data.model.WatchStats> =
@@ -1935,5 +1991,168 @@ class TaskFlowRepository(
         topListener.remove()
       }
     }
-}
 
+  // ==========================================
+  // CAMPAIGNS (Client / Partner Management)
+  // ==========================================
+
+  fun observeCampaigns(): Flow<List<CampaignItem>> = callbackFlow {
+    val listener = campaignsCollection.addSnapshotListener { snapshot, error ->
+      if (error != null) {
+        close(error)
+        return@addSnapshotListener
+      }
+      val items = snapshot?.documents?.mapNotNull { it.toObject(CampaignItem::class.java) }
+        ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+      trySend(items)
+    }
+    awaitClose { listener.remove() }
+  }
+
+  suspend fun createCampaign(
+    title: String,
+    clientName: String,
+    description: String,
+    budgetCents: Long,
+    targetSubmissions: Long,
+    category: String,
+    rewardPerTaskCents: Long
+  ): Result<String> = runCatching {
+    require(title.isNotBlank()) { "Campaign title cannot be blank" }
+    require(clientName.isNotBlank()) { "Client/Partner name cannot be blank" }
+    require(budgetCents > 0) { "Campaign budget must be greater than 0" }
+    val docRef = campaignsCollection.document()
+    val data = mapOf(
+      "title" to title.trim(),
+      "clientName" to clientName.trim(),
+      "description" to description.trim(),
+      "budgetCents" to budgetCents,
+      "spentCents" to 0L,
+      "targetSubmissions" to targetSubmissions,
+      "completedSubmissions" to 0L,
+      "status" to "ACTIVE",
+      "category" to category.trim().ifEmpty { "App Install" },
+      "rewardPerTaskCents" to rewardPerTaskCents,
+      "createdAt" to FieldValue.serverTimestamp(),
+      "updatedAt" to FieldValue.serverTimestamp()
+    )
+    docRef.set(data).await()
+    docRef.id
+  }
+
+  suspend fun updateCampaignStatus(campaignId: String, newStatus: String): Result<Unit> = runCatching {
+    require(campaignId.isNotBlank()) { "campaignId cannot be blank" }
+    campaignsCollection.document(campaignId).update(
+      mapOf(
+        "status" to newStatus,
+        "updatedAt" to FieldValue.serverTimestamp()
+      )
+    ).await()
+  }
+
+  // ==========================================
+  // IN-APP NOTIFICATIONS
+  // ==========================================
+
+  fun observeUserNotifications(userId: String): Flow<List<NotificationItem>> = callbackFlow {
+    if (userId.isBlank()) {
+      trySend(emptyList())
+      close()
+      return@callbackFlow
+    }
+    val listener = usersCollection.document(userId).collection("notifications")
+      .addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          trySend(emptyList())
+          return@addSnapshotListener
+        }
+        val items = snapshot?.documents?.mapNotNull { it.toObject(NotificationItem::class.java) }
+          ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+        trySend(items)
+      }
+    awaitClose { listener.remove() }
+  }
+
+  suspend fun markNotificationRead(userId: String, notificationId: String): Result<Unit> = runCatching {
+    if (userId.isBlank() || notificationId.isBlank()) return@runCatching
+    usersCollection.document(userId).collection("notifications").document(notificationId)
+      .update("isRead", true).await()
+  }
+
+  // ==========================================
+  // SUPPORT TICKETS / INQUIRIES
+  // ==========================================
+
+  fun observeUserSupportTickets(userId: String): Flow<List<SupportTicket>> = callbackFlow {
+    if (userId.isBlank()) {
+      trySend(emptyList())
+      close()
+      return@callbackFlow
+    }
+    val listener = supportTicketsCollection.whereEqualTo("userId", userId)
+      .addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          trySend(emptyList())
+          return@addSnapshotListener
+        }
+        val items = snapshot?.documents?.mapNotNull { it.toObject(SupportTicket::class.java) }
+          ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+        trySend(items)
+      }
+    awaitClose { listener.remove() }
+  }
+
+  fun observeAllSupportTickets(): Flow<List<SupportTicket>> = callbackFlow {
+    val listener = supportTicketsCollection.addSnapshotListener { snapshot, error ->
+      if (error != null) {
+        close(error)
+        return@addSnapshotListener
+      }
+      val items = snapshot?.documents?.mapNotNull { it.toObject(SupportTicket::class.java) }
+        ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+      trySend(items)
+    }
+    awaitClose { listener.remove() }
+  }
+
+  suspend fun createSupportTicket(
+    userId: String,
+    userName: String,
+    userEmail: String,
+    subject: String,
+    message: String,
+    category: String = "General"
+  ): Result<String> = runCatching {
+    require(userId.isNotBlank()) { "userId must not be blank" }
+    require(subject.isNotBlank()) { "Subject is required" }
+    require(message.isNotBlank()) { "Message is required" }
+    val docRef = supportTicketsCollection.document()
+    val data = mapOf(
+      "userId" to userId,
+      "userName" to userName.trim().ifEmpty { "User" },
+      "userEmail" to userEmail.trim().ifEmpty { "user@taskflow.app" },
+      "category" to category,
+      "subject" to subject.trim(),
+      "message" to message.trim(),
+      "status" to "OPEN",
+      "createdAt" to FieldValue.serverTimestamp()
+    )
+    docRef.set(data).await()
+    docRef.id
+  }
+
+  suspend fun updateSupportTicketStatus(
+    ticketId: String,
+    status: String,
+    adminNotes: String
+  ): Result<Unit> = runCatching {
+    require(ticketId.isNotBlank()) { "ticketId must not be blank" }
+    supportTicketsCollection.document(ticketId).update(
+      mapOf(
+        "status" to status,
+        "adminNotes" to adminNotes.trim(),
+        "updatedAt" to FieldValue.serverTimestamp()
+      )
+    ).await()
+  }
+}

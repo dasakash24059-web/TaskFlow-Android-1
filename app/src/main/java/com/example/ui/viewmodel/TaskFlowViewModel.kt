@@ -7,11 +7,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
+import com.example.data.model.CampaignItem
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DailyCheckInState
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
+import com.example.data.model.NotificationItem
 import com.example.data.model.SubmissionItem
+import com.example.data.model.SupportTicket
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TransactionRecord
@@ -68,7 +71,8 @@ enum class AdminTab {
   TASKS,
   SUBMISSIONS,
   USERS,
-  WITHDRAWALS
+  WITHDRAWALS,
+  CAMPAIGNS
 }
 
 class TaskFlowViewModel(
@@ -256,6 +260,33 @@ class TaskFlowViewModel(
       }
       .map<List<TransactionRecord>, UiState<List<TransactionRecord>>> { UiState.Success(it) }
       .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load all transactions")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  val campaignsState: StateFlow<UiState<List<CampaignItem>>> =
+    repository.observeCampaigns()
+      .map<List<CampaignItem>, UiState<List<CampaignItem>>> { UiState.Success(it) }
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load campaigns")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  val userNotificationsState: StateFlow<List<NotificationItem>> =
+    repository.observeUserNotifications(currentUserId)
+      .catch { emit(emptyList()) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+  val userSupportTicketsState: StateFlow<List<SupportTicket>> =
+    repository.observeUserSupportTickets(currentUserId)
+      .catch { emit(emptyList()) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  val adminSupportTicketsState: StateFlow<UiState<List<SupportTicket>>> =
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        if (authorized) repository.observeAllSupportTickets()
+        else kotlinx.coroutines.flow.flowOf(emptyList())
+      }
+      .map<List<SupportTicket>, UiState<List<SupportTicket>>> { UiState.Success(it) }
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load support tickets")) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
 
   init {
@@ -745,63 +776,25 @@ class TaskFlowViewModel(
 
     viewModelScope.launch {
       _isBusy.value = true
-      if (activity == null) {
-        _isBusy.value = false
-        _bannerMessage.value = com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
-        return@launch
-      }
-
-      val sessionResult =
-        repository.createDailyCheckInSession(
+      repository
+        .claimDailyCheckIn(
           userId = uid,
-          dateKey = todayKey,
           streakDay = targetStreak,
-          rewardCents = rewardCents
+          rewardCents = rewardCents,
+          dateKey = todayKey,
+          userName = name,
+          verifiedAdCallbackToken = null
         )
-      val sessionId =
-        sessionResult.getOrElse { err ->
-          _isBusy.value = false
+        .onSuccess { earned ->
           _bannerMessage.value =
-            err.localizedMessage ?: com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
-          return@launch
+            "Success! Day $targetStreak check-in claimed: +${formatRewardInr(earned)}"
+          onSuccess(earned)
         }
-
-      com.example.util.UnityAdsHelper.loadAndShowRewardedAdForSession(
-        activity = activity,
-        sessionId = sessionId,
-        onAdShowing = {
-          android.util.Log.i("WatchEarnFlow", "[DailyCheckIn] Showing video ad for Day $targetStreak")
-        },
-        onVideoCompleted = {
-          viewModelScope.launch {
-            repository.verifyWatchEarnSessionCompleted(uid, sessionId)
-            repository
-              .claimDailyCheckIn(
-                userId = uid,
-                streakDay = targetStreak,
-                rewardCents = rewardCents,
-                dateKey = todayKey,
-                userName = name,
-                verifiedAdCallbackToken = sessionId
-              )
-              .onSuccess { earned ->
-                _bannerMessage.value =
-                  "Success! Day $targetStreak check-in claimed: +${formatRewardInr(earned)}"
-                onSuccess(earned)
-              }
-              .onFailure { error ->
-                _bannerMessage.value =
-                  error.localizedMessage ?: "Failed to claim check-in reward."
-              }
-            _isBusy.value = false
-          }
-        },
-        onFailed = { errorMsg ->
-          _isBusy.value = false
+        .onFailure { error ->
           _bannerMessage.value =
-            errorMsg.ifBlank { com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE }
+            error.localizedMessage ?: "Failed to claim check-in reward."
         }
-      )
+      _isBusy.value = false
     }
   }
 
@@ -1413,6 +1406,123 @@ class TaskFlowViewModel(
 
   fun setDailyCheckInScreenVisible(visible: Boolean) {
     _isDailyCheckInScreenVisible.value = visible
+  }
+
+  // ==========================================
+  // CAMPAIGNS (Client / Partner Management)
+  // ==========================================
+
+  fun createCampaign(
+    title: String,
+    clientName: String,
+    description: String,
+    budgetCents: Long,
+    targetSubmissions: Long,
+    category: String,
+    rewardPerTaskCents: Long,
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value) return
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository.createCampaign(
+        title = title,
+        clientName = clientName,
+        description = description,
+        budgetCents = budgetCents,
+        targetSubmissions = targetSubmissions,
+        category = category,
+        rewardPerTaskCents = rewardPerTaskCents
+      ).onSuccess {
+        _bannerMessage.value = "Campaign '$title' launched successfully!"
+        onSuccess()
+      }.onFailure { err ->
+        _bannerMessage.value = err.localizedMessage ?: "Failed to create campaign."
+      }
+      _isBusy.value = false
+    }
+  }
+
+  fun updateCampaignStatus(campaignId: String, newStatus: String) {
+    if (!isAdminAuthorized.value) return
+    viewModelScope.launch {
+      repository.updateCampaignStatus(campaignId, newStatus)
+        .onSuccess {
+          _bannerMessage.value = "Campaign status updated to $newStatus"
+        }
+        .onFailure { err ->
+          _bannerMessage.value = err.localizedMessage ?: "Failed to update campaign status."
+        }
+    }
+  }
+
+  // ==========================================
+  // IN-APP NOTIFICATIONS
+  // ==========================================
+
+  private val _showNotificationDialog = MutableStateFlow(false)
+  val showNotificationDialog: StateFlow<Boolean> = _showNotificationDialog.asStateFlow()
+
+  fun setNotificationDialogVisible(visible: Boolean) {
+    _showNotificationDialog.value = visible
+  }
+
+  fun markNotificationRead(notificationId: String) {
+    viewModelScope.launch {
+      repository.markNotificationRead(currentUserId, notificationId)
+    }
+  }
+
+  // ==========================================
+  // SUPPORT TICKETS / INQUIRIES
+  // ==========================================
+
+  private val _showSupportTicketDialog = MutableStateFlow(false)
+  val showSupportTicketDialog: StateFlow<Boolean> = _showSupportTicketDialog.asStateFlow()
+
+  fun setSupportTicketDialogVisible(visible: Boolean) {
+    _showSupportTicketDialog.value = visible
+  }
+
+  fun createSupportTicket(
+    subject: String,
+    message: String,
+    category: String = "General",
+    onSuccess: () -> Unit = {}
+  ) {
+    val name = (userProfileState.value as? UiState.Success)?.data?.displayName ?: currentUserDisplayName
+    val email = currentUserEmail
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository.createSupportTicket(
+        userId = currentUserId,
+        userName = name,
+        userEmail = email,
+        subject = subject,
+        message = message,
+        category = category
+      ).onSuccess {
+        _bannerMessage.value = "Support ticket submitted. Our team will review it shortly."
+        _showSupportTicketDialog.value = false
+        onSuccess()
+      }.onFailure { err ->
+        _bannerMessage.value = err.localizedMessage ?: "Failed to submit ticket."
+      }
+      _isBusy.value = false
+    }
+  }
+
+  fun updateSupportTicketStatus(ticketId: String, status: String, notes: String = "") {
+    if (!isAdminAuthorized.value) return
+    viewModelScope.launch {
+      repository.updateSupportTicketStatus(ticketId, status, notes)
+        .onSuccess {
+          _bannerMessage.value = "Ticket marked as $status"
+        }
+        .onFailure { err ->
+          _bannerMessage.value = err.localizedMessage ?: "Failed to update ticket."
+        }
+    }
   }
 }
 

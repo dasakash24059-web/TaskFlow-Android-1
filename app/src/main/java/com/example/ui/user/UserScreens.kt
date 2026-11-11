@@ -1452,7 +1452,7 @@ fun UserTaskDetailScreen(
   BackHandler(onBack = onBack)
 
   val context = LocalContext.current
-  val isUserActive = userApprovalStatus != "suspended"
+  val isUserActive = userApprovalStatus == "approved"
   val isTaskAvailable = task.isActive && task.status == TaskStatus.PENDING
   val isTaskOwnerOrUnspecified = currentUserId.isBlank() || task.assignedUserId == currentUserId
   val appOrWebsiteName = resolveAppOrWebsiteLabel(task)

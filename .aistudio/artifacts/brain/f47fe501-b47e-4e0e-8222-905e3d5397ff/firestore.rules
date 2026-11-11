@@ -3,17 +3,10 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 1. Global Safety Net (Default Deny)
-    match /{document=**} {
-      allow read, write: if false;
-    }
+    // =========================================================================
+    // 1. GLOBAL SECURITY & VALIDATION PRIMITIVES
+    // =========================================================================
 
-    // Explicit Denial for Actual Withdrawals / Real Payouts (Completely disabled)
-    match /withdrawals/{withdrawalId} {
-      allow read, write: if false;
-    }
-
-    // 2. Core Security Primitives
     function isSignedIn() {
       return request.auth != null;
     }
@@ -26,694 +19,878 @@ service cloud.firestore {
       return resource.data;
     }
 
-    function isValidId(id) {
-      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    function changedKeys() {
+      return incoming().diff(existing()).affectedKeys();
     }
 
-    // Requires all three:
-    // 1. Signed-in user
-    // 2. Token email matches expectedEmail
-    // 3. request.auth.token.email_verified == true
-    function hasVerifiedTokenEmail(expectedEmail) {
+    function hasExactKeys(allowedKeys) {
+      return incoming().keys().hasOnly(allowedKeys) &&
+             incoming().keys().hasAll(allowedKeys);
+    }
+
+    function isNonEmptyString(val, maxLen) {
+      return val is string && val.size() > 0 && val.size() <= maxLen;
+    }
+
+    function isOptionalString(val, maxLen) {
+      return val is string && val.size() <= maxLen;
+    }
+
+    function isValidHttpsTaskLink(val) {
+      return val is string &&
+             val.size() <= 1000 &&
+             (val == '' || val.matches('^https://[^\\s]+\\.[^\\s]+.*$'));
+    }
+
+    function isValidIconOrImageField(val) {
+      return val is string &&
+             val.size() <= 350000 &&
+             (
+               val == '' ||
+               val.matches('^https://[^\\s]+\\.[^\\s]+.*$') ||
+               val.matches('^data:image/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=]+$')
+             );
+    }
+
+    function isValidProofImageUrl(val) {
+      return val is string &&
+             val.size() > 0 &&
+             val.size() <= 350000 &&
+             (
+               val.matches('^https://[^\\s]+\\.[^\\s]+.*$') ||
+               val.matches('^data:image/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=]+$')
+             );
+    }
+
+    // Bootstrapped Owner / Admin email check with mandatory verified email token claim
+    function isBootstrappedAdmin() {
       return isSignedIn() &&
              ('email' in request.auth.token) &&
-             request.auth.token.email is string &&
-             request.auth.token.email == expectedEmail &&
+             request.auth.token.email == 'dasakash24059@gmail.com' &&
              ('email_verified' in request.auth.token) &&
              request.auth.token.email_verified == true;
     }
 
-    // Cross-document state helpers (Pre-operation vs. Post-batch/transaction state)
-    function getUserData(uid) {
-      return get(/databases/$(database)/documents/users/$(uid)).data;
-    }
-
-    function getUserAfterData(uid) {
-      return getAfter(/databases/$(database)/documents/users/$(uid)).data;
-    }
-
-    function getTaskData(taskId) {
-      return get(/databases/$(database)/documents/tasks/$(taskId)).data;
-    }
-
-    function getTaskAfterData(taskId) {
-      return getAfter(/databases/$(database)/documents/tasks/$(taskId)).data;
-    }
-
-    function getSubmissionData(subId) {
-      return get(/databases/$(database)/documents/submissions/$(subId)).data;
-    }
-
-    function getSubmissionAfterData(subId) {
-      return getAfter(/databases/$(database)/documents/submissions/$(subId)).data;
-    }
-
-    // Root Bootstrap Owner Check (Verified token email ONLY)
-    function isVerifiedAdminEmail() {
-      return hasVerifiedTokenEmail('dasakash24059@gmail.com');
-    }
-
-    // Trusted Admin Check
+    // Secure Admin verification:
+    // Checks custom token claim `admin == true`, verified bootstrap owner email,
+    // or existence of `/admins/$(request.auth.uid)` document.
+    // NEVER trusts client-editable `/users/{uid}.role`.
     function isAdmin() {
       return isSignedIn() && (
         (('admin' in request.auth.token) && request.auth.token.admin == true) ||
-        isVerifiedAdminEmail() ||
+        isBootstrappedAdmin() ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
 
-    // Checks that a user profile exists and is active (not suspended)
+    // Strict Approved User check:
+    // ONLY users with `approvalStatus == 'approved'` are permitted to perform
+    // approved-user-only operations (submitting task proofs, creating withdrawal requests).
+    // Pending (`pending`) and suspended (`suspended`) users are strictly blocked.
     function isApprovedUser(uid) {
-      let user = getUserData(uid);
-      return exists(/databases/$(database)/documents/users/$(uid)) &&
-             (user.approvalStatus == 'approved' || user.approvalStatus == 'pending');
+      let userPath = /databases/$(database)/documents/users/$(uid);
+      return exists(userPath) &&
+             get(userPath).data.approvalStatus == 'approved';
     }
 
-    function isAtomicTaskApprovalMatch(taskId, userId, beforeBalance, afterBalance, beforeCount, afterCount) {
-      let taskBefore = getTaskData(taskId);
-      let taskAfter = getTaskAfterData(taskId);
-      let subBefore = getSubmissionData(taskId);
-      let subAfter = getSubmissionAfterData(taskId);
-      return taskBefore.assignedUserId == userId &&
-             taskAfter.assignedUserId == userId &&
-             subBefore.userId == userId &&
-             subAfter.userId == userId &&
-             subBefore.taskId == taskId &&
-             subAfter.taskId == taskId &&
-             taskBefore.status == 'submitted' &&
-             subBefore.status == 'submitted' &&
-             taskAfter.status == 'approved' &&
-             subAfter.status == 'approved' &&
-             taskAfter.adminFeedback == subAfter.adminFeedback &&
-             taskBefore.rewardCents == subBefore.rewardCents &&
-             taskAfter.rewardCents == taskBefore.rewardCents &&
-             subAfter.rewardCents == subBefore.rewardCents &&
-             afterBalance == beforeBalance + taskBefore.rewardCents &&
-             afterCount == beforeCount + 1;
-    }
+    // =========================================================================
+    // 2. USER PROFILE VALIDATION (/users/{userId})
+    // =========================================================================
 
-    // Atomic Batch Validator for Task Approval & Reward Credit:
-    function isAtomicTaskApprovalForUser(taskId, userId, beforeBalance, afterBalance, beforeCount, afterCount) {
-      return isValidId(taskId) &&
-             exists(/databases/$(database)/documents/tasks/$(taskId)) &&
-             exists(/databases/$(database)/documents/submissions/$(taskId)) &&
-             existsAfter(/databases/$(database)/documents/tasks/$(taskId)) &&
-             existsAfter(/databases/$(database)/documents/submissions/$(taskId)) &&
-             isAtomicTaskApprovalMatch(taskId, userId, beforeBalance, afterBalance, beforeCount, afterCount);
-    }
-
-    // Validates that an admin update to /users/{userId}.assignedTaskId is atomically consistent
-    function isConsistentUserTaskAssignment(userId) {
-      let prevTaskId = existing().assignedTaskId;
-      let nextTaskId = incoming().assignedTaskId;
-      return !('assignedTaskId' in incoming().diff(existing()).affectedKeys()) ||
+    function isValidUserCreate(userId) {
+      let isBootstrap = isBootstrappedAdmin();
+      let hasVerifiedEmail = ('email_verified' in request.auth.token) &&
+                             request.auth.token.email_verified == true;
+      return incoming().keys().hasOnly([
+               'userId',
+               'email',
+               'displayName',
+               'role',
+               'approvalStatus',
+               'balanceCents',
+               'virtualPoints',
+               'completedTasksCount',
+               'assignedTaskId',
+               'createdAt',
+               'updatedAt'
+             ]) &&
+             incoming().keys().hasAll([
+               'userId',
+               'email',
+               'displayName',
+               'role',
+               'approvalStatus',
+               'balanceCents',
+               'completedTasksCount',
+               'assignedTaskId',
+               'createdAt',
+               'updatedAt'
+             ]) &&
+             hasVerifiedEmail &&
+             incoming().userId == userId &&
+             isNonEmptyString(incoming().email, 254) &&
+             isNonEmptyString(incoming().displayName, 100) &&
+             incoming().balanceCents is int &&
+             incoming().balanceCents == 0 &&
+             (!('virtualPoints' in incoming()) || (incoming().virtualPoints is int && incoming().virtualPoints == 0)) &&
+             incoming().completedTasksCount is int &&
+             incoming().completedTasksCount == 0 &&
+             incoming().assignedTaskId == '' &&
+             incoming().createdAt is timestamp &&
+             incoming().updatedAt is timestamp &&
              (
-               (nextTaskId == '' || nextTaskId == null) &&
-               (
-                 !('assignedTaskId' in existing()) ||
-                 prevTaskId == '' ||
-                 prevTaskId == null ||
-                 !existsAfter(/databases/$(database)/documents/tasks/$(prevTaskId)) ||
-                 getTaskAfterData(prevTaskId).assignedUserId != userId
-               )
-             ) ||
-             (
-               isValidId(nextTaskId) &&
-               existsAfter(/databases/$(database)/documents/tasks/$(nextTaskId)) &&
-               getTaskAfterData(nextTaskId).assignedUserId == userId
+               (isBootstrap && incoming().role == 'admin' && incoming().approvalStatus == 'approved') ||
+               (!isBootstrap && incoming().role == 'user' && incoming().approvalStatus == 'pending')
              );
     }
 
-    // 3. Schema Validation Blueprints (Anti-Update-Gap)
-    function isValidUserProfile(data) {
-      return data.userId is string && isValidId(data.userId) &&
-             data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
-             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
-             data.role is string && (data.role == 'user' || data.role == 'admin') &&
-             data.approvalStatus is string && (data.approvalStatus == 'approved' || data.approvalStatus == 'pending' || data.approvalStatus == 'suspended') &&
-             data.balanceCents is int && data.balanceCents >= 0 && data.balanceCents <= 1000000000 &&
-             (!('virtualPoints' in data) || (data.virtualPoints is int && data.virtualPoints >= 0 && data.virtualPoints <= 1000000)) &&
-             data.completedTasksCount is int && data.completedTasksCount >= 0 && data.completedTasksCount <= 1000000 &&
-             (!('assignedTaskId' in data) || data.assignedTaskId == null || (data.assignedTaskId is string && data.assignedTaskId.size() <= 128)) &&
-             (!('lastCheckInDate' in data) || data.lastCheckInDate is string) &&
-             (!('checkInStreak' in data) || data.checkInStreak is int) &&
-             (!('lastCheckInTimestamp' in data) || data.lastCheckInTimestamp == null || data.lastCheckInTimestamp is timestamp) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    // Regular user can ONLY update their own displayName and updatedAt.
+    // All client-side modifications to balanceCents, role, approvalStatus, checkInStreak,
+    // or lastCheckInDate are strictly prohibited.
+    function isValidOwnerDisplayNameUpdate(userId) {
+      return request.auth.uid == userId &&
+             changedKeys().hasOnly(['displayName', 'updatedAt']) &&
+             isNonEmptyString(incoming().displayName, 100) &&
+             incoming().balanceCents == existing().balanceCents &&
+             incoming().role == existing().role &&
+             incoming().approvalStatus == existing().approvalStatus &&
+             incoming().updatedAt is timestamp;
     }
 
-    function isValidTask(data) {
-      return data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
-             (!('appName' in data) || (data.appName is string && data.appName.size() <= 120)) &&
-             (!('appIconUrl' in data) || (data.appIconUrl is string && data.appIconUrl.size() <= 350000)) &&
-             data.description is string && data.description.size() >= 1 && data.description.size() <= 2000 &&
-             (!('instructions' in data) || (data.instructions is string && data.instructions.size() <= 4000)) &&
-             (!('requiredProof' in data) || (data.requiredProof is string && data.requiredProof.size() <= 2000)) &&
-             (!('taskLink' in data) || (data.taskLink is string && data.taskLink.size() <= 1000 && (data.taskLink == '' || data.taskLink.matches('^https://.+')))) &&
-             data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
-             data.rewardCents is int && data.rewardCents >= 1 && data.rewardCents <= 10000000 &&
-             data.assignedUserId is string && isValidId(data.assignedUserId) &&
-             data.assignedUserName is string && data.assignedUserName.size() >= 1 && data.assignedUserName.size() <= 100 &&
-             data.assignedUserEmail is string && data.assignedUserEmail.size() >= 3 && data.assignedUserEmail.size() <= 254 &&
-             data.status is string && (data.status == 'pending' || data.status == 'submitted' || data.status == 'approved' || data.status == 'rejected') &&
-             (!('isActive' in data) || data.isActive is bool) &&
-             data.proofText is string && data.proofText.size() <= 4000 &&
-             (!('proofImageUrl' in data) || (data.proofImageUrl is string && data.proofImageUrl.size() <= 350000)) &&
-             (!('proofStoragePath' in data) || (data.proofStoragePath is string && data.proofStoragePath.size() <= 500)) &&
-             data.adminFeedback is string && data.adminFeedback.size() <= 1000 &&
-             data.createdBy is string && isValidId(data.createdBy) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    // Bootstrapped admin self-elevation if profile was created before bootstrap check
+    function isBootstrapAdminSelfInit(userId) {
+      return isBootstrappedAdmin() &&
+             request.auth.uid == userId &&
+             changedKeys().hasOnly(['role', 'approvalStatus', 'updatedAt']) &&
+             incoming().role == 'admin' &&
+             incoming().approvalStatus == 'approved' &&
+             incoming().balanceCents == existing().balanceCents &&
+             incoming().updatedAt is timestamp;
     }
 
-    function isValidSubmission(data) {
-      return data.taskId is string && isValidId(data.taskId) &&
-             data.taskTitle is string && data.taskTitle.size() >= 1 && data.taskTitle.size() <= 120 &&
-             (!('appName' in data) || (data.appName is string && data.appName.size() <= 120)) &&
-             (!('appIconUrl' in data) || (data.appIconUrl is string && data.appIconUrl.size() <= 350000)) &&
-             data.rewardCents is int && data.rewardCents >= 1 && data.rewardCents <= 10000000 &&
-             data.userId is string && isValidId(data.userId) &&
-             data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 100 &&
-             data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 254 &&
-             data.proofText is string && data.proofText.size() >= 1 && data.proofText.size() <= 4000 &&
-             data.proofImageUrl is string && data.proofImageUrl.size() >= 1 && data.proofImageUrl.size() <= 350000 &&
-             data.proofStoragePath is string && data.proofStoragePath.size() >= 1 && data.proofStoragePath.size() <= 500 &&
-             data.status is string && (data.status == 'submitted' || data.status == 'approved' || data.status == 'rejected') &&
-             data.adminFeedback is string && data.adminFeedback.size() <= 1000 &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    // Admin updating a user's approvalStatus ('pending', 'approved', 'suspended')
+    function isValidAdminUserStatusUpdate() {
+      return isAdmin() &&
+             changedKeys().hasOnly(['approvalStatus', 'updatedAt']) &&
+             (
+               incoming().approvalStatus == 'approved' ||
+               incoming().approvalStatus == 'pending' ||
+               incoming().approvalStatus == 'suspended'
+             ) &&
+             incoming().balanceCents == existing().balanceCents &&
+             incoming().updatedAt is timestamp;
     }
 
-    function isValidDemoWithdrawalRequest(data) {
-      let userProfile = getUserData(request.auth.uid);
-      return data.requestId is string && isValidId(data.requestId) &&
-             data.userId is string && data.userId == request.auth.uid &&
-             data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 100 &&
-             data.amountCents is int && data.amountCents >= 20000 && data.amountCents <= 1000000000 &&
-             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-             data.amountCents <= userProfile.balanceCents &&
-             data.method is string && (data.method == 'Bank Account' || data.method == 'UPI ID') &&
-             data.status == 'pending_demo' &&
-             data.isDemo == true &&
-             data.createdAt is timestamp && data.createdAt <= request.time;
+    // Admin updating a user's displayName
+    function isValidAdminDisplayNameUpdate() {
+      return isAdmin() &&
+             changedKeys().hasOnly(['displayName', 'updatedAt']) &&
+             isNonEmptyString(incoming().displayName, 100) &&
+             incoming().balanceCents == existing().balanceCents &&
+             incoming().updatedAt is timestamp;
     }
 
-    function isValidAdminRecord(data) {
-      return data.userId is string && isValidId(data.userId) &&
-             data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
-             data.createdAt is timestamp && data.createdAt <= request.time;
+    function isTaskAssignedToUserAfter(taskId, userId) {
+      let taskPath = /databases/$(database)/documents/tasks/$(taskId);
+      return existsAfter(taskPath) &&
+             getAfter(taskPath).data.assignedUserId == userId;
     }
 
-    function isMatchingSubmissionAfter(taskId) {
-      let subAfter = getSubmissionAfterData(taskId);
-      return subAfter.taskId == taskId &&
-             subAfter.userId == request.auth.uid &&
-             subAfter.status == 'submitted' &&
-             subAfter.proofText == incoming().proofText &&
-             subAfter.proofImageUrl == incoming().proofImageUrl &&
-             subAfter.proofStoragePath == incoming().proofStoragePath &&
-             subAfter.rewardCents == existing().rewardCents;
+    // Admin assigning a task to a user atomically during task creation or reassignment
+    function isAtomicTaskAssignmentToUser(userId) {
+      return isAdmin() &&
+             changedKeys().hasOnly(['assignedTaskId', 'updatedAt']) &&
+             isNonEmptyString(incoming().assignedTaskId, 128) &&
+             incoming().updatedAt is timestamp &&
+             incoming().balanceCents == existing().balanceCents &&
+             isTaskAssignedToUserAfter(incoming().assignedTaskId, userId);
     }
 
-    function isValidTaskProofSubmissionTransition(taskId) {
-      return existing().status == 'pending' &&
-             (!('isActive' in existing()) || existing().isActive == true) &&
-             incoming().status == 'submitted' &&
-             incoming().assignedUserId == request.auth.uid &&
-             incoming().proofText.size() >= 1 &&
-             ('proofImageUrl' in incoming()) &&
-             incoming().proofImageUrl is string &&
-             incoming().proofImageUrl.size() >= 1 &&
-             ('proofStoragePath' in incoming()) &&
-             incoming().proofStoragePath is string &&
-             incoming().proofStoragePath.size() >= 1 &&
-             incoming().diff(existing()).affectedKeys().hasOnly([
-               'assignedUserId', 'assignedUserName', 'assignedUserEmail',
-               'status', 'proofText', 'proofImageUrl', 'proofStoragePath', 'updatedAt'
+    function isTaskUnassignedFromUserAfter(prevTaskId, userId) {
+      let taskPath = /databases/$(database)/documents/tasks/$(prevTaskId);
+      return !existsAfter(taskPath) ||
+             getAfter(taskPath).data.assignedUserId != userId;
+    }
+
+    // Admin clearing a user's assignedTaskId atomically when task is reassigned or deleted
+    function isAtomicTaskUnassignmentFromUser(userId) {
+      return isAdmin() &&
+             changedKeys().hasOnly(['assignedTaskId', 'updatedAt']) &&
+             isNonEmptyString(existing().assignedTaskId, 128) &&
+             incoming().assignedTaskId == '' &&
+             incoming().updatedAt is timestamp &&
+             incoming().balanceCents == existing().balanceCents &&
+             isTaskUnassignedFromUserAfter(existing().assignedTaskId, userId);
+    }
+
+    function isTaskAndSubmissionApprovedForUser(taskId, userId) {
+      let taskPath = /databases/$(database)/documents/tasks/$(taskId);
+      let subPath = /databases/$(database)/documents/submissions/$(taskId);
+      return exists(taskPath) &&
+             exists(subPath) &&
+             existsAfter(taskPath) &&
+             existsAfter(subPath) &&
+             get(taskPath).data.status == 'submitted' &&
+             getAfter(taskPath).data.status == 'approved' &&
+             get(subPath).data.status == 'submitted' &&
+             getAfter(subPath).data.status == 'approved' &&
+             getAfter(subPath).data.userId == userId &&
+             getAfter(taskPath).data.assignedUserId == userId &&
+             incoming().balanceCents == existing().balanceCents + get(taskPath).data.rewardCents &&
+             incoming().completedTasksCount == existing().completedTasksCount + 1;
+    }
+
+    // Admin crediting a user's wallet as part of an atomic task + submission approval batch
+    function isAtomicTaskApprovalForUser(userId) {
+      return isAdmin() &&
+             changedKeys().hasOnly(['balanceCents', 'completedTasksCount', 'assignedTaskId', 'updatedAt']) &&
+             isNonEmptyString(incoming().assignedTaskId, 128) &&
+             incoming().updatedAt is timestamp &&
+             isTaskAndSubmissionApprovedForUser(incoming().assignedTaskId, userId);
+    }
+
+    // =========================================================================
+    // 3. PUBLIC LEADERBOARD PROJECTION VALIDATION (/leaderboard/{userId})
+    // =========================================================================
+
+    // Safe public leaderboard entry containing ONLY non-sensitive public fields.
+    // Explicitly forbids `email` and must match the authoritative `/users/{userId}` document.
+    function isValidLeaderboardSync(userId) {
+      let userPath = /databases/$(database)/documents/users/$(userId);
+      return hasExactKeys([
+               'userId',
+               'displayName',
+               'balanceCents',
+               'completedTasksCount',
+               'approvalStatus',
+               'updatedAt'
              ]) &&
-             isApprovedUser(request.auth.uid) &&
-             !exists(/databases/$(database)/documents/submissions/$(taskId)) &&
-             existsAfter(/databases/$(database)/documents/submissions/$(taskId)) &&
-             isMatchingSubmissionAfter(taskId);
+             !('email' in incoming()) &&
+             existsAfter(userPath) &&
+             incoming().userId == userId &&
+             incoming().displayName == getAfter(userPath).data.displayName &&
+             incoming().balanceCents == getAfter(userPath).data.balanceCents &&
+             incoming().completedTasksCount == getAfter(userPath).data.completedTasksCount &&
+             incoming().approvalStatus == getAfter(userPath).data.approvalStatus &&
+             incoming().updatedAt is timestamp;
     }
 
-    function isValidTaskActivationToggle() {
-      return ('isActive' in incoming()) &&
-             incoming().isActive is bool &&
-             incoming().diff(existing()).affectedKeys().hasOnly(['isActive', 'updatedAt']);
+    // =========================================================================
+    // 4. TASK & SUBMISSION VALIDATION (/tasks/{taskId}, /submissions/{submissionId})
+    // =========================================================================
+
+    function isAssigneeUpdatedOnTaskCreate(taskId, assignedUid) {
+      let userPath = /databases/$(database)/documents/users/$(assignedUid);
+      return existsAfter(userPath) &&
+             getAfter(userPath).data.assignedTaskId == taskId;
     }
 
-    function isValidTaskEditOrReassignTransition(taskId) {
-      let newAssignee = incoming().assignedUserId;
-      let oldAssignee = existing().assignedUserId;
-      return existing().status == 'pending' &&
+    function isValidAdminTaskCreate(taskId) {
+      return isAdmin() &&
+             incoming().keys().hasOnly([
+               'title',
+               'appName',
+               'appIconUrl',
+               'description',
+               'instructions',
+               'requiredProof',
+               'taskLink',
+               'category',
+               'rewardCents',
+               'assignedUserId',
+               'assignedUserName',
+               'assignedUserEmail',
+               'status',
+               'isActive',
+               'proofText',
+               'proofImageUrl',
+               'proofStoragePath',
+               'adminFeedback',
+               'createdBy',
+               'createdAt',
+               'updatedAt'
+             ]) &&
+             incoming().keys().hasAll([
+               'title',
+               'description',
+               'category',
+               'rewardCents',
+               'assignedUserId',
+               'assignedUserName',
+               'assignedUserEmail',
+               'status',
+               'proofText',
+               'proofImageUrl',
+               'proofStoragePath',
+               'adminFeedback',
+               'createdBy',
+               'createdAt',
+               'updatedAt'
+             ]) &&
+             isNonEmptyString(incoming().title, 120) &&
+             (!('appName' in incoming()) || isOptionalString(incoming().appName, 120)) &&
+             (!('appIconUrl' in incoming()) || isValidIconOrImageField(incoming().appIconUrl)) &&
+             isNonEmptyString(incoming().description, 2000) &&
+             (!('instructions' in incoming()) || isOptionalString(incoming().instructions, 4000)) &&
+             (!('requiredProof' in incoming()) || isOptionalString(incoming().requiredProof, 2000)) &&
+             (!('taskLink' in incoming()) || isValidHttpsTaskLink(incoming().taskLink)) &&
+             isNonEmptyString(incoming().category, 60) &&
+             incoming().rewardCents is int &&
+             incoming().rewardCents > 0 &&
+             incoming().rewardCents <= 10000000 &&
+             isNonEmptyString(incoming().assignedUserId, 128) &&
+             isNonEmptyString(incoming().assignedUserName, 100) &&
+             isNonEmptyString(incoming().assignedUserEmail, 254) &&
              incoming().status == 'pending' &&
+             (!('isActive' in incoming()) || incoming().isActive == true) &&
              incoming().proofText == '' &&
+             incoming().proofImageUrl == '' &&
+             incoming().proofStoragePath == '' &&
              incoming().adminFeedback == '' &&
-             incoming().diff(existing()).affectedKeys().hasOnly([
-               'title', 'appName', 'appIconUrl', 'description', 'instructions',
-               'requiredProof', 'taskLink', 'category', 'rewardCents',
-               'assignedUserId', 'assignedUserName', 'assignedUserEmail',
-               'isActive', 'updatedAt'
-             ]) &&
-             exists(/databases/$(database)/documents/users/$(newAssignee)) &&
-             getUserAfterData(newAssignee).assignedTaskId == taskId &&
+             incoming().createdBy == request.auth.uid &&
+             incoming().createdAt is timestamp &&
+             incoming().updatedAt is timestamp &&
+             isAssigneeUpdatedOnTaskCreate(taskId, incoming().assignedUserId);
+    }
+
+    function isTaskReassignmentConsistent(taskId, oldUid, newUid) {
+      let newUserPath = /databases/$(database)/documents/users/$(newUid);
+      let oldUserPath = /databases/$(database)/documents/users/$(oldUid);
+      return existsAfter(newUserPath) &&
+             getAfter(newUserPath).data.assignedTaskId == taskId &&
              (
-               newAssignee == oldAssignee ||
-               !exists(/databases/$(database)/documents/users/$(oldAssignee)) ||
-               getUserData(oldAssignee).assignedTaskId != taskId ||
-               getUserAfterData(oldAssignee).assignedTaskId != taskId
+               oldUid == newUid ||
+               oldUid == '' ||
+               !exists(oldUserPath) ||
+               get(oldUserPath).data.assignedTaskId != taskId ||
+               getAfter(oldUserPath).data.assignedTaskId != taskId
              );
     }
 
-    function isMatchingUserApprovalCredit(taskId, assignedUid, rewardCents) {
-      let userBefore = getUserData(assignedUid);
-      let userAfter = getUserAfterData(assignedUid);
-      return userAfter.assignedTaskId == taskId &&
-             userAfter.balanceCents == userBefore.balanceCents + rewardCents &&
-             userAfter.completedTasksCount == userBefore.completedTasksCount + 1;
+    function isValidAdminTaskEdit(taskId) {
+      return isAdmin() &&
+             existing().status == 'pending' &&
+             changedKeys().hasOnly([
+               'title',
+               'appName',
+               'appIconUrl',
+               'description',
+               'instructions',
+               'requiredProof',
+               'taskLink',
+               'category',
+               'rewardCents',
+               'assignedUserId',
+               'assignedUserName',
+               'assignedUserEmail',
+               'updatedAt'
+             ]) &&
+             isNonEmptyString(incoming().title, 120) &&
+             (!('appName' in incoming()) || isOptionalString(incoming().appName, 120)) &&
+             (!('appIconUrl' in incoming()) || isValidIconOrImageField(incoming().appIconUrl)) &&
+             isNonEmptyString(incoming().description, 2000) &&
+             (!('instructions' in incoming()) || isOptionalString(incoming().instructions, 4000)) &&
+             (!('requiredProof' in incoming()) || isOptionalString(incoming().requiredProof, 2000)) &&
+             (!('taskLink' in incoming()) || isValidHttpsTaskLink(incoming().taskLink)) &&
+             isNonEmptyString(incoming().category, 60) &&
+             incoming().rewardCents is int &&
+             incoming().rewardCents > 0 &&
+             incoming().rewardCents <= 10000000 &&
+             isNonEmptyString(incoming().assignedUserId, 128) &&
+             isNonEmptyString(incoming().assignedUserName, 100) &&
+             isNonEmptyString(incoming().assignedUserEmail, 254) &&
+             incoming().updatedAt is timestamp &&
+             isTaskReassignmentConsistent(taskId, existing().assignedUserId, incoming().assignedUserId);
     }
 
-    function isValidTaskApprovalTransition(taskId) {
-      let assignedUid = existing().assignedUserId;
-      return existing().status == 'submitted' &&
-             incoming().status == 'approved' &&
-             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminFeedback', 'updatedAt']) &&
-             exists(/databases/$(database)/documents/users/$(assignedUid)) &&
-             isMatchingUserApprovalCredit(taskId, assignedUid, existing().rewardCents);
+    function isValidAdminTaskActiveToggle() {
+      return isAdmin() &&
+             changedKeys().hasOnly(['isActive', 'updatedAt']) &&
+             incoming().isActive is bool &&
+             incoming().updatedAt is timestamp;
     }
 
-    function isMatchingRejectionState(taskId, assignedUid) {
-      let subBefore = getSubmissionData(taskId);
-      let subAfter = getSubmissionAfterData(taskId);
-      return subBefore.status == 'submitted' &&
-             subAfter.status == 'rejected' &&
-             subAfter.adminFeedback == incoming().adminFeedback &&
+    // Approved user submitting proof on an open, active task (legacy single-assignee format)
+    function isAtomicTaskSubmissionByAssignee(taskId) {
+      let subPath = /databases/$(database)/documents/submissions/$(taskId);
+      let taskIsActive = !('isActive' in existing()) || existing().isActive == true;
+      return isSignedIn() &&
+             isApprovedUser(request.auth.uid) &&
+             existing().status == 'pending' &&
+             taskIsActive &&
+             changedKeys().hasOnly([
+               'assignedUserId',
+               'assignedUserName',
+               'assignedUserEmail',
+               'status',
+               'proofText',
+               'proofImageUrl',
+               'proofStoragePath',
+               'updatedAt'
+             ]) &&
+             incoming().assignedUserId == request.auth.uid &&
+             isNonEmptyString(incoming().assignedUserName, 100) &&
+             isNonEmptyString(incoming().assignedUserEmail, 254) &&
+             incoming().status == 'submitted' &&
+             isNonEmptyString(incoming().proofText, 4000) &&
+             isValidProofImageUrl(incoming().proofImageUrl) &&
+             isNonEmptyString(incoming().proofStoragePath, 500) &&
+             incoming().rewardCents == existing().rewardCents &&
+             incoming().updatedAt is timestamp &&
+             existsAfter(subPath) &&
+             getAfter(subPath).data.taskId == taskId &&
+             getAfter(subPath).data.userId == request.auth.uid &&
+             getAfter(subPath).data.status == 'submitted' &&
+             getAfter(subPath).data.proofText == incoming().proofText &&
+             getAfter(subPath).data.proofImageUrl == incoming().proofImageUrl &&
+             getAfter(subPath).data.proofStoragePath == incoming().proofStoragePath;
+    }
+
+    // Approved user creating the corresponding `/submissions/{submissionId}` record (legacy single-assignee format)
+    function isAtomicSubmissionCreate(submissionId) {
+      let taskPath = /databases/$(database)/documents/tasks/$(submissionId);
+      return isSignedIn() &&
+             isApprovedUser(request.auth.uid) &&
+             !exists(/databases/$(database)/documents/submissions/$(submissionId)) &&
+             exists(taskPath) &&
+             existsAfter(taskPath) &&
+             get(taskPath).data.status == 'pending' &&
+             (!('isActive' in get(taskPath).data) || get(taskPath).data.isActive == true) &&
+             incoming().keys().hasOnly([
+               'taskId',
+               'taskTitle',
+               'appName',
+               'appIconUrl',
+               'rewardCents',
+               'userId',
+               'userName',
+               'userEmail',
+               'proofText',
+               'proofImageUrl',
+               'proofStoragePath',
+               'status',
+               'adminFeedback',
+               'createdAt',
+               'updatedAt'
+             ]) &&
+             incoming().keys().hasAll([
+               'taskId',
+               'taskTitle',
+               'rewardCents',
+               'userId',
+               'userName',
+               'userEmail',
+               'proofText',
+               'proofImageUrl',
+               'proofStoragePath',
+               'status',
+               'adminFeedback',
+               'createdAt',
+               'updatedAt'
+             ]) &&
+             incoming().taskId == submissionId &&
+             incoming().userId == request.auth.uid &&
+             isNonEmptyString(incoming().taskTitle, 120) &&
+             (!('appName' in incoming()) || isOptionalString(incoming().appName, 120)) &&
+             (!('appIconUrl' in incoming()) || isValidIconOrImageField(incoming().appIconUrl)) &&
+             incoming().rewardCents == get(taskPath).data.rewardCents &&
+             isNonEmptyString(incoming().userName, 100) &&
+             isNonEmptyString(incoming().userEmail, 254) &&
+             isNonEmptyString(incoming().proofText, 4000) &&
+             isValidProofImageUrl(incoming().proofImageUrl) &&
+             isNonEmptyString(incoming().proofStoragePath, 500) &&
+             incoming().status == 'submitted' &&
+             incoming().adminFeedback == '' &&
+             incoming().createdAt is timestamp &&
+             incoming().updatedAt is timestamp &&
+             getAfter(taskPath).data.status == 'submitted' &&
+             getAfter(taskPath).data.assignedUserId == request.auth.uid &&
+             getAfter(taskPath).data.proofText == incoming().proofText &&
+             getAfter(taskPath).data.proofImageUrl == incoming().proofImageUrl &&
+             getAfter(taskPath).data.proofStoragePath == incoming().proofStoragePath;
+    }
+
+    // Approved user creating a multi-user submission record where submissionId is unique (e.g. ${taskId}_${userId})
+    function isMultiUserSubmissionCreate(submissionId) {
+      let taskId = incoming().taskId;
+      let taskPath = /databases/$(database)/documents/tasks/$(taskId);
+      return isSignedIn() &&
+             isApprovedUser(request.auth.uid) &&
+             !exists(/databases/$(database)/documents/submissions/$(submissionId)) &&
+             exists(taskPath) &&
+             (!('isActive' in get(taskPath).data) || get(taskPath).data.isActive == true) &&
+             incoming().keys().hasOnly([
+               'taskId',
+               'taskTitle',
+               'appName',
+               'appIconUrl',
+               'rewardCents',
+               'userId',
+               'userName',
+               'userEmail',
+               'proofText',
+               'proofImageUrl',
+               'proofStoragePath',
+               'status',
+               'adminFeedback',
+               'createdAt',
+               'updatedAt'
+             ]) &&
+             incoming().keys().hasAll([
+               'taskId',
+               'taskTitle',
+               'rewardCents',
+               'userId',
+               'userName',
+               'userEmail',
+               'proofText',
+               'proofImageUrl',
+               'proofStoragePath',
+               'status',
+               'adminFeedback',
+               'createdAt',
+               'updatedAt'
+             ]) &&
+             incoming().userId == request.auth.uid &&
+             isNonEmptyString(incoming().taskTitle, 120) &&
+             (!('appName' in incoming()) || isOptionalString(incoming().appName, 120)) &&
+             (!('appIconUrl' in incoming()) || isValidIconOrImageField(incoming().appIconUrl)) &&
+             incoming().rewardCents == get(taskPath).data.rewardCents &&
+             isNonEmptyString(incoming().userName, 100) &&
+             isNonEmptyString(incoming().userEmail, 254) &&
+             isNonEmptyString(incoming().proofText, 4000) &&
+             isValidProofImageUrl(incoming().proofImageUrl) &&
+             isNonEmptyString(incoming().proofStoragePath, 500) &&
+             incoming().status == 'submitted' &&
+             incoming().adminFeedback == '' &&
+             incoming().createdAt is timestamp &&
+             incoming().updatedAt is timestamp;
+    }
+
+    function isAdminReviewUserConsistent(submittingUid, rewardCents, newStatus) {
+      let userPath = /databases/$(database)/documents/users/$(submittingUid);
+      return exists(userPath) &&
+             existsAfter(userPath) &&
              (
-               !exists(/databases/$(database)/documents/users/$(assignedUid)) ||
                (
-                 getUserAfterData(assignedUid).balanceCents == getUserData(assignedUid).balanceCents &&
-                 getUserAfterData(assignedUid).completedTasksCount == getUserData(assignedUid).completedTasksCount
+                 newStatus == 'approved' &&
+                 getAfter(userPath).data.balanceCents == get(userPath).data.balanceCents + rewardCents &&
+                 getAfter(userPath).data.completedTasksCount == get(userPath).data.completedTasksCount + 1
+               ) ||
+               (
+                 newStatus == 'rejected' &&
+                 getAfter(userPath).data.balanceCents == get(userPath).data.balanceCents &&
+                 getAfter(userPath).data.completedTasksCount == get(userPath).data.completedTasksCount
                )
              );
     }
 
-    function isValidTaskRejectionTransition(taskId) {
-      let assignedUid = existing().assignedUserId;
-      return existing().status == 'submitted' &&
-             incoming().status == 'rejected' &&
-             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminFeedback', 'updatedAt']) &&
-             exists(/databases/$(database)/documents/submissions/$(taskId)) &&
-             isMatchingRejectionState(taskId, assignedUid);
+    // Admin approving or rejecting a submitted task (legacy single-assignee format)
+    function isAtomicAdminTaskReview(taskId) {
+      let subPath = /databases/$(database)/documents/submissions/$(taskId);
+      return isAdmin() &&
+             existing().status == 'submitted' &&
+             exists(subPath) &&
+             existsAfter(subPath) &&
+             get(subPath).data.status == 'submitted' &&
+             changedKeys().hasOnly(['status', 'adminFeedback', 'updatedAt']) &&
+             isNonEmptyString(incoming().adminFeedback, 1000) &&
+             incoming().updatedAt is timestamp &&
+             getAfter(subPath).data.status == incoming().status &&
+             getAfter(subPath).data.adminFeedback == incoming().adminFeedback &&
+             isAdminReviewUserConsistent(get(subPath).data.userId, existing().rewardCents, incoming().status);
     }
 
-    function isConsistentSubmissionCreateMatch(submissionId) {
-      let taskBefore = getTaskData(submissionId);
-      let taskAfter = getTaskAfterData(submissionId);
-      return taskBefore.status == 'pending' &&
-             (!('isActive' in taskBefore) || taskBefore.isActive == true) &&
-             taskAfter.assignedUserId == request.auth.uid &&
-             incoming().rewardCents == taskBefore.rewardCents &&
-             incoming().taskTitle == taskBefore.title &&
-             taskAfter.status == 'submitted' &&
-             taskAfter.proofText == incoming().proofText &&
-             taskAfter.proofImageUrl == incoming().proofImageUrl &&
-             taskAfter.proofStoragePath == incoming().proofStoragePath;
+    function isAtomicAdminSubmissionReview(submissionId) {
+      let taskPath = /databases/$(database)/documents/tasks/$(submissionId);
+      return isAdmin() &&
+             existing().status == 'submitted' &&
+             exists(taskPath) &&
+             existsAfter(taskPath) &&
+             get(taskPath).data.status == 'submitted' &&
+             changedKeys().hasOnly(['status', 'adminFeedback', 'updatedAt']) &&
+             isNonEmptyString(incoming().adminFeedback, 1000) &&
+             incoming().updatedAt is timestamp &&
+             getAfter(taskPath).data.status == incoming().status &&
+             getAfter(taskPath).data.adminFeedback == incoming().adminFeedback &&
+             isAdminReviewUserConsistent(existing().userId, get(taskPath).data.rewardCents, incoming().status);
     }
 
-    function isConsistentSubmissionCreate(submissionId) {
-      return exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
-             isConsistentSubmissionCreateMatch(submissionId);
+    function isAtomicAdminMultiUserSubmissionReview(submissionId) {
+      let submittingUid = existing().userId;
+      return isAdmin() &&
+             existing().status == 'submitted' &&
+             changedKeys().hasOnly(['status', 'adminFeedback', 'updatedAt']) &&
+             (incoming().status == 'approved' || incoming().status == 'rejected') &&
+             isNonEmptyString(incoming().adminFeedback, 1000) &&
+             incoming().updatedAt is timestamp &&
+             isAdminReviewUserConsistent(submittingUid, existing().rewardCents, incoming().status);
     }
 
-    function isConsistentSubmissionUpdateMatch(submissionId) {
-      let taskBefore = getTaskData(submissionId);
-      let taskAfter = getTaskAfterData(submissionId);
-      return taskBefore.status == 'submitted' &&
-             taskAfter.status == incoming().status &&
-             taskAfter.adminFeedback == incoming().adminFeedback &&
-             taskAfter.assignedUserId == existing().userId;
+    // =========================================================================
+    // 5. DEMO WITHDRAWAL & TRANSACTION VALIDATION
+    // =========================================================================
+
+    function isValidDemoWithdrawalRequest(requestId) {
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return isSignedIn() &&
+             isApprovedUser(request.auth.uid) &&
+             hasExactKeys([
+               'requestId',
+               'userId',
+               'userName',
+               'amountCents',
+               'method',
+               'status',
+               'isDemo',
+               'createdAt'
+             ]) &&
+             incoming().requestId == requestId &&
+             incoming().userId == request.auth.uid &&
+             isNonEmptyString(incoming().userName, 100) &&
+             incoming().amountCents is int &&
+             incoming().amountCents >= 20000 &&
+             incoming().amountCents <= 10000000 &&
+             incoming().amountCents <= get(userPath).data.balanceCents &&
+             getAfter(userPath).data.balanceCents == get(userPath).data.balanceCents &&
+             (incoming().method == 'Bank Account' || incoming().method == 'UPI ID') &&
+             incoming().status == 'pending_demo' &&
+             incoming().isDemo == true &&
+             incoming().createdAt is timestamp;
     }
 
-    function isConsistentSubmissionUpdate(submissionId) {
-      return exists(/databases/$(database)/documents/tasks/$(submissionId)) &&
-             isConsistentSubmissionUpdateMatch(submissionId);
+    function isApprovedTaskOrSubmissionForTransaction(refId, userId, amountCents) {
+      let taskPath = /databases/$(database)/documents/tasks/$(refId);
+      let subPath = /databases/$(database)/documents/submissions/$(refId);
+      return (
+        (existsAfter(taskPath) &&
+         getAfter(taskPath).data.status == 'approved' &&
+         getAfter(taskPath).data.assignedUserId == userId &&
+         getAfter(taskPath).data.rewardCents == amountCents) ||
+        (existsAfter(subPath) &&
+         getAfter(subPath).data.status == 'approved' &&
+         getAfter(subPath).data.userId == userId &&
+         getAfter(subPath).data.rewardCents == amountCents)
+      );
     }
 
-    // 4. Collection Rules: /users/{userId}
-    match /users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
-      allow list: if isSignedIn();
-
-      allow create: if isSignedIn() &&
-                       isValidId(userId) &&
-                       incoming().keys().hasAll([
-                         'userId', 'email', 'displayName', 'role',
-                         'approvalStatus', 'balanceCents', 'completedTasksCount',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'userId', 'email', 'displayName', 'role',
-                         'approvalStatus', 'balanceCents', 'virtualPoints', 'completedTasksCount',
-                         'assignedTaskId', 'lastCheckInDate', 'checkInStreak',
-                         'lastCheckInTimestamp', 'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidUserProfile(incoming()) &&
-                       incoming().userId == userId &&
-                       (
-                         (
-                           request.auth.uid == userId &&
-                           hasVerifiedTokenEmail(incoming().email) &&
-                           incoming().role == 'user' &&
-                           incoming().approvalStatus == 'pending' &&
-                           incoming().balanceCents == 0 &&
-                           incoming().completedTasksCount == 0 &&
-                           (!('assignedTaskId' in incoming()) || incoming().assignedTaskId == null || incoming().assignedTaskId == '')
-                         ) ||
-                         (
-                           isAdmin() &&
-                           incoming().balanceCents == 0 &&
-                           incoming().completedTasksCount == 0 &&
-                           (!('assignedTaskId' in incoming()) || incoming().assignedTaskId == null || incoming().assignedTaskId == '') &&
-                           (
-                             incoming().role == 'user' ||
-                             (request.auth.uid == userId && isVerifiedAdminEmail() && hasVerifiedTokenEmail(incoming().email))
-                           )
-                         )
-                       );
-
-      allow update: if isSignedIn() &&
-                       isValidUserProfile(incoming()) &&
-                       (
-                         (
-                           request.auth.uid == userId &&
-                           (
-                             incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']) ||
-                             (
-                               incoming().diff(existing()).affectedKeys().hasOnly([
-                                 'balanceCents', 'virtualPoints', 'lastCheckInDate', 'checkInStreak',
-                                 'lastCheckInTimestamp', 'updatedAt'
-                               ]) &&
-                               (incoming().balanceCents == existing().balanceCents + 100 || incoming().balanceCents == existing().balanceCents + 700)
-                             )
-                           )
-                         ) ||
-                         (
-                           isAdmin() &&
-                           (
-                             (
-                               (incoming().role == existing().role || isVerifiedAdminEmail()) &&
-                               incoming().diff(existing()).affectedKeys().hasOnly([
-                                 'displayName', 'role', 'approvalStatus', 'assignedTaskId', 'updatedAt'
-                               ]) &&
-                               isConsistentUserTaskAssignment(userId)
-                             ) ||
-                             (
-                               incoming().diff(existing()).affectedKeys().hasAll(['balanceCents', 'completedTasksCount']) &&
-                               incoming().diff(existing()).affectedKeys().hasOnly([
-                                 'balanceCents', 'completedTasksCount', 'assignedTaskId', 'updatedAt'
-                               ]) &&
-                               ('assignedTaskId' in incoming()) &&
-                               isAtomicTaskApprovalForUser(
-                                 incoming().assignedTaskId,
-                                 userId,
-                                 existing().balanceCents,
-                                 incoming().balanceCents,
-                                 existing().completedTasksCount,
-                                 incoming().completedTasksCount
-                               )
-                             )
-                           )
-                         )
-                       );
-
-      allow delete: if isSignedIn() && isValidId(userId) && isVerifiedAdminEmail();
-
-      match /check_ins/{dateKey} {
-        allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow create: if isSignedIn() &&
-                         request.auth.uid == userId &&
-                         (!('userId' in incoming()) || incoming().userId == userId) &&
-                         incoming().dateKey == dateKey &&
-                         (incoming().rewardCents == 100 || incoming().rewardCents == 700);
-        allow update, delete: if false;
-      }
-
-      match /watch_stats/{dateKey} {
-        allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow create: if isSignedIn() &&
-                         request.auth.uid == userId &&
-                         incoming().userId == userId &&
-                         incoming().dateKey == dateKey &&
-                         incoming().videosWatched == 1 &&
-                         incoming().totalEarnedCents == 100;
-        allow update: if isSignedIn() &&
-                         request.auth.uid == userId &&
-                         existing().userId == userId &&
-                         incoming().userId == userId &&
-                         existing().videosWatched < 25 &&
-                         incoming().videosWatched == existing().videosWatched + 1 &&
-                         incoming().totalEarnedCents == existing().totalEarnedCents + 100;
-        allow delete: if false;
-      }
+    function isValidAdminTaskRewardTransaction() {
+      return isAdmin() &&
+             hasExactKeys([
+               'userId',
+               'userName',
+               'type',
+               'title',
+               'amountCents',
+               'status',
+               'referenceId',
+               'createdAt'
+             ]) &&
+             incoming().type == 'TASK_REWARD' &&
+             incoming().status == 'CREDITED' &&
+             isNonEmptyString(incoming().referenceId, 128) &&
+             isNonEmptyString(incoming().userId, 128) &&
+             isNonEmptyString(incoming().userName, 100) &&
+             isNonEmptyString(incoming().title, 200) &&
+             incoming().amountCents is int &&
+             incoming().amountCents > 0 &&
+             incoming().createdAt is timestamp &&
+             isApprovedTaskOrSubmissionForTransaction(incoming().referenceId, incoming().userId, incoming().amountCents);
     }
 
-    match /transactions/{transactionId} {
-      allow read: if isSignedIn() &&
-                     (resource == null || resource.data.userId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() &&
-                     (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() &&
-                       isValidId(transactionId) &&
-                       incoming().userId is string &&
-                       (request.auth.uid == incoming().userId || isAdmin());
-      allow update, delete: if false;
+    function isMatchingWithdrawalRequestAfter(reqId, userId, amountCents) {
+      let reqPath = /databases/$(database)/documents/withdrawal_requests/$(reqId);
+      return existsAfter(reqPath) &&
+             getAfter(reqPath).data.userId == userId &&
+             getAfter(reqPath).data.amountCents == amountCents;
     }
 
-    // 4B. Collection Rules: /reward_sessions/{sessionId}
-    match /reward_sessions/{sessionId} {
-      allow get: if isSignedIn() &&
-                    isValidId(sessionId) &&
-                    (resource == null || existing().userId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() &&
-                     (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() &&
-                       isValidId(sessionId) &&
-                       incoming().sessionId == sessionId &&
-                       incoming().userId == request.auth.uid &&
-                       (incoming().rewardType == 'WATCH_AND_EARN' || incoming().rewardType == 'DAILY_CHECK_IN') &&
-                       incoming().rewardCents == 100 &&
-                       incoming().status == 'PENDING' &&
-                       incoming().used == false &&
-                       incoming().claimed == false &&
-                       incoming().createdAt is timestamp &&
-                       incoming().expiresAt is timestamp &&
-                       incoming().expiresAt > request.time;
-      allow update: if isSignedIn() &&
-                       isValidId(sessionId) &&
-                       existing().userId == request.auth.uid &&
-                       incoming().userId == existing().userId &&
-                       incoming().sessionId == existing().sessionId &&
-                       incoming().rewardType == existing().rewardType &&
-                       incoming().rewardCents == existing().rewardCents &&
-                       existing().used == false &&
-                       existing().claimed == false &&
-                       existing().expiresAt > request.time &&
-                       (
-                         (
-                           existing().status == 'PENDING' &&
-                           incoming().status == 'VERIFIED' &&
-                           incoming().used == false &&
-                           incoming().claimed == false
-                         ) ||
-                         (
-                           existing().status == 'VERIFIED' &&
-                           incoming().status == 'CLAIMED' &&
-                           incoming().used == true &&
-                           incoming().claimed == true
-                         )
-                       );
-      allow delete: if false;
+    function isValidClientDemoWithdrawalTransaction() {
+      return isSignedIn() &&
+             isApprovedUser(request.auth.uid) &&
+             hasExactKeys([
+               'userId',
+               'userName',
+               'type',
+               'title',
+               'amountCents',
+               'status',
+               'referenceId',
+               'createdAt'
+             ]) &&
+             incoming().userId == request.auth.uid &&
+             incoming().type == 'DEMO_WITHDRAWAL' &&
+             incoming().status == 'PENDING_DEMO' &&
+             isNonEmptyString(incoming().referenceId, 128) &&
+             isNonEmptyString(incoming().userName, 100) &&
+             isNonEmptyString(incoming().title, 200) &&
+             incoming().amountCents is int &&
+             incoming().amountCents >= 20000 &&
+             incoming().createdAt is timestamp &&
+             isMatchingWithdrawalRequestAfter(incoming().referenceId, request.auth.uid, incoming().amountCents);
     }
 
-    // 4C. Collection Rules: /watch_stats/{statId}
-    match /watch_stats/{statId} {
-      allow get: if isSignedIn() &&
-                    isValidId(statId) &&
-                    (resource == null || existing().userId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() &&
-                     (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() &&
-                       isValidId(statId) &&
-                       incoming().userId == request.auth.uid &&
-                       incoming().videosWatched == 1 &&
-                       incoming().totalEarnedCents == 100;
-      allow update: if isSignedIn() &&
-                       isValidId(statId) &&
-                       existing().userId == request.auth.uid &&
-                       incoming().userId == existing().userId &&
-                       existing().videosWatched < 25 &&
-                       incoming().videosWatched == existing().videosWatched + 1 &&
-                       incoming().totalEarnedCents == existing().totalEarnedCents + 100;
-      allow delete: if false;
+    function isValidAdminDoc(adminId) {
+      return hasExactKeys(['userId', 'email', 'createdAt']) &&
+             incoming().userId == adminId &&
+             isNonEmptyString(incoming().email, 254) &&
+             incoming().createdAt is timestamp;
     }
 
-    // 4D. Collection Rules: /processed_transactions/{txId} (Backend S2S Only)
-    match /processed_transactions/{txId} {
-      allow read, write: if false;
+    function isUserClearedOnTaskDelete(assignedUid, taskId) {
+      let userPath = /databases/$(database)/documents/users/$(assignedUid);
+      return !exists(userPath) ||
+             get(userPath).data.assignedTaskId != taskId ||
+             getAfter(userPath).data.assignedTaskId != taskId;
     }
 
-    // 5. Collection Rules: /tasks/{taskId}
-    match /tasks/{taskId} {
-      allow get: if isSignedIn() && isValidId(taskId);
-
-      allow list: if isSignedIn();
-
-      allow create: if isSignedIn() &&
-                       isValidId(taskId) &&
-                       incoming().keys().hasAll([
-                         'title', 'description', 'category', 'rewardCents',
-                         'assignedUserId', 'assignedUserName', 'assignedUserEmail',
-                         'status', 'proofText', 'adminFeedback', 'createdBy',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'title', 'appName', 'appIconUrl', 'description', 'instructions',
-                         'requiredProof', 'taskLink', 'category', 'rewardCents',
-                         'assignedUserId', 'assignedUserName', 'assignedUserEmail',
-                         'status', 'isActive', 'proofText', 'proofImageUrl', 'proofStoragePath',
-                         'adminFeedback', 'createdBy', 'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidTask(incoming()) &&
-                       incoming().createdBy == request.auth.uid &&
-                       incoming().status == 'pending' &&
-                       incoming().proofText == '' &&
-                       (!('proofImageUrl' in incoming()) || incoming().proofImageUrl == '') &&
-                       (!('proofStoragePath' in incoming()) || incoming().proofStoragePath == '') &&
-                       incoming().adminFeedback == '' &&
-                       isAdmin() &&
-                       exists(/databases/$(database)/documents/users/$(incoming().assignedUserId)) &&
-                       getUserAfterData(incoming().assignedUserId).assignedTaskId == taskId;
-
-      allow update: if isSignedIn() &&
-                       isValidId(taskId) &&
-                       isValidTask(incoming()) &&
-                       (
-                         (incoming().status == 'submitted' && isValidTaskProofSubmissionTransition(taskId)) ||
-                         (isAdmin() && (
-                           isValidTaskActivationToggle() ||
-                           (incoming().status == 'pending' && isValidTaskEditOrReassignTransition(taskId)) ||
-                           (incoming().status == 'approved' && isValidTaskApprovalTransition(taskId)) ||
-                           (incoming().status == 'rejected' && isValidTaskRejectionTransition(taskId))
-                         ))
-                       );
-
-      allow delete: if isSignedIn() &&
-                       isValidId(taskId) &&
-                       isAdmin() &&
-                       (
-                         !exists(/databases/$(database)/documents/users/$(existing().assignedUserId)) ||
-                         getUserData(existing().assignedUserId).assignedTaskId != taskId ||
-                         getUserAfterData(existing().assignedUserId).assignedTaskId != taskId
-                       );
+    function isConsistentTaskDelete(taskId) {
+      return isAdmin() && (
+        existing().status != 'pending' ||
+        existing().assignedUserId == '' ||
+        isUserClearedOnTaskDelete(existing().assignedUserId, taskId)
+      );
     }
 
-    // 6. Collection Rules: /submissions/{submissionId}
-    match /submissions/{submissionId} {
-      allow get: if isSignedIn() &&
-                    isValidId(submissionId) &&
-                    (resource == null || existing().userId == request.auth.uid || isAdmin());
+    // =========================================================================
+    // 6. COLLECTION SECURITY RULES
+    // =========================================================================
 
-      allow list: if isSignedIn() &&
-                     (resource.data.userId == request.auth.uid || isAdmin());
-
-      allow create: if isSignedIn() &&
-                       isValidId(submissionId) &&
-                       incoming().keys().hasAll([
-                         'taskId', 'taskTitle', 'rewardCents',
-                         'userId', 'userName', 'userEmail',
-                         'proofText', 'proofImageUrl', 'proofStoragePath',
-                         'status', 'adminFeedback',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'taskId', 'taskTitle', 'appName', 'appIconUrl', 'rewardCents',
-                         'userId', 'userName', 'userEmail',
-                         'proofText', 'proofImageUrl', 'proofStoragePath',
-                         'status', 'adminFeedback',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidSubmission(incoming()) &&
-                       submissionId == incoming().taskId &&
-                       incoming().userId == request.auth.uid &&
-                       isApprovedUser(request.auth.uid) &&
-                       hasVerifiedTokenEmail(incoming().userEmail) &&
-                       incoming().status == 'submitted' &&
-                       incoming().adminFeedback == '' &&
-                       isConsistentSubmissionCreate(submissionId);
-
-      allow update: if isSignedIn() &&
-                       isValidId(submissionId) &&
-                       isValidSubmission(incoming()) &&
-                       isAdmin() &&
-                       existing().status == 'submitted' &&
-                       (incoming().status == 'approved' || incoming().status == 'rejected') &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'status', 'adminFeedback', 'updatedAt'
-                       ]) &&
-                       isConsistentSubmissionUpdate(submissionId);
-
-      allow delete: if false;
-    }
-
-    // 6B. Collection Rules: /withdrawal_requests/{requestId}
-    // Safe demo-only withdrawal requests:
-    // - Strictly forbids storing bank account numbers, IFSC codes, or real UPI IDs
-    // - Enforces minimum ₹200.00 (20000 paise) and <= user's available balanceCents
-    // - Never deducts user's wallet balance
-    match /withdrawal_requests/{requestId} {
-      allow get: if isSignedIn() &&
-                    isValidId(requestId) &&
-                    (resource == null || existing().userId == request.auth.uid || isAdmin());
-
-      allow list: if isSignedIn() &&
-                     (resource.data.userId == request.auth.uid || isAdmin());
-
-      allow create: if isSignedIn() &&
-                       isValidId(requestId) &&
-                       incoming().keys().hasAll([
-                         'requestId', 'userId', 'userName', 'amountCents',
-                         'method', 'status', 'isDemo', 'createdAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'requestId', 'userId', 'userName', 'amountCents',
-                         'method', 'status', 'isDemo', 'createdAt'
-                       ]) &&
-                       incoming().requestId == requestId &&
-                       isValidDemoWithdrawalRequest(incoming());
-
-      allow update, delete: if false;
-    }
-
-    // 7. Collection Rules: /admins/{adminId}
     match /admins/{adminId} {
-      allow get: if isSignedIn() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
+      allow get: if isSignedIn() && (request.auth.uid == adminId || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isBootstrappedAdmin() && isValidAdminDoc(adminId);
+      allow delete: if isBootstrappedAdmin();
+    }
+
+    match /users/{userId} {
+      // Users can read only their own profile; only Admin can read or list all user profiles.
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isSignedIn() && request.auth.uid == userId && isValidUserCreate(userId);
+      allow update: if isSignedIn() && (
+        isValidOwnerDisplayNameUpdate(userId) ||
+        isBootstrapAdminSelfInit(userId) ||
+        isValidAdminUserStatusUpdate() ||
+        isValidAdminDisplayNameUpdate() ||
+        isAtomicTaskAssignmentToUser(userId) ||
+        isAtomicTaskUnassignmentFromUser(userId) ||
+        isAtomicTaskApprovalForUser(userId)
+      );
+      allow delete: if false;
+
+      // Daily check-in records are strictly written by trusted Cloud Functions (Admin SDK).
+      match /check_ins/{dateKey} {
+        allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create, update, delete: if false;
+      }
+
+      // Per-user watch stats are strictly written by trusted Cloud Functions (Admin SDK).
+      match /watch_stats/{dateKey} {
+        allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create, update, delete: if false;
+      }
+
+      // In-app notifications
+      match /notifications/{notificationId} {
+        allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create: if isSignedIn();
+        allow update: if isSignedIn() && request.auth.uid == userId && changedKeys().hasOnly(['isRead']);
+        allow delete: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      }
+    }
+
+    // Safe public leaderboard projection containing ONLY non-sensitive public fields (no email).
+    match /leaderboard/{userId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn() &&
+                            (request.auth.uid == userId || isAdmin()) &&
+                            isValidLeaderboardSync(userId);
+      allow delete: if isAdmin();
+    }
+
+    // Transactions:
+    // - Daily Check-in and Watch & Earn reward transactions are created exclusively by Cloud Functions.
+    // - Task reward transactions require atomic Admin task approval.
+    // - Demo withdrawal transactions require atomic approved-user withdrawal request creation.
+    match /transactions/{transactionId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && (
+        isValidAdminTaskRewardTransaction() ||
+        isValidClientDemoWithdrawalTransaction()
+      );
+      allow update, delete: if false;
+    }
+
+    // Reward sessions are created, S2S-verified, and claimed exclusively by Cloud Functions (Admin SDK).
+    match /reward_sessions/{sessionId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update, delete: if false;
+    }
+
+    // Top-level watch_stats are written exclusively by Cloud Functions (Admin SDK).
+    match /watch_stats/{statId} {
+      allow get: if isSignedIn() && (
+        statId.matches('^' + request.auth.uid + '_.*') ||
+        (resource != null && resource.data.userId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update, delete: if false;
+    }
+
+    match /tasks/{taskId} {
+      allow get, list: if isSignedIn();
+      allow create: if isValidAdminTaskCreate(taskId);
+      allow update: if isValidAdminTaskEdit(taskId) ||
+                    isValidAdminTaskActiveToggle() ||
+                    isAtomicTaskSubmissionByAssignee(taskId) ||
+                    isAtomicAdminTaskReview(taskId);
+      allow delete: if isConsistentTaskDelete(taskId);
+    }
+
+    match /submissions/{submissionId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAtomicSubmissionCreate(submissionId) || isMultiUserSubmissionCreate(submissionId);
+      allow update: if isAtomicAdminSubmissionReview(submissionId) || isAtomicAdminMultiUserSubmissionReview(submissionId);
+      allow delete: if false;
+    }
+
+    match /withdrawal_requests/{requestId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidDemoWithdrawalRequest(requestId);
+      allow update, delete: if false;
+    }
+
+    // Client & Partner Campaigns
+    match /campaigns/{campaignId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // User Support Tickets / Inquiries
+    match /support_tickets/{ticketId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow list: if isAdmin();
       allow create: if isSignedIn() &&
-                       isValidId(adminId) &&
-                       incoming().keys().hasAll(['userId', 'email', 'createdAt']) &&
-                       incoming().keys().hasOnly(['userId', 'email', 'createdAt']) &&
-                       isValidAdminRecord(incoming()) &&
-                       incoming().userId == adminId &&
-                       isVerifiedAdminEmail();
-      allow update: if isSignedIn() &&
-                       isValidId(adminId) &&
-                       isValidAdminRecord(incoming()) &&
-                       incoming().userId == existing().userId &&
-                       incoming().createdAt == existing().createdAt &&
-                       isVerifiedAdminEmail() &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['email']);
-      allow delete: if isSignedIn() && isValidId(adminId) && isVerifiedAdminEmail();
+                    request.resource.data.userId == request.auth.uid &&
+                    hasExactKeys(['userId', 'userName', 'userEmail', 'category', 'subject', 'message', 'status', 'createdAt']) &&
+                    isNonEmptyString(request.resource.data.subject, 200) &&
+                    isNonEmptyString(request.resource.data.message, 4000) &&
+                    request.resource.data.status == 'OPEN' &&
+                    request.resource.data.createdAt is timestamp;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Default deny for all other paths
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
