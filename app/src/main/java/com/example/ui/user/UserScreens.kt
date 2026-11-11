@@ -155,7 +155,8 @@ fun UserHomeScreen(
     com.example.data.model.WatchEarnUiState(),
   onStartWatchVideo: (() -> Unit)? = null,
   onClaimVerifiedWatchReward: (() -> Unit)? = null,
-  onOpenWatchDialog: () -> Unit = {}
+  onOpenWatchDialog: () -> Unit = {},
+  onShowInterstitial: () -> Unit = {}
 ) {
   val profile = (profileState as? UiState.Success)?.data
   val currentUserId = profile?.userId?.ifBlank { profile.id } ?: ""
@@ -416,6 +417,7 @@ fun UserHomeScreen(
             onOpenWatchDialog()
             showWatchAdDialog = true
           },
+          onShowInterstitialClicked = onShowInterstitial,
           modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_watch_earn_card")
         )
       }
@@ -623,10 +625,11 @@ private fun DailyCheckInCard(
 @Composable
 private fun WatchAndEarnCard(
   onWatchAdClicked: () -> Unit,
+  onShowInterstitialClicked: () -> Unit,
   modifier: Modifier = Modifier
 ) {
   Card(
-    modifier = modifier.clip(RoundedCornerShape(26.dp)).clickable(onClick = onWatchAdClicked),
+    modifier = modifier.clip(RoundedCornerShape(26.dp)),
     shape = RoundedCornerShape(26.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
@@ -658,23 +661,14 @@ private fun WatchAndEarnCard(
         )
       }
 
-      Surface(
+      // Interstitial Ad Button
+      Button(
+        onClick = onShowInterstitialClicked,
         shape = RoundedCornerShape(50),
-        color = Color(0xFFEDE9FE),
-        modifier = Modifier.testTag("watch_earn_badge")
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4C1D95)),
+        modifier = Modifier.fillMaxWidth().height(32.dp).testTag("interstitial_ad_button")
       ) {
-        Row(
-          modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-          Text(
-            text = "Earn Rewards",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF5B21B6)
-          )
-        }
+        Text("Play Interstitial", style = MaterialTheme.typography.labelSmall)
       }
 
       Button(
@@ -897,7 +891,7 @@ private fun WatchAdInfoDialog(
               verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
               Text(
-                text = watchEarnUiState.errorMessage,
+                text = watchEarnUiState.errorMessage?.takeIf { it.isNotBlank() } ?: "Video currently unavailable. Please try again later.",
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
                 color = Color(0xFFB91C1C)

@@ -1,5 +1,0 @@
-{
-  "summary":  "Master implementation Firestore Security Rules for TaskFlow. Fully supports multi-user task submissions, atomic admin review, campaigns, in-app notifications, support tickets, safe public leaderboard projection, and zero-trust wallet balance protection.",
-  "updatedAt":  "2026-11-11T09:06:04.132866693Z",
-  "userFacing":  true
-}

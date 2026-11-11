@@ -775,6 +775,19 @@ private fun AuthenticatedWorkspace(
                     },
                     onOpenWatchDialog = {
                       viewModel.prepareWatchEarnDialog(context)
+                    },
+                    onShowInterstitial = {
+                      val activity = (context as? android.app.Activity)
+                        ?: run {
+                            var cur = context
+                            while (cur is android.content.ContextWrapper && cur !is android.app.Activity) {
+                              cur = cur.baseContext
+                            }
+                            cur as? android.app.Activity
+                          }
+                      if (activity != null) {
+                         com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(activity)
+                      }
                     }
                   )
                 }

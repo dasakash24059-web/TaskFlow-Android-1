@@ -1013,6 +1013,59 @@ object UnityAdsHelper {
   }
 
   /**
+   * Loads and shows a V6 interstitial ad for placement INTERSTITIAL_PLACEMENT_ID.
+   */
+  fun loadAndShowInterstitialAd(
+    activity: Activity,
+    onClosed: () -> Unit = {},
+    onFailed: (String) -> Unit = {}
+  ) {
+    if (!isNetworkAvailable(activity)) {
+      onFailed("No internet connection.")
+      return
+    }
+
+    ensureInitialized(
+      context = activity,
+      onReady = {
+        adAuctionExecutor.execute {
+          try {
+            val markup = fetchBiddingAdMarkupForPlacement(
+              context = activity,
+              placementId = INTERSTITIAL_PLACEMENT_ID,
+              isBanner = false
+            )
+            val objectId = UUID.randomUUID().toString()
+            runOnMainThread {
+              val options = UnityAdsLoadOptions().apply {
+                setObjectId(objectId)
+                setAdMarkup(markup)
+              }
+              UnityAds.load(INTERSTITIAL_PLACEMENT_ID, options, object : IUnityAdsLoadListener {
+                override fun onUnityAdsAdLoaded(placementId: String?) {
+                  val showOptions = UnityAdsShowOptions().apply { setObjectId(objectId) }
+                  UnityAds.show(activity, INTERSTITIAL_PLACEMENT_ID, showOptions, object : IUnityAdsShowListener {
+                    override fun onUnityAdsShowClick(p0: String?) {}
+                    override fun onUnityAdsShowComplete(p0: String?, p1: UnityAds.UnityAdsShowCompletionState?) { onClosed() }
+                    override fun onUnityAdsShowFailure(p0: String?, p1: UnityAds.UnityAdsShowError?, p2: String?) { onFailed("Show failed: $p2") }
+                    override fun onUnityAdsShowStart(p0: String?) {}
+                  })
+                }
+                override fun onUnityAdsFailedToLoad(p0: String?, p1: UnityAds.UnityAdsLoadError?, p2: String?) {
+                  onFailed("Load failed: $p2")
+                }
+              })
+            }
+          } catch (t: Throwable) {
+            onFailed("Markup fetch failed: ${t.message}")
+          }
+        }
+      },
+      onFailed = { onFailed(it) }
+    )
+  }
+
+  /**
    * Backward-compatible delegation.
    */
   fun loadRewardedAd(
@@ -1402,4 +1455,6 @@ fun UnityBannerAdView(modifier: Modifier = Modifier) {
       )
     }
   }
+
 }
+
