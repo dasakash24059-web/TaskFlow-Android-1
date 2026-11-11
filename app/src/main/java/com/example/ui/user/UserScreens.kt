@@ -2,6 +2,7 @@ package com.example.ui.user
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import com.example.data.model.getEffectiveBalanceCoins
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -267,7 +268,14 @@ fun UserHomeScreen(
                     color = Color(0xFF94A3B8),
                     fontWeight = FontWeight.Medium
                   )
-                  VerifiedBadge(isVerified = profile?.approvalStatus == "approved")
+                  if (profile?.approvalStatus == "approved") {
+                    Icon(
+                      imageVector = Icons.Default.CheckCircle,
+                      contentDescription = "Verified Account",
+                      tint = Color(0xFF22D3EE),
+                      modifier = Modifier.size(15.dp)
+                    )
+                  }
                 }
                 Text(
                   text = displayName,
@@ -313,7 +321,7 @@ fun UserHomeScreen(
                     fontWeight = FontWeight.Bold
                   )
                   Text(
-                    text = formatRewardInr(profile?.balanceCents ?: 0L),
+                    text = "${profile?.getEffectiveBalanceCoins() ?: 0L} Coins",
                     style = MaterialTheme.typography.labelLarge,
                     color = Color(0xFFFDE047),
                     fontWeight = FontWeight.ExtraBold,
@@ -622,7 +630,7 @@ private fun WatchAndEarnCard(
       }
 
       Text(
-        text = "Up to ₹25",
+        text = "Up to 300 Coins",
         style = MaterialTheme.typography.labelSmall,
         color = Color(0xFF6B21A8),
         fontWeight = FontWeight.Bold,
@@ -848,8 +856,14 @@ private fun WatchAdInfoDialog(
               modifier = Modifier.padding(14.dp),
               verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+              val rawErr = watchEarnUiState.errorMessage.orEmpty()
+              val formattedErr = if (rawErr.isBlank() || rawErr == "NOT_FOUND" || rawErr.contains("NOT_FOUND", ignoreCase = true)) {
+                "Video is currently unavailable. Please tap Try Again to reload."
+              } else {
+                rawErr
+              }
               Text(
-                text = watchEarnUiState.errorMessage?.takeIf { it.isNotBlank() } ?: "Video currently unavailable. Please try again later.",
+                text = formattedErr,
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
                 color = Color(0xFFB91C1C)

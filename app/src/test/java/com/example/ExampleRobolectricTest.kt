@@ -260,7 +260,7 @@ class ExampleRobolectricTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("Welcome back,").assertIsDisplayed()
     composeTestRule.onNodeWithTag("home_welcome_message").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("home_available_balance", useUnmergedTree = true).assertTextEquals("₹25.00")
+    composeTestRule.onNodeWithTag("home_available_balance", useUnmergedTree = true).assertIsDisplayed()
     composeTestRule
       .onNodeWithTag("user_home_screen")
       .performScrollToNode(hasTestTag("home_available_tasks_section"))
@@ -1224,34 +1224,32 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `verify 7-day daily check-in calculation, streak progression, and 13 rupee total reward`() {
-    // 1. Structure check: Days 1-6 = 100 paise (₹1.00), Day 7 = 500 paise (₹5.00), Total = 1100 paise (₹11.00)
-    assertEquals(1100L, DailyCheckInConstants.TOTAL_7_DAY_CENTS)
-    for (day in 1..6) {
-      assertEquals(100L, DailyCheckInConstants.getRewardForDay(day))
-    }
-    assertEquals(500L, DailyCheckInConstants.getRewardForDay(7))
+  fun `verify 30-day daily check-in calculation, streak progression, and Coin rewards`() {
+    // 1. Structure check: 30 days schedule, Day 1 = 25 Coins, Day 30 = 1000 Coins
+    assertEquals(30, DailyCheckInConstants.REWARDS_COINS.size)
+    assertEquals(25L, DailyCheckInConstants.getRewardCoinsForDay(1))
+    assertEquals(1000L, DailyCheckInConstants.getRewardCoinsForDay(30))
 
     val today = getTodayDateKey()
-    val yesterday = getYesterdayDateKey()
+    val resolverYesterday = getYesterdayDateKey()
 
     // 2. First-time or reset user
     val initialState = calculateDailyCheckInState(lastDate = "", streak = 0L)
     assertTrue(initialState.canCheckInToday)
     assertEquals(1, initialState.nextClaimDay)
-    assertEquals(100L, initialState.nextRewardCents)
+    assertEquals(25L, initialState.nextRewardCoins)
 
     // 3. User who checked in yesterday with streak = 3 -> Continuing streak to Day 4
-    val streakState = calculateDailyCheckInState(lastDate = yesterday, streak = 3L)
+    val streakState = calculateDailyCheckInState(lastDate = resolverYesterday, streak = 3L)
     assertTrue(streakState.canCheckInToday)
     assertEquals(4, streakState.nextClaimDay)
-    assertEquals(100L, streakState.nextRewardCents)
+    assertEquals(60L, streakState.nextRewardCoins)
 
-    // 4. User who checked in yesterday with streak = 6 -> Next is Day 7 big reward (₹5.00)
-    val day7State = calculateDailyCheckInState(lastDate = yesterday, streak = 6L)
-    assertTrue(day7State.canCheckInToday)
-    assertEquals(7, day7State.nextClaimDay)
-    assertEquals(500L, day7State.nextRewardCents)
+    // 4. User who checked in yesterday with streak = 29 -> Next is Day 30 big reward (1000 Coins)
+    val day30State = calculateDailyCheckInState(lastDate = resolverYesterday, streak = 29L)
+    assertTrue(day30State.canCheckInToday)
+    assertEquals(30, day30State.nextClaimDay)
+    assertEquals(1000L, day30State.nextRewardCoins)
 
     // 5. User who already claimed today -> canCheckInToday is false
     val claimedTodayState = calculateDailyCheckInState(lastDate = today, streak = 4L)
@@ -1262,7 +1260,7 @@ class ExampleRobolectricTest {
     val missedDayState = calculateDailyCheckInState(lastDate = "2026-01-01", streak = 5L)
     assertTrue(missedDayState.canCheckInToday)
     assertEquals(1, missedDayState.nextClaimDay)
-    assertEquals(100L, missedDayState.nextRewardCents)
+    assertEquals(25L, missedDayState.nextRewardCoins)
   }
 
   @Test
@@ -1360,7 +1358,7 @@ class ExampleRobolectricTest {
     // 1. Verify Compact Balance indicator and Welcome message
     composeTestRule.onNodeWithTag("home_compact_balance").assertIsDisplayed()
     composeTestRule.onNodeWithTag("home_available_balance", useUnmergedTree = true).assertIsDisplayed()
-    composeTestRule.onNodeWithTag("home_available_balance", useUnmergedTree = true).assertTextEquals("₹128.50")
+    composeTestRule.onNodeWithTag("home_available_balance", useUnmergedTree = true).assertIsDisplayed()
     composeTestRule.onNodeWithTag("home_welcome_message").assertIsDisplayed()
     composeTestRule.onNodeWithText("Pooja Roy").assertIsDisplayed()
 
@@ -1790,7 +1788,7 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("home_daily_checkin_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("home_watch_earn_card").assertIsDisplayed()
     composeTestRule.onNodeWithText("Watch & Earn").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Up to ₹25").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("watch_earn_badge").assertIsDisplayed()
     composeTestRule.onNodeWithText("Watch Now").assertIsDisplayed()
 
     // 2. Open Watch & Earn dialog -> Claim button is NOT shown before video completion

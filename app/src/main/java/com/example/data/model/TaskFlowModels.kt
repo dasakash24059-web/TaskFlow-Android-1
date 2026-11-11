@@ -180,17 +180,26 @@ data class SpinEarnUiState(
 )
 
 object DailyCheckInConstants {
-  // 7-Day Reward Structure: Day 1-6: ₹1 (100 paise), Day 7: ₹5 (500 paise). Total = ₹11 (1100 paise).
-  val REWARDS_CENTS = listOf(100L, 100L, 100L, 100L, 100L, 100L, 500L)
-  const val TOTAL_7_DAY_CENTS = 1100L
+  // 30-Day Coin Reward Schedule
+  val REWARDS_COINS = listOf(
+    25L, 35L, 50L, 60L, 75L, 85L, 100L, 110L, 125L, 150L,
+    160L, 175L, 185L, 200L, 210L, 225L, 250L, 260L, 275L, 285L,
+    300L, 325L, 350L, 375L, 400L, 425L, 450L, 500L, 750L, 1000L
+  )
+
+  // Legacy compatibility alias
+  val REWARDS_CENTS = REWARDS_COINS
+  const val TOTAL_7_DAY_CENTS = 430L
 
   const val AD_VERIFICATION_REQUIRED_MESSAGE =
     "Daily Check-in is pending. Advertisement completion is required after which rewards can be credited."
 
-  fun getRewardForDay(day: Int): Long {
-    val index = (day - 1).coerceIn(0, 6)
-    return REWARDS_CENTS[index]
+  fun getRewardCoinsForDay(day: Int): Long {
+    val index = (day - 1).coerceIn(0, 29)
+    return REWARDS_COINS[index]
   }
+
+  fun getRewardForDay(day: Int): Long = getRewardCoinsForDay(day)
 }
 
 data class DailyCheckInState(
@@ -199,7 +208,8 @@ data class DailyCheckInState(
   val canCheckInToday: Boolean = true,
   val lastCheckInDate: String = "",
   val todayDate: String = "",
-  val nextRewardCents: Long = 100L
+  val nextRewardCents: Long = 25L,
+  val nextRewardCoins: Long = 25L
 )
 
 fun getTodayDateKey(): String {
@@ -223,36 +233,42 @@ fun calculateDailyCheckInState(lastDate: String, streak: Long): DailyCheckInStat
 
   return if (lastDate == today) {
     // Already checked in today
-    val streakDay = if (rawStreak in 1..7) rawStreak else 1
-    val nextDay = if (streakDay >= 7) 1 else streakDay + 1
+    val streakDay = if (rawStreak in 1..30) rawStreak else 1
+    val nextDay = if (streakDay >= 30) 1 else streakDay + 1
+    val coins = DailyCheckInConstants.getRewardCoinsForDay(nextDay)
     DailyCheckInState(
       currentStreak = streakDay,
       nextClaimDay = nextDay,
       canCheckInToday = false,
       lastCheckInDate = lastDate,
       todayDate = today,
-      nextRewardCents = DailyCheckInConstants.getRewardForDay(nextDay)
+      nextRewardCents = coins,
+      nextRewardCoins = coins
     )
   } else if (lastDate == yesterday) {
     // Consecutive check-in: continuing streak
-    val nextStreak = if (rawStreak >= 7) 1 else rawStreak + 1
+    val nextStreak = if (rawStreak >= 30) 1 else rawStreak + 1
+    val coins = DailyCheckInConstants.getRewardCoinsForDay(nextStreak)
     DailyCheckInState(
       currentStreak = rawStreak,
       nextClaimDay = nextStreak,
       canCheckInToday = true,
       lastCheckInDate = lastDate,
       todayDate = today,
-      nextRewardCents = DailyCheckInConstants.getRewardForDay(nextStreak)
+      nextRewardCents = coins,
+      nextRewardCoins = coins
     )
   } else {
     // Missed a day or first time -> Reset streak to Day 1
+    val coins = DailyCheckInConstants.getRewardCoinsForDay(1)
     DailyCheckInState(
       currentStreak = 0,
       nextClaimDay = 1,
       canCheckInToday = true,
       lastCheckInDate = lastDate,
       todayDate = today,
-      nextRewardCents = DailyCheckInConstants.getRewardForDay(1)
+      nextRewardCents = coins,
+      nextRewardCoins = coins
     )
   }
 }

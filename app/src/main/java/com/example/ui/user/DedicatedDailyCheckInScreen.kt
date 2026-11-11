@@ -195,7 +195,7 @@ fun DedicatedDailyCheckInScreen(
             ) {
               Column {
                 Text(
-                  text = "7-Day Coin Streak",
+                  text = "30-Day Coin Streak",
                   style = MaterialTheme.typography.labelMedium,
                   color = Color(0xFF94A3B8),
                   fontWeight = FontWeight.SemiBold
@@ -213,77 +213,12 @@ fun DedicatedDailyCheckInScreen(
                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FDE047))
               ) {
                 Text(
-                  text = "7 Days",
+                  text = "30 Days",
                   style = MaterialTheme.typography.labelSmall,
                   color = Color(0xFFFDE047),
                   fontWeight = FontWeight.ExtraBold,
                   modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                 )
-              }
-            }
-
-            // 7-step horizontal visual tracker
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically
-            ) {
-              for (day in 1..7) {
-                val isClaimed =
-                  if (!dailyCheckInState.canCheckInToday) {
-                    day <= dailyCheckInState.currentStreak
-                  } else {
-                    day < dailyCheckInState.nextClaimDay
-                  }
-                val isCurrent = dailyCheckInState.canCheckInToday && day == dailyCheckInState.nextClaimDay
-
-                Column(
-                  horizontalAlignment = Alignment.CenterHorizontally,
-                  verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                  Surface(
-                    shape = CircleShape,
-                    color =
-                      when {
-                        isClaimed -> Color(0xFF10B981)
-                        isCurrent -> Color(0xFFFDE047)
-                        else -> Color.White.copy(alpha = 0.15f)
-                      },
-                    modifier = Modifier.size(32.dp)
-                  ) {
-                    Box(contentAlignment = Alignment.Center) {
-                      if (isClaimed) {
-                        Icon(
-                          imageVector = Icons.Default.Check,
-                          contentDescription = "Claimed",
-                          tint = Color.White,
-                          modifier = Modifier.size(16.dp)
-                        )
-                      } else if (day == 7) {
-                        Icon(
-                          imageVector = Icons.Default.EmojiEvents,
-                          contentDescription = "Bonus",
-                          tint = if (isCurrent) Color(0xFF78350F) else Color.White,
-                          modifier = Modifier.size(16.dp)
-                        )
-                      } else {
-                        Text(
-                          text = "$day",
-                          style = MaterialTheme.typography.labelMedium,
-                          fontWeight = FontWeight.Bold,
-                          color = if (isCurrent) Color(0xFF78350F) else Color.White
-                        )
-                      }
-                    }
-                  }
-                  Text(
-                    text = if (day == 7) "625 C" else "125 C",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.9f),
-                    fontSize = 10.sp,
-                    fontWeight = if (isCurrent || isClaimed) FontWeight.Bold else FontWeight.Normal
-                  )
-                }
               }
             }
 
@@ -307,9 +242,9 @@ fun DedicatedDailyCheckInScreen(
                 Text(
                   text =
                     if (dailyCheckInState.canCheckInToday) {
-                      "Day ${dailyCheckInState.nextClaimDay} reward is ready to claim today!"
+                      "Day ${dailyCheckInState.nextClaimDay} of 30 (+${DailyCheckInConstants.getRewardCoinsForDay(dailyCheckInState.nextClaimDay)} Coins) is ready!"
                     } else {
-                      "Today's reward claimed ✓ Next claim unlocks in: $timeRemainingToTomorrow (Tomorrow)"
+                      "Today's reward claimed ✓ Next claim unlocks in: $timeRemainingToTomorrow"
                     },
                   style = MaterialTheme.typography.bodySmall,
                   color = Color.White,
@@ -324,17 +259,17 @@ fun DedicatedDailyCheckInScreen(
       // 2. Section Title
       item {
         Text(
-          text = "7-Day Daily Claim Cards",
+          text = "30-Day Daily Claim Cards",
           style = MaterialTheme.typography.titleMedium,
           fontWeight = FontWeight.Bold,
           color = MaterialTheme.colorScheme.onSurface
         )
       }
 
-      // 3. Individual 7 Day Cards
-      for (day in 1..7) {
-        val rewardCents = DailyCheckInConstants.getRewardForDay(day)
-        val isDay7Bonus = day == 7
+      // 3. Individual 30 Day Cards
+      for (day in 1..30) {
+        val rewardCoins = DailyCheckInConstants.getRewardCoinsForDay(day)
+        val isDay30Bonus = day == 30
 
         val isClaimed =
           if (!dailyCheckInState.canCheckInToday) {
@@ -349,11 +284,11 @@ fun DedicatedDailyCheckInScreen(
         item(key = "day_card_$day") {
           IndividualDayCard(
             day = day,
-            rewardCents = rewardCents,
+            rewardCents = rewardCoins,
             isClaimed = isClaimed,
             isAvailable = isAvailable,
             isDayTaskLocked = isDayTaskLocked,
-            isDay7Bonus = isDay7Bonus,
+            isDay7Bonus = isDay30Bonus,
             canCheckInToday = dailyCheckInState.canCheckInToday,
             nextClaimDay = dailyCheckInState.nextClaimDay,
             isBusy = isBusy,
@@ -392,7 +327,7 @@ fun DedicatedDailyCheckInScreen(
               )
             }
             Text(
-              text = "• Days 1–6 reward: ₹1.00 each.\n• Day 7 bonus reward: ₹5.00 after 7 consecutive days (Total ₹11.00).\n• Complete a video ad when claiming your daily reward.\n• Next claim opens every calendar day (24-hour interval).\n• Missing a day resets your streak to Day 1.",
+              text = "• 30-day repeating Coin reward schedule (up to 1,000 Coins on Day 30).\n• Complete a video ad when claiming your daily reward.\n• Next claim opens every calendar day (24-hour interval).\n• Missing a day resets your streak to Day 1.",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               lineHeight = 20.sp
@@ -525,7 +460,7 @@ private fun IndividualDayCard(
           }
 
           Text(
-            text = formatRewardInr(rewardCents),
+            text = "+$rewardCents Coins",
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.ExtraBold,
             color =

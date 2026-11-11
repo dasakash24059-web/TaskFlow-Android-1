@@ -57,6 +57,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -293,6 +294,15 @@ fun SpinAndEarnScreen(
             val radius = canvasSize / 2f
             val sweepAngle = 360f / PRIZES.size
 
+            val textPaint = android.graphics.Paint().apply {
+              color = android.graphics.Color.WHITE
+              textSize = 13.sp.toPx()
+              typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+              textAlign = android.graphics.Paint.Align.CENTER
+              isAntiAlias = true
+              setShadowLayer(4f, 0f, 2f, android.graphics.Color.BLACK)
+            }
+
             PRIZES.forEachIndexed { index, prize ->
               val startAngle = index * sweepAngle
               drawArc(
@@ -310,6 +320,21 @@ fun SpinAndEarnScreen(
                 size = Size(canvasSize, canvasSize),
                 style = Stroke(width = 1.dp.toPx())
               )
+
+              // Draw Prize Number Text in center of segment
+              val midAngleRad = Math.toRadians((startAngle + sweepAngle / 2f).toDouble())
+              val textRadius = radius * 0.65f
+              val textX = center.x + (textRadius * cos(midAngleRad)).toFloat()
+              val textY = center.y + (textRadius * sin(midAngleRad)).toFloat() + (textPaint.textSize / 3f)
+
+              drawContext.canvas.nativeCanvas.save()
+              drawContext.canvas.nativeCanvas.rotate(
+                (startAngle + sweepAngle / 2f + 90f),
+                textX,
+                textY
+              )
+              drawContext.canvas.nativeCanvas.drawText("${prize.coins}", textX, textY, textPaint)
+              drawContext.canvas.nativeCanvas.restore()
             }
           }
         }
