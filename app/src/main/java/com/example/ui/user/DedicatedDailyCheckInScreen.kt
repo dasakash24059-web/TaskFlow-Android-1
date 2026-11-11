@@ -69,6 +69,8 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DailyCheckInState
 import com.example.data.model.formatRewardInr
+import com.example.ui.components.NeonBackgroundBox
+import com.example.ui.components.NeonGlassCard
 import java.util.Calendar
 
 /**
@@ -112,32 +114,45 @@ fun DedicatedDailyCheckInScreen(
 
   val currentStageDay = dailyCheckInState.nextClaimDay
 
-  Scaffold(
-    topBar = {
-      TopAppBar(
-        title = {
-          Text(
-            text = "Daily Check-in",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold
-          )
-        },
-        navigationIcon = {
+  NeonBackgroundBox {
+    LazyColumn(
+      modifier =
+        Modifier.fillMaxSize()
+          .testTag("dedicated_daily_checkin_screen"),
+      contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+      verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+      // Top Navigation Bar
+      item {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween
+        ) {
           IconButton(
             onClick = onBack,
-            modifier = Modifier.testTag("daily_checkin_back_button")
+            modifier = Modifier
+              .clip(CircleShape)
+              .background(Color(0x30A855F7))
+              .border(1.dp, Color(0x60A855F7), CircleShape)
+              .testTag("daily_checkin_back_button")
           ) {
             Icon(
               imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-              contentDescription = "Back to Home"
+              contentDescription = "Back to Home",
+              tint = Color.White
             )
           }
-        },
-        actions = {
+          Text(
+            text = "Daily Check-in Rewards",
+            style = MaterialTheme.typography.titleLarge,
+            color = Color.White,
+            fontWeight = FontWeight.Bold
+          )
           Surface(
             shape = RoundedCornerShape(50),
-            color = Color(0xFFFEF3C7),
-            modifier = Modifier.padding(end = 12.dp)
+            color = Color(0x30F59E0B),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FBBF24))
           ) {
             Row(
               modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -147,246 +162,158 @@ fun DedicatedDailyCheckInScreen(
               Icon(
                 imageVector = Icons.Default.LocalFireDepartment,
                 contentDescription = null,
-                tint = Color(0xFFD97706),
+                tint = Color(0xFFFBBF24),
                 modifier = Modifier.size(16.dp)
               )
               Text(
                 text = "${dailyCheckInState.currentStreak}d Streak",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFB45309)
+                color = Color(0xFFFDE047)
               )
             }
           }
-        },
-        colors =
-          TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.background
-          )
-      )
-    }
-  ) { innerPadding ->
-    LazyColumn(
-      modifier =
-        Modifier.fillMaxSize()
-          .padding(innerPadding)
-          .testTag("dedicated_daily_checkin_screen"),
-      contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
-      verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-      val showWeeklyBanner = currentStageDay >= 5 || dailyCheckInState.currentStreak >= 4
+        }
+      }
 
       // 1. Hero Banner: Streak Progress Overview
-      if (showWeeklyBanner) {
-        item {
-          Card(
-            shape = RoundedCornerShape(26.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-            modifier = Modifier.fillMaxWidth().testTag("daily_checkin_hero_card")
-          ) {
-            Box(
-              modifier =
-                Modifier.fillMaxWidth()
-                  .background(
-                    Brush.linearGradient(
-                      colors =
-                        listOf(
-                          Color(0xFF1E3A8A),
-                          Color(0xFF2563EB),
-                          Color(0xFF7C3AED)
-                        )
-                    )
-                  )
-                  .padding(22.dp)
-            ) {
-              Canvas(modifier = Modifier.matchParentSize()) {
-                drawCircle(
-                  color = Color.White.copy(alpha = 0.08f),
-                  radius = size.height * 0.75f,
-                  center = Offset(size.width * 0.88f, size.height * 0.2f)
-                )
-              }
-              Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-              ) {
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                  verticalAlignment = Alignment.CenterVertically
-                ) {
-                  Column {
-                    Text(
-                      text = "7-Day Streak Rewards",
-                      style = MaterialTheme.typography.labelMedium,
-                      color = Color(0xFFDBEAFE),
-                      fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                      text = "Earn Daily Rewards Every Week",
-                      style = MaterialTheme.typography.titleLarge,
-                      color = Color.White,
-                      fontWeight = FontWeight.ExtraBold
-                    )
-                  }
-                  Surface(
-                    shape = RoundedCornerShape(50),
-                    color = Color(0xFFFDE047),
-                    modifier = Modifier.padding(start = 8.dp)
-                  ) {
-                    Text(
-                      text = "7 Days",
-                      style = MaterialTheme.typography.labelSmall,
-                      color = Color(0xFF78350F),
-                      fontWeight = FontWeight.ExtraBold,
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
-                  }
-                }
-
-                // 7-step horizontal visual tracker
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                  verticalAlignment = Alignment.CenterVertically
-                ) {
-                  for (day in 1..7) {
-                    val isClaimed =
-                      if (!dailyCheckInState.canCheckInToday) {
-                        day <= dailyCheckInState.currentStreak
-                      } else {
-                        day < dailyCheckInState.nextClaimDay
-                      }
-                    val isCurrent = dailyCheckInState.canCheckInToday && day == dailyCheckInState.nextClaimDay
-
-                    Column(
-                      horizontalAlignment = Alignment.CenterHorizontally,
-                      verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                      Surface(
-                        shape = CircleShape,
-                        color =
-                          when {
-                            isClaimed -> Color(0xFF10B981)
-                            isCurrent -> Color(0xFFFDE047)
-                            else -> Color.White.copy(alpha = 0.22f)
-                          },
-                        modifier = Modifier.size(32.dp)
-                      ) {
-                        Box(contentAlignment = Alignment.Center) {
-                          if (isClaimed) {
-                            Icon(
-                              imageVector = Icons.Default.Check,
-                              contentDescription = "Claimed",
-                              tint = Color.White,
-                              modifier = Modifier.size(16.dp)
-                            )
-                          } else if (day == 7) {
-                            Icon(
-                              imageVector = Icons.Default.EmojiEvents,
-                              contentDescription = "Bonus",
-                              tint = if (isCurrent) Color(0xFF78350F) else Color.White,
-                              modifier = Modifier.size(16.dp)
-                            )
-                          } else {
-                            Text(
-                              text = "$day",
-                              style = MaterialTheme.typography.labelMedium,
-                              fontWeight = FontWeight.Bold,
-                              color = if (isCurrent) Color(0xFF78350F) else Color.White
-                            )
-                          }
-                        }
-                      }
-                      Text(
-                        text = if (day == 7) "₹5" else "₹1",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.9f),
-                        fontSize = 10.sp,
-                        fontWeight = if (isCurrent || isClaimed) FontWeight.Bold else FontWeight.Normal
-                      )
-                    }
-                  }
-                }
-
-                // Next claim timing notice
-                Surface(
-                  shape = RoundedCornerShape(14.dp),
-                  color = Color.White.copy(alpha = 0.16f),
-                  modifier = Modifier.fillMaxWidth()
-                ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.Schedule,
-                      contentDescription = null,
-                      tint = Color(0xFFFDE047),
-                      modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                      text =
-                        if (dailyCheckInState.canCheckInToday) {
-                          "Day ${dailyCheckInState.nextClaimDay} (${formatRewardInr(dailyCheckInState.nextRewardCents)}) is ready to claim today!"
-                        } else {
-                          "Today's reward claimed ✓ Next claim unlocks in: $timeRemainingToTomorrow (Tomorrow)"
-                        },
-                      style = MaterialTheme.typography.bodySmall,
-                      color = Color.White,
-                      fontWeight = FontWeight.Medium
-                    )
-                  }
-                }
-              }
-            }
-          }
-        }
-      } else {
-        // Compact Status Header for Days 1–4
-        item {
-          Card(
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-            modifier = Modifier.fillMaxWidth().testTag("daily_checkin_hero_card")
+      item {
+        NeonGlassCard(
+          shape = RoundedCornerShape(26.dp),
+          borderColor = Color(0x70A855F7),
+          backgroundColor = Color(0x40141938),
+          modifier = Modifier.fillMaxWidth().testTag("daily_checkin_hero_card")
+        ) {
+          Column(
+            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
           ) {
             Row(
-              modifier = Modifier.fillMaxWidth().padding(18.dp),
+              modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically
             ) {
               Column {
                 Text(
-                  text = "Daily Rewards",
+                  text = "7-Day Coin Streak",
                   style = MaterialTheme.typography.labelMedium,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                  color = Color(0xFF94A3B8),
+                  fontWeight = FontWeight.SemiBold
                 )
-                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                  text =
-                    if (dailyCheckInState.canCheckInToday) {
-                      "Day ${dailyCheckInState.nextClaimDay} Available"
-                    } else {
-                      "Day ${dailyCheckInState.currentStreak} Claimed ✓"
-                    },
+                  text = "Earn Coins Every Consecutive Day",
                   style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onSurface
+                  color = Color.White,
+                  fontWeight = FontWeight.ExtraBold
                 )
               }
               Surface(
                 shape = RoundedCornerShape(50),
-                color = Color(0xFFFEF3C7)
+                color = Color(0x30FDE047),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FDE047))
               ) {
                 Text(
-                  text = "🔥 Streak: ${dailyCheckInState.currentStreak}d",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Bold,
-                  color = Color(0xFFB45309),
-                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                  text = "7 Days",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFFFDE047),
+                  fontWeight = FontWeight.ExtraBold,
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+              }
+            }
+
+            // 7-step horizontal visual tracker
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              for (day in 1..7) {
+                val isClaimed =
+                  if (!dailyCheckInState.canCheckInToday) {
+                    day <= dailyCheckInState.currentStreak
+                  } else {
+                    day < dailyCheckInState.nextClaimDay
+                  }
+                val isCurrent = dailyCheckInState.canCheckInToday && day == dailyCheckInState.nextClaimDay
+
+                Column(
+                  horizontalAlignment = Alignment.CenterHorizontally,
+                  verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                  Surface(
+                    shape = CircleShape,
+                    color =
+                      when {
+                        isClaimed -> Color(0xFF10B981)
+                        isCurrent -> Color(0xFFFDE047)
+                        else -> Color.White.copy(alpha = 0.15f)
+                      },
+                    modifier = Modifier.size(32.dp)
+                  ) {
+                    Box(contentAlignment = Alignment.Center) {
+                      if (isClaimed) {
+                        Icon(
+                          imageVector = Icons.Default.Check,
+                          contentDescription = "Claimed",
+                          tint = Color.White,
+                          modifier = Modifier.size(16.dp)
+                        )
+                      } else if (day == 7) {
+                        Icon(
+                          imageVector = Icons.Default.EmojiEvents,
+                          contentDescription = "Bonus",
+                          tint = if (isCurrent) Color(0xFF78350F) else Color.White,
+                          modifier = Modifier.size(16.dp)
+                        )
+                      } else {
+                        Text(
+                          text = "$day",
+                          style = MaterialTheme.typography.labelMedium,
+                          fontWeight = FontWeight.Bold,
+                          color = if (isCurrent) Color(0xFF78350F) else Color.White
+                        )
+                      }
+                    }
+                  }
+                  Text(
+                    text = if (day == 7) "625 C" else "125 C",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 10.sp,
+                    fontWeight = if (isCurrent || isClaimed) FontWeight.Bold else FontWeight.Normal
+                  )
+                }
+              }
+            }
+
+            // Next claim timing notice
+            Surface(
+              shape = RoundedCornerShape(14.dp),
+              color = Color.White.copy(alpha = 0.12f),
+              modifier = Modifier.fillMaxWidth()
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Schedule,
+                  contentDescription = null,
+                  tint = Color(0xFFFDE047),
+                  modifier = Modifier.size(16.dp)
+                )
+                Text(
+                  text =
+                    if (dailyCheckInState.canCheckInToday) {
+                      "Day ${dailyCheckInState.nextClaimDay} reward is ready to claim today!"
+                    } else {
+                      "Today's reward claimed ✓ Next claim unlocks in: $timeRemainingToTomorrow (Tomorrow)"
+                    },
+                  style = MaterialTheme.typography.bodySmall,
+                  color = Color.White,
+                  fontWeight = FontWeight.Medium
                 )
               }
             }

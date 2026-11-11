@@ -1057,6 +1057,17 @@ class TaskFlowViewModel(
     }
   }
 
+  fun claimSpinReward(coins: Long, onSuccess: (Long) -> Unit = {}) {
+    val uid = currentUserId
+    if (uid.isBlank()) return
+    viewModelScope.launch {
+      _isBusy.value = true
+      _bannerMessage.value = "Spin & Earn reward claimed: +$coins Coins!"
+      onSuccess(coins)
+      _isBusy.value = false
+    }
+  }
+
   fun claimSpinReward(sessionId: String, onSuccess: (Long) -> Unit) {
     viewModelScope.launch {
       _isBusy.value = true
@@ -1440,6 +1451,21 @@ class TaskFlowViewModel(
   fun setDailyCheckInScreenVisible(visible: Boolean) {
     _isDailyCheckInScreenVisible.value = visible
   }
+
+  private val _isSpinScreenVisible = MutableStateFlow(false)
+  val isSpinScreenVisible: StateFlow<Boolean> = _isSpinScreenVisible.asStateFlow()
+
+  fun setSpinScreenVisible(visible: Boolean) {
+    _isSpinScreenVisible.value = visible
+  }
+
+  private val _isOfferWallScreenVisible = MutableStateFlow(false)
+  val isOfferWallScreenVisible: StateFlow<Boolean> = _isOfferWallScreenVisible.asStateFlow()
+
+  fun setOfferWallScreenVisible(visible: Boolean) {
+    _isOfferWallScreenVisible.value = visible
+  }
+
 
   // ==========================================
   // CAMPAIGNS (Client / Partner Management)

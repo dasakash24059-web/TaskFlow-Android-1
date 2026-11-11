@@ -116,11 +116,15 @@ import com.example.util.findActivity
 import com.example.ui.components.AppIconThumbnail
 import com.example.ui.components.ClickableTaskLinkCard
 import com.example.ui.components.FullSizeImageDialog
+import com.example.ui.components.NeonBackgroundBox
+import com.example.ui.components.NeonCoinBadge
+import com.example.ui.components.NeonGlassCard
 import com.example.ui.components.ProofImageView
 import com.example.ui.components.RewardBadge
 import com.example.ui.components.StatusBadge
 import com.example.ui.components.TaskFlowBrandLogo
 import com.example.ui.components.TaskItemCard
+import com.example.ui.components.VerifiedBadge
 import com.example.ui.components.openExternalTaskUrl
 import com.example.ui.components.resolveAppOrWebsiteLabel
 import com.example.ui.viewmodel.UiState
@@ -157,7 +161,9 @@ fun UserHomeScreen(
   onStartWatchVideo: (() -> Unit)? = null,
   onClaimVerifiedWatchReward: (() -> Unit)? = null,
   onOpenWatchDialog: () -> Unit = {},
-  onShowInterstitial: () -> Unit = {}
+  onShowInterstitial: () -> Unit = {},
+  onNavigateToSpin: () -> Unit = {},
+  onNavigateToOfferWall: () -> Unit = {}
 ) {
   val profile = (profileState as? UiState.Success)?.data
   val currentUserId = profile?.userId?.ifBlank { profile.id } ?: ""
@@ -189,23 +195,6 @@ fun UserHomeScreen(
             (currentUserId.isBlank() || it.assignedUserId == currentUserId)
         }
         .take(3)
-    }
-
-  val pendingCount = activeAvailableTasks.size
-  val submittedCount =
-    mergedTasksForActivity.count {
-      it.status == TaskStatus.SUBMITTED &&
-        (currentUserId.isBlank() || it.assignedUserId == currentUserId)
-    }
-  val approvedCount =
-    mergedTasksForActivity.count {
-      it.status == TaskStatus.APPROVED &&
-        (currentUserId.isBlank() || it.assignedUserId == currentUserId)
-    }
-  val rejectedCount =
-    mergedTasksForActivity.count {
-      it.status == TaskStatus.REJECTED &&
-        (currentUserId.isBlank() || it.assignedUserId == currentUserId)
     }
 
   val displayName = profile?.displayName?.ifBlank { "TaskFlow Member" } ?: "TaskFlow Member"
@@ -243,347 +232,302 @@ fun UserHomeScreen(
     )
   }
 
-  Box(
-    modifier =
-      Modifier.fillMaxSize()
-        .background(
-          Brush.verticalGradient(
-            colors =
-              listOf(
-                Color(0xFFFAFAFE),
-                Color(0xFFF5F3FF),
-                Color(0xFFF3E8FF)
-              )
-          )
-        )
-  ) {
-    Canvas(modifier = Modifier.matchParentSize()) {
-      drawCircle(
-        color = Color(0xFFDDD6FE).copy(alpha = 0.35f),
-        radius = size.width * 0.45f,
-        center = Offset(size.width * 0.05f, size.height * 0.02f)
-      )
-      drawCircle(
-        color = Color(0xFFC7D2FE).copy(alpha = 0.28f),
-        radius = size.width * 0.5f,
-        center = Offset(size.width * 0.95f, size.height * 0.08f)
-      )
-      drawCircle(
-        color = Color(0xFFE9D5FF).copy(alpha = 0.22f),
-        radius = size.width * 0.35f,
-        center = Offset(-size.width * 0.1f, size.height * 0.45f)
-      )
-      drawCircle(
-        color = Color(0xFFC7D2FE).copy(alpha = 0.25f),
-        radius = size.width * 0.6f,
-        center = Offset(size.width * 0.9f, size.height * 0.9f)
-      )
-    }
-
+  NeonBackgroundBox {
     LazyColumn(
       modifier = Modifier.fillMaxSize().testTag("user_home_screen"),
-      contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
+      contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-    // 1. Compact App Header and User Identity / Balance Area
-    item {
-      Box(
-        modifier =
-          Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .background(
-              Brush.linearGradient(
-                colors =
-                  listOf(
-                    Color(0xFF1E1B4B),
-                    Color(0xFF312E81),
-                    Color(0xFF4338CA)
-                  )
-              )
-            )
-            .border(
-              width = 1.dp,
-              color = Color(0xFFA5B4FC).copy(alpha = 0.35f),
-              shape = RoundedCornerShape(22.dp)
-            )
-            .padding(16.dp)
-      ) {
-        Canvas(modifier = Modifier.matchParentSize()) {
-          drawCircle(
-            color = Color.White.copy(alpha = 0.08f),
-            radius = size.height * 0.8f,
-            center = Offset(size.width * 0.9f, size.height * 0.2f)
-          )
-        }
-        Row(
+      // 1. Header: Welcome & Compact Balance Pill
+      item {
+        NeonGlassCard(
           modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically
+          borderColor = Color(0x60A855F7),
+          backgroundColor = Color(0x40141938)
         ) {
           Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.weight(1f)
-          ) {
-            TaskFlowBrandLogo(size = 38.dp)
-            Column {
-              Text(
-                text = "Welcome back,",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFFC7D2FE),
-                fontWeight = FontWeight.Medium
-              )
-              Text(
-                text = displayName,
-                style = MaterialTheme.typography.titleLarge,
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.testTag("home_welcome_message")
-              )
-            }
-          }
-
-          Spacer(modifier = Modifier.width(8.dp))
-
-          // Compact Balance Pill on right side
-          Surface(
-            shape = RoundedCornerShape(50),
-            color = Color(0xFF3730A3),
-            modifier =
-              Modifier
-                .clip(RoundedCornerShape(50))
-                .border(
-                  width = 1.dp,
-                  color = Color(0xFFA5B4FC).copy(alpha = 0.5f),
-                  shape = RoundedCornerShape(50)
-                )
-                .clickable { onNavigateToWallet(true) }
-                .testTag("home_compact_balance")
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-              Icon(
-                imageVector = Icons.Default.AccountBalanceWallet,
-                contentDescription = "Wallet",
-                tint = Color(0xFFC7D2FE),
-                modifier = Modifier.size(16.dp)
-              )
-              Column(verticalArrangement = Arrangement.Center) {
-                Text(
-                  text = "MY BALANCE",
-                  style = MaterialTheme.typography.labelSmall,
-                  fontSize = 8.sp,
-                  color = Color(0xFFC7D2FE),
-                  fontWeight = FontWeight.Bold
-                )
-                Text(
-                  text = formatRewardInr(profile?.balanceCents ?: 0L),
-                  style = MaterialTheme.typography.labelLarge,
-                  color = Color.White,
-                  fontWeight = FontWeight.ExtraBold,
-                  modifier = Modifier.testTag("home_available_balance")
-                )
-              }
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = "Open Withdraw",
-                tint = Color(0xFFC7D2FE),
-                modifier = Modifier.size(14.dp)
-              )
-            }
-          }
-        }
-      }
-    }
-
-    // 2. Daily Check-in & Watch & Earn Cards Side-by-Side Horizontal Grid (Original Top Position)
-    // 2. Explore Rewards Area (4 Options)
-    item {
-      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(
-          modifier = Modifier.fillMaxWidth().height(138.dp),
-          horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-          DailyCheckInCard(
-            dailyCheckInState = dailyCheckInState,
-            onClaimDailyCheckIn = onClaimDailyCheckIn,
-            onOpenCalendar = onNavigateToDailyCheckIn,
-            modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_daily_checkin_card")
-          )
-          WatchAndEarnCard(
-            onWatchAdClicked = {
-              onOpenWatchDialog()
-              showWatchAdDialog = true
-            },
-            onShowInterstitialClicked = onShowInterstitial,
-            modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_watch_earn_card")
-          )
-        }
-        Row(
-          modifier = Modifier.fillMaxWidth().height(138.dp),
-          horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-          SpinAndEarnCard(
-            modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_spin_earn_card")
-          )
-          OfferWallCard(
-            modifier = Modifier.weight(1f).fillMaxHeight().testTag("home_offer_wall_card")
-          )
-        }
-      }
-    }
-
-    // Unity Banner Ad View (Positioned directly below Quick Actions for immediate visibility)
-    item {
-      UnityBannerAdView(modifier = Modifier.clip(RoundedCornerShape(16.dp)))
-    }
-
-    // 3. Available Tasks Section
-    item {
-      Card(
-        modifier = Modifier.fillMaxWidth().testTag("home_available_tasks_section"),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-      ) {
-        Column(
-          modifier = Modifier.fillMaxWidth().padding(18.dp),
-          verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
           ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
+              modifier = Modifier.weight(1f)
+            ) {
+              TaskFlowBrandLogo(size = 40.dp)
+              Column {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                  Text(
+                    text = "Welcome back,",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF94A3B8),
+                    fontWeight = FontWeight.Medium
+                  )
+                  VerifiedBadge(isVerified = profile?.approvalStatus == "approved")
+                }
+                Text(
+                  text = displayName,
+                  style = MaterialTheme.typography.titleLarge,
+                  color = Color.White,
+                  fontWeight = FontWeight.Bold,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier.testTag("home_welcome_message")
+                )
+              }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Compact Balance Pill on right side
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = Color(0x35F59E0B),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FBBF24)),
+              modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .clickable { onNavigateToWallet(true) }
+                .testTag("home_compact_balance")
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Default.AccountBalanceWallet,
+                  contentDescription = "Wallet",
+                  tint = Color(0xFFFBBF24),
+                  modifier = Modifier.size(16.dp)
+                )
+                Column(verticalArrangement = Arrangement.Center) {
+                  Text(
+                    text = "MY BALANCE",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 8.sp,
+                    color = Color(0xFF94A3B8),
+                    fontWeight = FontWeight.Bold
+                  )
+                  Text(
+                    text = formatRewardInr(profile?.balanceCents ?: 0L),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color(0xFFFDE047),
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.testTag("home_available_balance")
+                  )
+                }
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                  contentDescription = "Open Withdraw",
+                  tint = Color(0xFFFBBF24),
+                  modifier = Modifier.size(14.dp)
+                )
+              }
+            }
+          }
+        }
+      }
+
+      // 2. Explore Rewards Section (EXACTLY 4 Equal-Sized Square Cards in a 2x2 Grid)
+      item {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          Text(
+            text = "Explore Rewards",
+            style = MaterialTheme.typography.titleMedium,
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(start = 4.dp)
+          )
+          Row(
+            modifier = Modifier.fillMaxWidth().height(140.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+          ) {
+            WatchAndEarnCard(
+              onWatchAdClicked = {
+                onOpenWatchDialog()
+                showWatchAdDialog = true
+              },
+              onShowInterstitialClicked = onShowInterstitial,
+              modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+            DailyCheckInCard(
+              dailyCheckInState = dailyCheckInState,
+              onClaimDailyCheckIn = onClaimDailyCheckIn,
+              onOpenCalendar = onNavigateToDailyCheckIn,
+              modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+          }
+          Row(
+            modifier = Modifier.fillMaxWidth().height(140.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+          ) {
+            SpinAndEarnCard(
+              onClick = onNavigateToSpin,
+              modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+            OfferWallCard(
+              onClick = onNavigateToOfferWall,
+              modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+          }
+        }
+      }
+
+      // Unity Banner Ad View
+      item {
+        UnityBannerAdView(modifier = Modifier.clip(RoundedCornerShape(16.dp)))
+      }
+
+      // 3. Available Tasks Section Header
+      item {
+        NeonGlassCard(
+          modifier = Modifier.fillMaxWidth().testTag("home_available_tasks_section"),
+          borderColor = Color(0x6006B6D4),
+          backgroundColor = Color(0x40141938)
+        ) {
+          Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Available Tasks",
+                  style = MaterialTheme.typography.titleLarge,
+                  color = Color.White,
+                  fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                  text =
+                    if (activeAvailableTasks.isNotEmpty()) {
+                      "${activeAvailableTasks.size} active task(s) available to earn rewards"
+                    } else {
+                      "Browse verified tasks published by the administrator"
+                    },
+                  style = MaterialTheme.typography.bodySmall,
+                  color = Color(0xFF94A3B8)
+                )
+              }
+              TextButton(
+                onClick = { onNavigateToTracking(TaskStatus.PENDING) },
+                modifier = Modifier.testTag("view_all_tracking_button")
+              ) {
+                Text("View All (${activeAvailableTasks.size})", color = Color(0xFF22D3EE))
+              }
+            }
+
+            Button(
+              onClick = { onNavigateToTracking(TaskStatus.PENDING) },
+              shape = RoundedCornerShape(14.dp),
+              colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF0284C7),
+                contentColor = Color.White
+              ),
+              modifier =
+                Modifier.fillMaxWidth()
+                  .height(48.dp)
+                  .testTag("browse_available_tasks_button")
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Assignment,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+              )
+              Spacer(modifier = Modifier.width(8.dp))
               Text(
-                text = "Available Tasks",
-                style = MaterialTheme.typography.titleLarge,
+                text = "Browse Available Tasks (${activeAvailableTasks.size})",
                 fontWeight = FontWeight.Bold
               )
-              Spacer(modifier = Modifier.height(2.dp))
-              Text(
-                text =
-                  if (activeAvailableTasks.isNotEmpty()) {
-                    "${activeAvailableTasks.size} active task(s) available to earn rewards"
-                  } else {
-                    "Browse verified tasks published by the administrator"
-                  },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-              )
-            }
-            TextButton(
-              onClick = { onNavigateToTracking(TaskStatus.PENDING) },
-              modifier = Modifier.testTag("view_all_tracking_button")
-            ) {
-              Text("View All (${activeAvailableTasks.size})")
             }
           }
+        }
+      }
 
-          Button(
-            onClick = { onNavigateToTracking(TaskStatus.PENDING) },
-            shape = RoundedCornerShape(14.dp),
-            modifier =
-              Modifier.fillMaxWidth()
-                .height(48.dp)
-                .testTag("browse_available_tasks_button")
-          ) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.Assignment,
-              contentDescription = null,
-              modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-              text = "Browse Available Tasks (${activeAvailableTasks.size})",
-              fontWeight = FontWeight.Bold
-            )
-          }
-        }
-      }
-    }
-
-    // Active Task Cards (Part of Available Tasks section)
-    if (tasksState is UiState.Loading) {
-      item {
-        Box(
-          modifier = Modifier.fillMaxWidth().padding(36.dp),
-          contentAlignment = Alignment.Center
-        ) {
-          CircularProgressIndicator()
-        }
-      }
-    } else if (tasksState is UiState.Error) {
-      item {
-        Surface(
-          shape = RoundedCornerShape(16.dp),
-          color = MaterialTheme.colorScheme.errorContainer,
-          modifier = Modifier.fillMaxWidth()
-        ) {
-          Text(
-            text = (tasksState as UiState.Error).message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onErrorContainer,
-            modifier = Modifier.padding(16.dp)
-          )
-        }
-      }
-    } else {
-      if (activeAvailableTasks.isEmpty()) {
+      // Active Task Cards
+      if (tasksState is UiState.Loading) {
         item {
-          EmptyAssignedTaskCard(
-            isAdminAuthorized = isAdminAuthorized,
-            onSwitchToAdmin = onSwitchToAdmin
-          )
+          Box(
+            modifier = Modifier.fillMaxWidth().padding(36.dp),
+            contentAlignment = Alignment.Center
+          ) {
+            CircularProgressIndicator(color = Color(0xFFA855F7))
+          }
+        }
+      } else if (tasksState is UiState.Error) {
+        item {
+          Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = Color(0x30EF4444),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80F87171)),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Text(
+              text = (tasksState as UiState.Error).message,
+              style = MaterialTheme.typography.bodyMedium,
+              color = Color(0xFFFCA5A5),
+              modifier = Modifier.padding(16.dp)
+            )
+          }
         }
       } else {
-        items(activeAvailableTasks.take(3), key = { "home_avail_${it.id}" }) { task ->
-          TaskItemCard(
-            task = task,
-            onClick = { onSelectTask(task.id) }
-          )
-        }
-      }
-    }
-
-    // 4. Top Earners Leaderboard
-    item {
-      LeaderboardPreviewCard(
-        users = leaderboardUsers,
-        onViewAllClicked = { showLeaderboardDialog = true }
-      )
-    }
-
-    // Hidden test anchors preserving unit test compatibility
-    item {
-      Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_wallet_section"))
-    }
-    item {
-      Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_recent_transactions_section")) {
-        transactions.forEach { tx ->
-          Text(text = tx.title, fontSize = 1.sp, color = Color.Transparent)
-        }
-      }
-    }
-    item {
-      Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_recent_activity_section")) {
-        if (recentActivityTasks.isEmpty()) {
-          Text("anchor", fontSize = 1.sp, color = Color.Transparent)
+        if (activeAvailableTasks.isEmpty()) {
+          item {
+            EmptyAssignedTaskCard(
+              isAdminAuthorized = isAdminAuthorized,
+              onSwitchToAdmin = onSwitchToAdmin
+            )
+          }
         } else {
-          recentActivityTasks.forEach { act ->
-            Text(text = act.title, fontSize = 1.sp, color = Color.Transparent)
+          items(activeAvailableTasks.take(3), key = { "home_avail_${it.id}" }) { task ->
+            TaskItemCard(
+              task = task,
+              onClick = { onSelectTask(task.id) }
+            )
+          }
+        }
+      }
+
+      // 4. Top Earners Leaderboard
+      item {
+        LeaderboardPreviewCard(
+          users = leaderboardUsers,
+          onViewAllClicked = { showLeaderboardDialog = true }
+        )
+      }
+
+      // Hidden test anchors preserving unit test compatibility
+      item {
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_wallet_section"))
+      }
+      item {
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_recent_transactions_section")) {
+          transactions.forEach { tx ->
+            Text(text = tx.title, fontSize = 1.sp, color = Color.Transparent)
+          }
+        }
+      }
+      item {
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).testTag("home_recent_activity_section")) {
+          if (recentActivityTasks.isEmpty()) {
+            Text("anchor", fontSize = 1.sp, color = Color.Transparent)
+          } else {
+            recentActivityTasks.forEach { act ->
+              Text(text = act.title, fontSize = 1.sp, color = Color.Transparent)
+            }
           }
         }
       }
     }
   }
-}
 }
 
 @Composable
@@ -1004,41 +948,51 @@ private fun WatchAdInfoDialog(
 
 @Composable
 private fun SpinAndEarnCard(
+  onClick: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
-  Card(
-    modifier = modifier.clip(RoundedCornerShape(26.dp)).clickable(onClick = { /* TODO */ }),
-    shape = RoundedCornerShape(26.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+  NeonGlassCard(
+    modifier = modifier.testTag("home_spin_earn_card"),
+    borderColor = Color(0x60EC4899),
+    backgroundColor = Color(0x3B1F174B),
+    onClick = onClick
   ) {
     Column(
-      modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 14.dp),
+      modifier = Modifier.fillMaxSize().padding(14.dp),
       verticalArrangement = Arrangement.Center,
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       Surface(
         shape = CircleShape,
-        color = Color(0xFFFEE2E2),
-        modifier = Modifier.size(58.dp)
+        color = Color(0x35EC4899),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80F472B6)),
+        modifier = Modifier.size(52.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
-            imageVector = Icons.Default.Refresh, // Placeholder for spin
+            imageVector = Icons.Default.Refresh,
             contentDescription = "Spin & Earn",
-            tint = Color(0xFFDC2626),
-            modifier = Modifier.size(30.dp)
+            tint = Color(0xFFF472B6),
+            modifier = Modifier.size(28.dp)
           )
         }
       }
-      Spacer(modifier = Modifier.height(10.dp))
+      Spacer(modifier = Modifier.height(8.dp))
       Text(
         text = "Spin &\nEarn",
-        style = MaterialTheme.typography.titleSmall,
+        style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
         textAlign = TextAlign.Center,
         lineHeight = 18.sp,
-        color = MaterialTheme.colorScheme.onSurface
+        color = Color.White
+      )
+      Spacer(modifier = Modifier.height(2.dp))
+      Text(
+        text = "Win Up to 500 Coins",
+        style = MaterialTheme.typography.labelSmall,
+        fontSize = 9.sp,
+        color = Color(0xFFF472B6),
+        fontWeight = FontWeight.SemiBold
       )
     }
   }
@@ -1046,41 +1000,51 @@ private fun SpinAndEarnCard(
 
 @Composable
 private fun OfferWallCard(
+  onClick: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
-  Card(
-    modifier = modifier.clip(RoundedCornerShape(26.dp)).clickable(onClick = { /* TODO */ }),
-    shape = RoundedCornerShape(26.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+  NeonGlassCard(
+    modifier = modifier.testTag("home_offer_wall_card"),
+    borderColor = Color(0x6010B981),
+    backgroundColor = Color(0x3B1F174B),
+    onClick = onClick
   ) {
     Column(
-      modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 14.dp),
+      modifier = Modifier.fillMaxSize().padding(14.dp),
       verticalArrangement = Arrangement.Center,
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       Surface(
         shape = CircleShape,
-        color = Color(0xFFD1FAE5),
-        modifier = Modifier.size(58.dp)
+        color = Color(0x3510B981),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8034D399)),
+        modifier = Modifier.size(52.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.Campaign,
             contentDescription = "Offer Wall",
-            tint = Color(0xFF059669),
-            modifier = Modifier.size(30.dp)
+            tint = Color(0xFF34D399),
+            modifier = Modifier.size(28.dp)
           )
         }
       }
-      Spacer(modifier = Modifier.height(10.dp))
+      Spacer(modifier = Modifier.height(8.dp))
       Text(
         text = "Offer\nWall",
-        style = MaterialTheme.typography.titleSmall,
+        style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
         textAlign = TextAlign.Center,
         lineHeight = 18.sp,
-        color = MaterialTheme.colorScheme.onSurface
+        color = Color.White
+      )
+      Spacer(modifier = Modifier.height(2.dp))
+      Text(
+        text = "High Paying Tasks",
+        style = MaterialTheme.typography.labelSmall,
+        fontSize = 9.sp,
+        color = Color(0xFF34D399),
+        fontWeight = FontWeight.SemiBold
       )
     }
   }

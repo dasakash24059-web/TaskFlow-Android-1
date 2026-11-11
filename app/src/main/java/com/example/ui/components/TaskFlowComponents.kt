@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -43,7 +44,10 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -82,6 +86,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.model.TaskItem
@@ -91,6 +96,172 @@ import com.example.data.model.isValidTaskUrl
 import java.net.URI
 import java.text.SimpleDateFormat
 import java.util.Locale
+
+/**
+ * Ambient Neon Background with subtle glowing purple/cyan halos over deep midnight navy.
+ */
+@Composable
+fun NeonBackgroundBox(
+  modifier: Modifier = Modifier,
+  content: @Composable () -> Unit
+) {
+  Box(
+    modifier = modifier
+      .fillMaxSize()
+      .background(Color(0xFF070A17))
+  ) {
+    Canvas(modifier = Modifier.matchParentSize()) {
+      drawCircle(
+        color = Color(0x357C3AED),
+        radius = size.width * 0.55f,
+        center = Offset(size.width * 0.1f, size.height * 0.08f)
+      )
+      drawCircle(
+        color = Color(0x280284C7),
+        radius = size.width * 0.5f,
+        center = Offset(size.width * 0.9f, size.height * 0.18f)
+      )
+      drawCircle(
+        color = Color(0x22DB2777),
+        radius = size.width * 0.45f,
+        center = Offset(size.width * 0.05f, size.height * 0.55f)
+      )
+      drawCircle(
+        color = Color(0x286366F1),
+        radius = size.width * 0.6f,
+        center = Offset(size.width * 0.85f, size.height * 0.88f)
+      )
+    }
+    content()
+  }
+}
+
+/**
+ * Premium Glassmorphic Card container with neon gradient borders and translucent dark background.
+ */
+@Composable
+fun NeonGlassCard(
+  modifier: Modifier = Modifier,
+  shape: RoundedCornerShape = RoundedCornerShape(22.dp),
+  borderColor: Color = Color(0x50A855F7),
+  backgroundColor: Color = Color(0x2E141938),
+  onClick: (() -> Unit)? = null,
+  content: @Composable () -> Unit
+) {
+  val baseModifier = modifier
+    .clip(shape)
+    .background(
+      Brush.verticalGradient(
+        colors = listOf(
+          backgroundColor,
+          Color(0x3B1F174B)
+        )
+      )
+    )
+    .border(
+      border = BorderStroke(
+        width = 1.dp,
+        brush = Brush.linearGradient(
+          colors = listOf(
+            borderColor,
+            Color(0x3022D3EE),
+            borderColor.copy(alpha = 0.2f)
+          )
+        )
+      ),
+      shape = shape
+    )
+
+  val finalModifier = if (onClick != null) {
+    baseModifier.clickable(onClick = onClick)
+  } else {
+    baseModifier
+  }
+
+  Box(modifier = finalModifier) {
+    content()
+  }
+}
+
+/**
+ * Account Verification Badge - STRICT Backend Checked!
+ * Only rendered when actual backend user verification status == "approved".
+ */
+@Composable
+fun VerifiedBadge(
+  isVerified: Boolean,
+  modifier: Modifier = Modifier,
+  label: String = "Verified"
+) {
+  if (!isVerified) return
+
+  Surface(
+    shape = RoundedCornerShape(50),
+    color = Color(0x2506B6D4),
+    border = BorderStroke(1.dp, Color(0x8022D3EE)),
+    modifier = modifier
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+      Icon(
+        imageVector = Icons.Default.Verified,
+        contentDescription = "Verified Account",
+        tint = Color(0xFF22D3EE),
+        modifier = Modifier.size(14.dp)
+      )
+      Text(
+        text = label,
+        style = MaterialTheme.typography.labelSmall,
+        color = Color(0xFF22D3EE),
+        fontWeight = FontWeight.Bold,
+        fontSize = 11.sp
+      )
+    }
+  }
+}
+
+/**
+ * Neon Coin Badge component for displaying Coin rewards and balances.
+ */
+@Composable
+fun NeonCoinBadge(
+  coins: Long,
+  modifier: Modifier = Modifier,
+  fontSize: Int = 13
+) {
+  Surface(
+    shape = RoundedCornerShape(50),
+    color = Color(0x30F59E0B),
+    border = BorderStroke(1.dp, Color(0x80FBBF24)),
+    modifier = modifier
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+      Icon(
+        imageVector = Icons.Default.MonetizationOn,
+        contentDescription = "Coins",
+        tint = Color(0xFFFBBF24),
+        modifier = Modifier.size(16.dp)
+      )
+      Text(
+        text = "$coins Coins",
+        style = MaterialTheme.typography.labelMedium,
+        color = Color(0xFFFDE047),
+        fontWeight = FontWeight.ExtraBold,
+        fontSize = fontSize.sp
+      )
+    }
+  }
+}
+
+
+
 
 fun openExternalTaskUrl(context: Context, rawUrl: String): Boolean {
   val trimmed = rawUrl.trim()

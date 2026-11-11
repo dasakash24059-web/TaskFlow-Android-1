@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
@@ -38,7 +39,9 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.Payment
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
@@ -79,6 +82,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
 import com.example.data.model.SubmissionItem
@@ -91,11 +95,16 @@ import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethod
 import com.example.data.model.formatRewardInr
 import com.example.data.model.formatVisibleUserEmail
+import com.example.data.model.getEffectiveBalanceCoins
 import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.ui.components.AppIconThumbnail
+import com.example.ui.components.NeonBackgroundBox
+import com.example.ui.components.NeonCoinBadge
+import com.example.ui.components.NeonGlassCard
 import com.example.ui.components.ProofImageView
 import com.example.ui.components.RewardBadge
 import com.example.ui.components.TaskFlowBrandLogo
+import com.example.ui.components.VerifiedBadge
 import com.example.ui.components.resolveAppOrWebsiteLabel
 import com.example.ui.viewmodel.ProfileSubScreen
 import com.example.ui.viewmodel.UiState
@@ -204,113 +213,102 @@ fun UserWalletScreen(
     )
   }
 
-  LazyColumn(
-    modifier = Modifier.fillMaxSize().testTag("user_wallet_screen"),
-    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
-    verticalArrangement = Arrangement.spacedBy(18.dp)
-  ) {
-    // 1. Purple-and-White Wallet Hero Card
-    item {
-      Card(
-        modifier = Modifier.fillMaxWidth().testTag("wallet_hero_card"),
-        shape = RoundedCornerShape(26.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-      ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-          // Purple gradient header band
-          Box(
-            modifier =
-              Modifier.fillMaxWidth()
-                .background(
-                  Brush.linearGradient(
-                    colors =
-                      listOf(
-                        Color(0xFF4C1D95),
-                        Color(0xFF6D28D9),
-                        Color(0xFF7C3AED)
-                      )
-                  )
-                )
-                .padding(24.dp)
-          ) {
-            Canvas(modifier = Modifier.matchParentSize()) {
-              drawCircle(
-                color = Color.White.copy(alpha = 0.08f),
-                radius = size.height * 0.75f,
-                center = Offset(size.width * 0.88f, size.height * 0.2f)
-              )
-            }
-            Column(modifier = Modifier.fillMaxWidth()) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+  NeonBackgroundBox {
+    LazyColumn(
+      modifier = Modifier.fillMaxSize().testTag("user_wallet_screen"),
+      contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
+      verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+      // 1. Dark Neon Glass Wallet Hero Card
+      item {
+        NeonGlassCard(
+          modifier = Modifier.fillMaxWidth().testTag("wallet_hero_card"),
+          borderColor = Color(0x70A855F7),
+          backgroundColor = Color(0x40141938)
+        ) {
+          Column(modifier = Modifier.fillMaxWidth().padding(22.dp)) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+              Surface(
+                shape = CircleShape,
+                color = Color(0x35F59E0B),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FBBF24)),
+                modifier = Modifier.size(44.dp)
               ) {
-                Surface(
-                  shape = CircleShape,
-                  color = Color.White.copy(alpha = 0.18f),
-                  modifier = Modifier.size(40.dp)
-                ) {
-                  Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                      imageVector = Icons.Default.AccountBalanceWallet,
-                      contentDescription = "TaskFlow Wallet",
-                      tint = Color.White,
-                      modifier = Modifier.size(22.dp)
-                    )
-                  }
-                }
-                Column {
-                  Text(
-                    text = "TASKFLOW WALLET",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFFEDE9FE),
-                    fontWeight = FontWeight.Bold
-                  )
-                  Text(
-                    text = "Available Balance (INR)",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.9f)
+                Box(contentAlignment = Alignment.Center) {
+                  Icon(
+                    imageVector = Icons.Default.AccountBalanceWallet,
+                    contentDescription = "TaskFlow Wallet",
+                    tint = Color(0xFFFBBF24),
+                    modifier = Modifier.size(24.dp)
                   )
                 }
               }
+              Column {
+                Text(
+                  text = "TASKFLOW COIN WALLET",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFF94A3B8),
+                  fontWeight = FontWeight.Bold
+                )
+                Text(
+                  text = "Available Balance",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = Color.White.copy(alpha = 0.9f)
+                )
+              }
+            }
 
-              Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
-              Text(
-                text = formatRewardInr(availableBalanceCents),
-                style = MaterialTheme.typography.displayLarge,
-                color = Color.White,
-                fontWeight = FontWeight.ExtraBold,
-                modifier = Modifier.testTag("wallet_available_balance")
-              )
+            Text(
+              text = formatRewardInr(availableBalanceCents),
+              style = MaterialTheme.typography.displayLarge,
+              color = Color(0xFFFDE047),
+              fontWeight = FontWeight.ExtraBold,
+              modifier = Modifier.testTag("wallet_available_balance")
+            )
 
-              Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
               Surface(
                 shape = RoundedCornerShape(50),
-                color = Color.White.copy(alpha = 0.16f)
+                color = Color(0x2506B6D4),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8022D3EE))
               ) {
                 Text(
-                  text = "Minimum Withdrawal: ₹200",
-                  style = MaterialTheme.typography.labelLarge,
-                  color = Color.White,
-                  fontWeight = FontWeight.SemiBold,
+                  text = "125 Coins = ₹1",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFF22D3EE),
+                  fontWeight = FontWeight.Bold,
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+              }
+              Surface(
+                shape = RoundedCornerShape(50),
+                color = Color(0x25A855F7),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80C084FC))
+              ) {
+                Text(
+                  text = "Min Withdrawal: ₹200 (25,000 Coins)",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFFC084FC),
+                  fontWeight = FontWeight.Bold,
                   modifier =
-                    Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                       .testTag("wallet_min_withdrawal_text")
                 )
               }
             }
-          }
 
-          // White action area with ONLY the single "Withdraw" button
-          Column(
-            modifier =
-              Modifier.fillMaxWidth()
-                .background(Color.White)
-                .padding(22.dp)
-          ) {
+            Spacer(modifier = Modifier.height(20.dp))
+
             Button(
               onClick = {
                 onClearValidationError()
@@ -319,8 +317,8 @@ fun UserWalletScreen(
               shape = RoundedCornerShape(14.dp),
               colors =
                 ButtonDefaults.buttonColors(
-                  containerColor = MaterialTheme.colorScheme.primary,
-                  contentColor = MaterialTheme.colorScheme.onPrimary
+                  containerColor = Color(0xFF7C3AED),
+                  contentColor = Color.White
                 ),
               modifier =
                 Modifier.fillMaxWidth()
@@ -334,26 +332,14 @@ fun UserWalletScreen(
               )
               Spacer(modifier = Modifier.width(8.dp))
               Text(
-                text = "Withdraw",
+                text = "Withdraw Funds",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
               )
             }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Text(
-              text =
-                "Submit a withdrawal request via Bank Account or UPI ID once your balance reaches ₹200.00.",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              textAlign = TextAlign.Center,
-              modifier = Modifier.fillMaxWidth()
-            )
           }
         }
       }
-    }
 
     // 2. Total Earnings and Pending Rewards 2-Column Row
     item {
@@ -666,6 +652,7 @@ fun UserWalletScreen(
       }
     }
   }
+}
 }
 
 /**
@@ -1146,148 +1133,267 @@ fun UserProfileScreen(
       role = profile?.role
     )
 
-  Column(
-    modifier =
-      Modifier.fillMaxSize()
-        .verticalScroll(rememberScrollState())
-        .padding(horizontal = 18.dp, vertical = 16.dp)
-        .testTag("user_profile_screen"),
-    verticalArrangement = Arrangement.spacedBy(14.dp)
-  ) {
-    // Top Header: ONLY User's Display Name and Email Address
-    Card(
-      modifier = Modifier.fillMaxWidth().testTag("profile_header_card"),
-      shape = RoundedCornerShape(24.dp),
-      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-      elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+  NeonBackgroundBox {
+    Column(
+      modifier =
+        Modifier.fillMaxSize()
+          .verticalScroll(rememberScrollState())
+          .padding(horizontal = 18.dp, vertical = 16.dp)
+          .testTag("user_profile_screen"),
+      verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-      Row(
-        modifier = Modifier.fillMaxWidth().padding(22.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+      // Top Header: User Profile Card with Avatar, Neon Border, Verified Badge Overlay
+      NeonGlassCard(
+        modifier = Modifier.fillMaxWidth().testTag("profile_header_card"),
+        borderColor = Color(0x70A855F7),
+        backgroundColor = Color(0x40141938)
       ) {
-        Box(
-          modifier =
-            Modifier.size(60.dp)
-              .clip(CircleShape)
-              .background(
-                Brush.linearGradient(
-                  colors = listOf(Color(0xFF6D28D9), Color(0xFF7C3AED))
-                )
-              ),
-          contentAlignment = Alignment.Center
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(20.dp),
+          horizontalAlignment = Alignment.CenterHorizontally
         ) {
-          Text(
-            text =
-              (displayNameText.firstOrNull() ?: visibleEmailText.firstOrNull() ?: 'U')
-                .uppercaseChar()
-                .toString(),
-            style = MaterialTheme.typography.headlineMedium,
-            color = Color.White,
-            fontWeight = FontWeight.Bold
-          )
-        }
+          Box(contentAlignment = Alignment.BottomEnd) {
+            Box(
+              modifier =
+                Modifier.size(84.dp)
+                  .clip(CircleShape)
+                  .background(
+                    Brush.linearGradient(
+                      colors = listOf(Color(0xFFA855F7), Color(0xFF06B6D4))
+                    )
+                  )
+                  .border(3.dp, Color(0xFF22D3EE), CircleShape),
+              contentAlignment = Alignment.Center
+            ) {
+              Text(
+                text =
+                  (displayNameText.firstOrNull() ?: visibleEmailText.firstOrNull() ?: 'U')
+                    .uppercaseChar()
+                    .toString(),
+                style = MaterialTheme.typography.headlineLarge,
+                color = Color.White,
+                fontWeight = FontWeight.ExtraBold
+              )
+            }
 
-        Column(modifier = Modifier.weight(1f)) {
+            // Verified Badge Overlay on bottom-right of avatar
+            if (profile?.approvalStatus == "approved") {
+              Surface(
+                shape = CircleShape,
+                color = Color(0xFF0284C7),
+                border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF070A17)),
+                modifier = Modifier.size(26.dp)
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "Verified",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
+                  )
+                }
+              }
+            }
+          }
+
+          Spacer(modifier = Modifier.height(14.dp))
+
           Text(
             text = displayNameText,
             style = MaterialTheme.typography.headlineMedium,
+            color = Color.White,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.testTag("profile_display_name")
           )
+
           Spacer(modifier = Modifier.height(4.dp))
+
           Text(
-            text = visibleEmailText,
+            text = "ID: ${profile?.userId?.take(8)?.uppercase() ?: "TF123456"}",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = Color(0xFF94A3B8),
             modifier = Modifier.testTag("profile_email_address")
           )
+
+          Spacer(modifier = Modifier.height(18.dp))
+
+          // 3 Stat Cards Row (Tasks, Completed, Coins)
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+          ) {
+            val approvedCount = tasks.count { it.status == TaskStatus.APPROVED }
+            val effectiveCoins = profile?.getEffectiveBalanceCoins() ?: 0L
+
+            Surface(
+              shape = RoundedCornerShape(16.dp),
+              color = Color(0x30A855F7),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x60A855F7)),
+              modifier = Modifier.weight(1f)
+            ) {
+              Column(
+                modifier = Modifier.padding(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Assignment,
+                  contentDescription = null,
+                  tint = Color(0xFFC084FC),
+                  modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                  text = "${tasks.size}",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = Color.White,
+                  fontWeight = FontWeight.Bold
+                )
+                Text(
+                  text = "Tasks",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontSize = 10.sp,
+                  color = Color(0xFF94A3B8)
+                )
+              }
+            }
+
+            Surface(
+              shape = RoundedCornerShape(16.dp),
+              color = Color(0x3010B981),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x6034D399)),
+              modifier = Modifier.weight(1f)
+            ) {
+              Column(
+                modifier = Modifier.padding(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+              ) {
+                Icon(
+                  imageVector = Icons.Default.CheckCircle,
+                  contentDescription = null,
+                  tint = Color(0xFF34D399),
+                  modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                  text = "$approvedCount",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = Color.White,
+                  fontWeight = FontWeight.Bold
+                )
+                Text(
+                  text = "Completed",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontSize = 10.sp,
+                  color = Color(0xFF94A3B8)
+                )
+              }
+            }
+
+            Surface(
+              shape = RoundedCornerShape(16.dp),
+              color = Color(0x30F59E0B),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x60FBBF24)),
+              modifier = Modifier.weight(1f)
+            ) {
+              Column(
+                modifier = Modifier.padding(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+              ) {
+                Icon(
+                  imageVector = Icons.Default.MonetizationOn,
+                  contentDescription = null,
+                  tint = Color(0xFFFBBF24),
+                  modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                  text = "$effectiveCoins",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = Color(0xFFFDE047),
+                  fontWeight = FontWeight.Bold
+                )
+                Text(
+                  text = "Coins",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontSize = 10.sp,
+                  color = Color(0xFF94A3B8)
+                )
+              }
+            }
+          }
         }
-
-        TaskFlowBrandLogo(size = 44.dp)
       }
-    }
 
-    // 5 Separate Clickable Menu Cards in Exact Order:
-    // 1. Activity
-    ProfileMenuCard(
-      title = "Activity",
-      subtitle = "View your recent account, task, and withdrawal events",
-      icon = Icons.Default.Timeline,
-      onClick = { setSubScreen(ProfileSubScreen.ACTIVITY) },
-      testTag = "profile_menu_activity"
-    )
+      // Menu Cards corresponding to Screen 4 in Reference Image
+      ProfileMenuCard(
+        title = "Personal Information",
+        subtitle = "Update display name and user account info",
+        icon = Icons.Default.Person,
+        onClick = { setSubScreen(ProfileSubScreen.SETTINGS) },
+        testTag = "profile_menu_activity"
+      )
 
-    // 2. History
-    ProfileMenuCard(
-      title = "History",
-      subtitle = "Browse compact task history cards by status",
-      icon = Icons.Default.History,
-      onClick = { setSubScreen(ProfileSubScreen.HISTORY) },
-      testTag = "profile_menu_history"
-    )
+      ProfileMenuCard(
+        title = "Account Settings",
+        subtitle = "Appearance theme and security details",
+        icon = Icons.Default.Settings,
+        onClick = { setSubScreen(ProfileSubScreen.SETTINGS) },
+        testTag = "profile_menu_settings"
+      )
 
-    // 3. Rewards
-    ProfileMenuCard(
-      title = "Rewards",
-      subtitle = "View your earned INR rewards and completed task milestones",
-      icon = Icons.Default.CardGiftcard,
-      onClick = { setSubScreen(ProfileSubScreen.REWARDS) },
-      testTag = "profile_menu_rewards"
-    )
+      ProfileMenuCard(
+        title = "Help & Support",
+        subtitle = "Contact support and submit help tickets",
+        icon = Icons.AutoMirrored.Filled.Help,
+        onClick = { setSubScreen(ProfileSubScreen.SUPPORT) },
+        testTag = "profile_menu_support"
+      )
 
-    // 4. Settings
-    ProfileMenuCard(
-      title = "Settings",
-      subtitle = "Update display name, appearance theme, and security configuration",
-      icon = Icons.Default.Settings,
-      onClick = { setSubScreen(ProfileSubScreen.SETTINGS) },
-      testTag = "profile_menu_settings"
-    )
+      ProfileMenuCard(
+        title = "Privacy Policy",
+        subtitle = "Review data privacy policy and security rules",
+        icon = Icons.Default.Shield,
+        onClick = { onOpenSecurityInfo() },
+        testTag = "profile_menu_history"
+      )
 
-    // 5. Help & Support
-    ProfileMenuCard(
-      title = "Help & Support",
-      subtitle = "15 FAQ topics and instant interactive TaskFlow assistant",
-      icon = Icons.AutoMirrored.Filled.Help,
-      onClick = { setSubScreen(ProfileSubScreen.SUPPORT) },
-      testTag = "profile_menu_support"
-    )
+      ProfileMenuCard(
+        title = "About App",
+        subtitle = "TaskFlow version info and developer details",
+        icon = Icons.Default.Info,
+        onClick = { setSubScreen(ProfileSubScreen.ABOUT) },
+        testTag = "profile_menu_about"
+      )
 
-    // 6. About TaskFlow
-    ProfileMenuCard(
-      title = "About TaskFlow",
-      subtitle = "Platform overview, verification standards, and INR reward policy",
-      icon = Icons.Default.Info,
-      onClick = { setSubScreen(ProfileSubScreen.ABOUT) },
-      testTag = "profile_menu_about"
-    )
-
-    // Bottom Sign Out Option
-    Spacer(modifier = Modifier.height(6.dp))
-    OutlinedButton(
-      onClick = onSignOut,
-      shape = RoundedCornerShape(16.dp),
-      colors =
-        ButtonDefaults.outlinedButtonColors(
-          contentColor = MaterialTheme.colorScheme.error
+      // Sign Out / Logout Button matching Reference Image Screen 4
+      Spacer(modifier = Modifier.height(8.dp))
+      Button(
+        onClick = onSignOut,
+        shape = RoundedCornerShape(20.dp),
+        colors = ButtonDefaults.buttonColors(
+          containerColor = Color(0x70881337),
+          contentColor = Color(0xFFFFE4E6)
         ),
-      modifier =
-        Modifier.fillMaxWidth()
-          .height(52.dp)
-          .testTag("sign_out_button")
-    ) {
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.Logout,
-        contentDescription = null,
-        modifier = Modifier.size(20.dp)
-      )
-      Spacer(modifier = Modifier.width(8.dp))
-      Text(
-        text = "Sign Out",
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold
-      )
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF43F5E)),
+        modifier =
+          Modifier.fillMaxWidth()
+            .height(52.dp)
+            .testTag("sign_out_button")
+      ) {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.Logout,
+          contentDescription = null,
+          tint = Color(0xFFFB7185),
+          modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+          text = "Logout",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.Bold,
+          color = Color.White
+        )
+      }
     }
   }
 }
@@ -1300,15 +1406,11 @@ private fun ProfileMenuCard(
   onClick: () -> Unit,
   testTag: String
 ) {
-  Card(
-    modifier =
-      Modifier.fillMaxWidth()
-        .clip(RoundedCornerShape(20.dp))
-        .clickable(onClick = onClick)
-        .testTag(testTag),
-    shape = RoundedCornerShape(20.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+  NeonGlassCard(
+    modifier = Modifier.fillMaxWidth().testTag(testTag),
+    borderColor = Color(0x40A855F7),
+    backgroundColor = Color(0x3B1F174B),
+    onClick = onClick
   ) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
@@ -1317,14 +1419,15 @@ private fun ProfileMenuCard(
     ) {
       Surface(
         shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.primaryContainer,
+        color = Color(0x35A855F7),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80C084FC)),
         modifier = Modifier.size(46.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            tint = Color(0xFFC084FC),
             modifier = Modifier.size(22.dp)
           )
         }
@@ -1333,19 +1436,20 @@ private fun ProfileMenuCard(
         Text(
           text = title,
           style = MaterialTheme.typography.titleMedium,
+          color = Color.White,
           fontWeight = FontWeight.Bold
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
           text = subtitle,
           style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
+          color = Color(0xFF94A3B8)
         )
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open $title",
-        tint = MaterialTheme.colorScheme.primary
+        tint = Color(0xFFC084FC)
       )
     }
   }

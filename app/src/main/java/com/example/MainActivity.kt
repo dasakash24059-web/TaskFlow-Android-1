@@ -101,6 +101,8 @@ import com.example.ui.components.FirebaseConfigSecurityDialog
 import com.example.ui.components.TaskFlowBrandLogo
 import com.example.ui.theme.TaskFlowTheme
 import com.example.ui.user.DedicatedDailyCheckInScreen
+import com.example.ui.user.OfferWallScreen
+import com.example.ui.user.SpinAndEarnScreen
 import com.example.ui.user.UserHomeScreen
 import com.example.ui.user.UserProfileScreen
 import com.example.ui.user.UserTaskDetailScreen
@@ -372,6 +374,8 @@ private fun AuthenticatedWorkspace(
   val showSecuritySheet by viewModel.showSecuritySheet.collectAsStateWithLifecycle()
   val openWithdrawOnWalletNavigation by viewModel.openWithdrawOnWalletNavigation.collectAsStateWithLifecycle()
   val isDailyCheckInScreenVisible by viewModel.isDailyCheckInScreenVisible.collectAsStateWithLifecycle()
+  val isSpinScreenVisible by viewModel.isSpinScreenVisible.collectAsStateWithLifecycle()
+  val isOfferWallScreenVisible by viewModel.isOfferWallScreenVisible.collectAsStateWithLifecycle()
   val campaignsState by viewModel.campaignsState.collectAsStateWithLifecycle()
   val userNotifications by viewModel.userNotificationsState.collectAsStateWithLifecycle()
   val showNotificationDialog by viewModel.showNotificationDialog.collectAsStateWithLifecycle()
@@ -382,7 +386,7 @@ private fun AuthenticatedWorkspace(
       selectedTaskId != null ||
         (activePortal == PortalLoginTarget.USER_APP &&
           activeUserTab == UserTab.HOME &&
-          isDailyCheckInScreenVisible) ||
+          (isDailyCheckInScreenVisible || isSpinScreenVisible || isOfferWallScreenVisible)) ||
         (activePortal == PortalLoginTarget.USER_APP &&
           activeUserTab == UserTab.PROFILE &&
           profileSubScreen != ProfileSubScreen.MAIN) ||
@@ -395,6 +399,14 @@ private fun AuthenticatedWorkspace(
         activeUserTab == UserTab.HOME &&
         isDailyCheckInScreenVisible ->
         viewModel.setDailyCheckInScreenVisible(false)
+      activePortal == PortalLoginTarget.USER_APP &&
+        activeUserTab == UserTab.HOME &&
+        isSpinScreenVisible ->
+        viewModel.setSpinScreenVisible(false)
+      activePortal == PortalLoginTarget.USER_APP &&
+        activeUserTab == UserTab.HOME &&
+        isOfferWallScreenVisible ->
+        viewModel.setOfferWallScreenVisible(false)
       activePortal == PortalLoginTarget.USER_APP &&
         activeUserTab == UserTab.PROFILE &&
         profileSubScreen != ProfileSubScreen.MAIN ->
@@ -724,6 +736,60 @@ private fun AuthenticatedWorkspace(
                     onBack = { viewModel.setDailyCheckInScreenVisible(false) },
                     isBusy = isBusy
                   )
+                } else if (isSpinScreenVisible) {
+                  SpinAndEarnScreen(
+                    onBack = { viewModel.setSpinScreenVisible(false) },
+                    onClaimReward = { coins ->
+                      viewModel.claimSpinReward(coins)
+                    },
+                    onShowRewardedAd = { onAdCompleted ->
+                      val activity = (context as? android.app.Activity)
+                        ?: run {
+                          var cur = context
+                          while (cur is android.content.ContextWrapper && cur !is android.app.Activity) {
+                            cur = cur.baseContext
+                          }
+                          cur as? android.app.Activity
+                        }
+                      if (activity != null) {
+                        com.example.util.UnityAdsHelper.showRewardedAd(
+                          activity = activity,
+                          onComplete = { onAdCompleted() },
+                          onFailed = { onAdCompleted() }
+                        )
+                      } else {
+                        onAdCompleted()
+                      }
+                    },
+                    onShowInterstitialAd = { onAdCompleted ->
+                      val activity = (context as? android.app.Activity)
+                        ?: run {
+                          var cur = context
+                          while (cur is android.content.ContextWrapper && cur !is android.app.Activity) {
+                            cur = cur.baseContext
+                          }
+                          cur as? android.app.Activity
+                        }
+                      if (activity != null) {
+                        com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(
+                          activity = activity,
+                          onClosed = { onAdCompleted() },
+                          onFailed = { onAdCompleted() }
+                        )
+                      } else {
+                        onAdCompleted()
+                      }
+                    }
+                  )
+                } else if (isOfferWallScreenVisible) {
+                  OfferWallScreen(
+                    tasks = mergedTasks,
+                    onBack = { viewModel.setOfferWallScreenVisible(false) },
+                    onSelectOffer = { taskId ->
+                      viewModel.setOfferWallScreenVisible(false)
+                      viewModel.selectTask(taskId)
+                    }
+                  )
                 } else {
                   UserHomeScreen(
                     profileState = userProfileState,
@@ -788,7 +854,9 @@ private fun AuthenticatedWorkspace(
                       if (activity != null) {
                          com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(activity)
                       }
-                    }
+                    },
+                    onNavigateToSpin = { viewModel.setSpinScreenVisible(true) },
+                    onNavigateToOfferWall = { viewModel.setOfferWallScreenVisible(true) }
                   )
                 }
               }
