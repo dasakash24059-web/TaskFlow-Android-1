@@ -383,6 +383,7 @@ private fun AuthenticatedWorkspace(
   val userSubmissionsState by viewModel.userSubmissionsState.collectAsStateWithLifecycle()
   val userWithdrawalRequestsState by viewModel.userWithdrawalRequestsState.collectAsStateWithLifecycle()
   val adminTasksState by viewModel.adminTasksState.collectAsStateWithLifecycle()
+  val appsState by viewModel.appsState.collectAsStateWithLifecycle()
   val adminSubmissionsState by viewModel.adminSubmissionsState.collectAsStateWithLifecycle()
   val adminWithdrawalRequestsState by viewModel.adminWithdrawalRequestsState.collectAsStateWithLifecycle()
   val registeredUsersState by viewModel.registeredUsersState.collectAsStateWithLifecycle()
@@ -661,6 +662,13 @@ private fun AuthenticatedWorkspace(
             icon = { Icon(Icons.Default.Payment, contentDescription = null) },
             label = { Text("Withdrawals") },
             modifier = Modifier.testTag("nav_admin_withdrawals")
+          )
+          NavigationBarItem(
+            selected = activeAdminTab == AdminTab.APPS,
+            onClick = { viewModel.setAdminTab(AdminTab.APPS) },
+            icon = { Icon(Icons.Default.Task, contentDescription = null) },
+            label = { Text("Apps") },
+            modifier = Modifier.testTag("nav_admin_apps")
           )
           NavigationBarItem(
             selected = activeAdminTab == AdminTab.CAMPAIGNS,

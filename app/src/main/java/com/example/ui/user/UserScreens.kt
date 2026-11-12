@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Info
@@ -847,49 +848,103 @@ private fun WatchAdInfoDialog(
           }
         }
 
-        // Ready-to-Claim State Banner
+        // Celebratory Popup Dialog shown when video completes and is ready to claim
         if (isReadyToClaim) {
-          Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = Color(0x2510B981),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8034D399)),
-            modifier = Modifier.fillMaxWidth().testTag("watch_earn_ready_to_claim_banner")
-          ) {
-            Column(
-              modifier = Modifier.padding(12.dp),
-              verticalArrangement = Arrangement.spacedBy(8.dp),
-              horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-              Text(
-                text =
-                  watchEarnUiState.statusMessage.ifBlank {
-                    "Video completed! Tap Claim below to collect your reward."
-                  },
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFFA7F3D0),
-                textAlign = TextAlign.Center
-              )
+          AlertDialog(
+            onDismissRequest = { /* Prevent accidental dismissal before claiming */ },
+            modifier = Modifier.testTag("watch_earn_claim_dialog"),
+            shape = RoundedCornerShape(28.dp),
+            containerColor = Color(0xFF0F172A),
+            title = {
+              Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+              ) {
+                Surface(
+                  shape = CircleShape,
+                  color = Color(0x35F59E0B),
+                  border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFFBBF24)),
+                  modifier = Modifier.size(72.dp)
+                ) {
+                  Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                      imageVector = Icons.Default.EmojiEvents,
+                      contentDescription = null,
+                      tint = Color(0xFFFBBF24),
+                      modifier = Modifier.size(42.dp)
+                    )
+                  }
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(
+                  text = "Congratulations!",
+                  style = MaterialTheme.typography.headlineMedium,
+                  color = Color(0xFFFDE047),
+                  fontWeight = FontWeight.ExtraBold,
+                  textAlign = TextAlign.Center
+                )
+              }
+            },
+            text = {
+              Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                Surface(
+                  shape = RoundedCornerShape(20.dp),
+                  color = Color(0x401E293B),
+                  border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x60A855F7)),
+                  modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                ) {
+                  Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                  ) {
+                    Text(
+                      text = "VIDEO COMPLETED",
+                      style = MaterialTheme.typography.labelMedium,
+                      color = Color(0xFF94A3B8),
+                      fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                      text = if (watchEarnUiState.lastRewardCoins > 0L) "+${formatCoins(watchEarnUiState.lastRewardCoins)}" else "+1–200 Coins",
+                      style = MaterialTheme.typography.displaySmall,
+                      color = Color(0xFFFDE047),
+                      fontWeight = FontWeight.ExtraBold,
+                      modifier = Modifier.testTag("watch_earn_reward_coins_text")
+                    )
+                  }
+                }
+                Text(
+                  text = "Tap Claim below to credit your earned coins directly to your wallet.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = Color(0xFFCBD5E1),
+                  textAlign = TextAlign.Center
+                )
+              }
+            },
+            confirmButton = {
               Button(
                 onClick = onClaimVerifiedReward,
                 enabled = !isClaiming && !isLoadingAd,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                modifier =
-                  Modifier.fillMaxWidth()
-                    .height(48.dp)
-                    .testTag("claim_watch_reward_button")
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981), contentColor = Color.White),
+                modifier = Modifier.fillMaxWidth().height(52.dp).testTag("claim_watch_reward_button")
               ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                  text = "Claim Reward",
-                  fontWeight = FontWeight.ExtraBold,
-                  color = Color.White
-                )
+                if (isClaiming || isLoadingAd) {
+                  CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp, color = Color.White)
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Text("Claiming...", fontWeight = FontWeight.Bold)
+                } else {
+                  Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Text("Claim & Add to Wallet", fontWeight = FontWeight.ExtraBold)
+                }
               }
             }
-          }
+          )
         }
 
         // Claimed Confirmation Banner
@@ -2158,6 +2213,50 @@ fun SubmitProofModalDialog(
             Modifier.fillMaxWidth()
               .testTag("task_proof_input")
         )
+
+        // Admin Reference / Demo Screenshot Example (if configured)
+        if (task.referenceImages.isNotEmpty()) {
+          Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f)),
+            modifier = Modifier.fillMaxWidth().testTag("reference_image_example_section")
+          ) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+              Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
+                Text(
+                  text = "ADMIN REFERENCE EXAMPLE (COMPARE WITH YOUR PROOF)",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.tertiary,
+                  fontWeight = FontWeight.Bold
+                )
+              }
+              Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                task.referenceImages.forEachIndexed { idx, refUrl ->
+                  Box(
+                    modifier = Modifier
+                      .size(100.dp)
+                      .clip(RoundedCornerShape(12.dp))
+                      .background(MaterialTheme.colorScheme.surface)
+                      .border(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center
+                  ) {
+                    AsyncImage(
+                      model = refUrl,
+                      contentDescription = "Reference Example ${idx + 1}",
+                      contentScale = ContentScale.Crop,
+                      modifier = Modifier.fillMaxSize()
+                    )
+                  }
+                }
+              }
+            }
+          }
+        }
 
         // 2. Gallery Photo Selection & Preview
         if (selectedImageUri == null) {

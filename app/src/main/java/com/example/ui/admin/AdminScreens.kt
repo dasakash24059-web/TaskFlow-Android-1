@@ -81,12 +81,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.model.AppItem
 import com.example.data.model.CampaignItem
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskCategories
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
+import com.example.data.model.TaskStep
 import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethod
 import com.example.data.model.formatRewardInr
@@ -135,7 +137,10 @@ fun AdminDashboardScreen(
   onUpdateUserName: ((UserProfile, String) -> Unit)? = null,
   campaignsState: UiState<List<CampaignItem>> = UiState.Success(emptyList()),
   onCreateCampaign: ((String, String, String, Long, Long, String, Long) -> Unit)? = null,
-  onUpdateCampaignStatus: ((String, String) -> Unit)? = null
+     onUpdateCampaignStatus: ((String, String) -> Unit)? = null,
+   appsState: UiState<List<AppItem>> = UiState.Success(emptyList()),
+   onCreateApp: (String, String) -> Unit = { _, _ -> },
+   onUpdateApp: (String, String, String, Boolean) -> Unit = { _, _, _, _ -> }
 ) {
   if (!isAdminAuthorized) {
     UnauthorizedAdminGate(currentUserEmail = currentUserEmail)
@@ -391,6 +396,13 @@ fun AdminDashboardScreen(
             campaignsState = campaignsState,
             onCreateCampaign = onCreateCampaign,
             onUpdateCampaignStatus = onUpdateCampaignStatus
+          )
+        }
+        AdminTab.APPS -> {
+          AdminAppsTabContent(
+            appsState = appsState,
+            onCreateApp = onCreateApp,
+            onUpdateApp = onUpdateApp
           )
         }
       }
@@ -2548,6 +2560,283 @@ fun CampaignEditorDialog(
         enabled = title.isNotBlank() && clientName.isNotBlank()
       ) {
         Text("Launch Campaign")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text("Cancel")
+      }
+    }
+  )
+}
+
+@Composable
+fun AdminAppsTabContent(
+  appsState: UiState<List<AppItem>>,
+  onCreateApp: (String, String) -> Unit,
+  onUpdateApp: (String, String, String, Boolean) -> Unit
+) {
+  var showCreateDialog by remember { mutableStateOf(false) }
+  var editingApp by remember { mutableStateOf<AppItem?>(null) }
+  val apps = (appsState as? UiState.Success)?.data ?: emptyList()
+
+  if (showCreateDialog || editingApp != null) {
+    AppEditorDialog(
+      existingApp = editingApp,
+      onDismiss = {
+        showCreateDialog = false
+        editingApp = null
+      },
+      onSave = { name, logoUrl ->
+        val target = editingApp
+        if (target == null) {
+          onCreateApp(name, logoUrl)
+        } else {
+          onUpdateApp(target.id, name, logoUrl, target.isArchived)
+        }
+        showCreateDialog = false
+        editingApp = null
+      }
+    )
+  }
+
+  LazyColumn(
+    modifier = Modifier.fillMaxSize().testTag("admin_apps_list"),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+    contentPadding = PaddingValues(bottom = 32.dp)
+  ) {
+    item {
+      Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = "App Management",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold
+            )
+            Text(
+              text = "Create and organize apps for task publishing.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+          Button(
+            onClick = {
+              editingApp = null
+              showCreateDialog = true
+            },
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.testTag("admin_new_app_button")
+          ) {
+            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("New App")
+          }
+        }
+      }
+    }
+
+    if (apps.isEmpty()) {
+      item {
+        Card(
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(16.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+          Column(
+            modifier = Modifier.fillMaxWidth().padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+          ) {
+            Icon(
+              imageVector = Icons.Default.Task,
+              contentDescription = null,
+              modifier = Modifier.size(48.dp),
+              tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+              text = "No Apps Created Yet",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = "Tap 'New App' above to create your first app and publish tasks under it.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              textAlign = TextAlign.Center
+            )
+          }
+        }
+      }
+    } else {
+      items(apps, key = { it.id }) { app ->
+        AppCardItem(
+          app = app,
+          onEdit = {
+            editingApp = app
+            showCreateDialog = true
+          },
+          onToggleArchive = {
+            onUpdateApp(app.id, app.name, app.logoUrl, !app.isArchived)
+          }
+        )
+      }
+    }
+  }
+}
+
+@Composable
+fun AppCardItem(
+  app: AppItem,
+  onEdit: () -> Unit,
+  onToggleArchive: () -> Unit
+) {
+  Card(
+    modifier = Modifier.fillMaxWidth().testTag("app_card_${app.id}"),
+    shape = RoundedCornerShape(16.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+      AppIconThumbnail(
+        appIconUrl = app.logoUrl,
+        appName = app.name,
+        category = "App Install",
+        size = 52.dp
+      )
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = app.name,
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Surface(
+          shape = RoundedCornerShape(6.dp),
+          color = if (app.isArchived) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer
+        ) {
+          Text(
+            text = if (app.isArchived) "Archived" else "Active",
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            color = if (app.isArchived) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer
+          )
+        }
+      }
+
+      IconButton(onClick = onEdit, modifier = Modifier.testTag("edit_app_${app.id}")) {
+        Icon(Icons.Default.Edit, contentDescription = "Edit App", tint = MaterialTheme.colorScheme.primary)
+      }
+
+      OutlinedButton(
+        onClick = onToggleArchive,
+        shape = RoundedCornerShape(8.dp),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+      ) {
+        Text(if (app.isArchived) "Restore" else "Archive", style = MaterialTheme.typography.labelSmall)
+      }
+    }
+  }
+}
+
+@Composable
+fun AppEditorDialog(
+  existingApp: AppItem?,
+  onDismiss: () -> Unit,
+  onSave: (name: String, logoUrl: String) -> Unit
+) {
+  val context = LocalContext.current
+  var name by remember { mutableStateOf(existingApp?.name ?: "") }
+  var logoUrl by remember { mutableStateOf(existingApp?.logoUrl ?: "") }
+
+  val logoPickerLauncher =
+    rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+      if (uri != null) {
+        val dataUri =
+          encodeGalleryImageAsDataUri(context, uri, maxDimensionPx = 256, initialQuality = 75)
+        logoUrl = dataUri ?: uri.toString()
+      }
+    }
+
+  val isValidLogo = isValidImageUrlOrDataUri(logoUrl)
+  val canSave = name.isNotBlank() && isValidLogo
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text(if (existingApp == null) "Create New App" else "Edit App", fontWeight = FontWeight.Bold) },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        OutlinedTextField(
+          value = name,
+          onValueChange = { name = it },
+          label = { Text("App Name") },
+          placeholder = { Text("e.g., TaskFlow Companion") },
+          singleLine = true,
+          modifier = Modifier.fillMaxWidth().testTag("app_modal_name_input")
+        )
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+          AppIconThumbnail(
+            appIconUrl = logoUrl,
+            appName = name,
+            category = "App Install",
+            size = 48.dp
+          )
+          Column(modifier = Modifier.weight(1f)) {
+            OutlinedTextField(
+              value = if (logoUrl.startsWith("data:image/")) "(Gallery Logo Attached)" else logoUrl,
+              onValueChange = { if (!it.startsWith("(Gallery")) logoUrl = it },
+              label = { Text("App Logo URL (HTTPS)") },
+              singleLine = true,
+              isError = !isValidLogo,
+              modifier = Modifier.fillMaxWidth().testTag("app_modal_logo_input")
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            OutlinedButton(
+              onClick = {
+                logoPickerLauncher.launch(
+                  PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+              },
+              shape = RoundedCornerShape(8.dp)
+            ) {
+              Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("Upload Logo", style = MaterialTheme.typography.labelSmall)
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = { onSave(name.trim(), logoUrl.trim()) },
+        enabled = canSave,
+        modifier = Modifier.testTag("app_modal_save_button")
+      ) {
+        Text(if (existingApp == null) "Create App" else "Save Changes")
       }
     },
     dismissButton = {

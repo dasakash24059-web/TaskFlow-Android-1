@@ -81,6 +81,7 @@ enum class ProfileSubScreen {
 
 enum class AdminTab {
   TASKS,
+  APPS,
   SUBMISSIONS,
   USERS,
   WITHDRAWALS,
