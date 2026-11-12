@@ -404,6 +404,9 @@ private fun AuthenticatedWorkspace(
   val isSpinScreenVisible by viewModel.isSpinScreenVisible.collectAsStateWithLifecycle()
   val isOfferWallScreenVisible by viewModel.isOfferWallScreenVisible.collectAsStateWithLifecycle()
   val campaignsState by viewModel.campaignsState.collectAsStateWithLifecycle()
+  val adminTransactionsState by viewModel.adminTransactionsState.collectAsStateWithLifecycle()
+  val adminActivityLogsState by viewModel.adminActivityLogsState.collectAsStateWithLifecycle()
+  val selectedTaskProgressState by viewModel.selectedTaskProgressState.collectAsStateWithLifecycle()
   val userNotifications by viewModel.userNotificationsState.collectAsStateWithLifecycle()
   val showNotificationDialog by viewModel.showNotificationDialog.collectAsStateWithLifecycle()
   val showSupportTicketDialog by viewModel.showSupportTicketDialog.collectAsStateWithLifecycle()
@@ -746,7 +749,12 @@ private fun AuthenticatedWorkspace(
               userApprovalStatus = currentApprovalStatus,
               currentUserId = user.uid,
               uploadProgress = uploadProgress,
-              submissionError = submissionError
+              submissionError = submissionError,
+              taskProgress = selectedTaskProgressState,
+              onConfirmInstallation = { viewModel.confirmTaskInstallation(selectedTask) },
+              onToggleStepCompleted = { stepNum, totalSteps ->
+                viewModel.toggleTaskStepCompleted(selectedTask, stepNum, totalSteps)
+              }
             )
           } else {
             when (activeUserTab) {
@@ -1081,7 +1089,96 @@ private fun AuthenticatedWorkspace(
             },
             onUpdateCampaignStatus = { campaignId, status ->
               viewModel.updateCampaignStatus(campaignId, status)
-            }
+            },
+            appsState = appsState,
+            onCreateApp = { name, logo -> viewModel.createApp(name, logo) },
+            onUpdateApp = { id, name, logo, archived -> viewModel.updateApp(id, name, logo, archived) },
+            onSelectAdminTab = { viewModel.setAdminTab(it) },
+            adminTransactionsState = adminTransactionsState,
+            adminActivityLogsState = UiState.Success(adminActivityLogsState),
+            onCreateTaskFull = { payload ->
+              viewModel.createTask(
+                title = payload.title,
+                description = payload.description,
+                category = payload.category,
+                rewardAmountCoins = payload.rewardCoinsStr,
+                assignedUser = payload.assignee,
+                instructions = payload.instructions,
+                taskLink = payload.taskLink,
+                appName = payload.appName,
+                appIconUrl = payload.appIconUrl,
+                requiredProof = payload.requiredProof,
+                steps = payload.steps,
+                referenceImages = payload.referenceImages,
+                installationInstructions = payload.installationInstructions,
+                completionDurationMinutes = payload.completionDurationMinutes,
+                targetSubmissions = payload.targetSubmissions,
+                startDate = payload.startDate,
+                endDate = payload.endDate,
+                eligibilityRules = payload.eligibilityRules,
+                campaignId = payload.campaignId,
+                isActive = payload.isActive
+              )
+            },
+            onUpdateTaskFull = { taskId, payload ->
+              viewModel.updateTask(
+                taskId = taskId,
+                title = payload.title,
+                description = payload.description,
+                category = payload.category,
+                rewardAmountCoins = payload.rewardCoinsStr,
+                assignedUser = payload.assignee,
+                instructions = payload.instructions,
+                taskLink = payload.taskLink,
+                appName = payload.appName,
+                appIconUrl = payload.appIconUrl,
+                requiredProof = payload.requiredProof,
+                steps = payload.steps,
+                referenceImages = payload.referenceImages,
+                installationInstructions = payload.installationInstructions,
+                completionDurationMinutes = payload.completionDurationMinutes,
+                targetSubmissions = payload.targetSubmissions,
+                startDate = payload.startDate,
+                endDate = payload.endDate,
+                eligibilityRules = payload.eligibilityRules,
+                campaignId = payload.campaignId
+              )
+              viewModel.setTaskActive(taskId, payload.title, payload.isActive)
+            },
+            onCreateCampaignFull = { title, client, desc, budget, target, cat, reward, startDate, endDate, eligibility, iconUrl, taskLink ->
+              viewModel.createCampaign(
+                title = title,
+                clientName = client,
+                description = desc,
+                budgetCents = budget,
+                targetSubmissions = target,
+                category = cat,
+                rewardPerTaskCents = reward,
+                startDate = startDate,
+                endDate = endDate,
+                eligibilityRules = eligibility,
+                appIconUrl = iconUrl,
+                taskLink = taskLink
+              )
+            },
+            onUpdateCampaignDetails = { id, title, client, desc, budget, target, cat, reward, startDate, endDate, eligibility, _, _ ->
+              viewModel.updateCampaignDetails(
+                campaignId = id,
+                title = title,
+                clientName = client,
+                description = desc,
+                budgetCents = budget,
+                targetSubmissions = target,
+                category = cat,
+                rewardPerTaskCents = reward,
+                startDate = startDate,
+                endDate = endDate,
+                eligibilityRules = eligibility
+              )
+            },
+            databaseId = databaseId,
+            onOpenSecuritySheet = { viewModel.setShowSecuritySheet(true) },
+            onTriggerUpdateCheck = { viewModel.checkForAppUpdates(context, forceCheck = true) }
           )
         }
       }

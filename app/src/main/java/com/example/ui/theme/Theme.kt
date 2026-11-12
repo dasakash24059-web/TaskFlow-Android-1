@@ -27,17 +27,17 @@ object ThemePreferences {
   private const val PREFS_NAME = "taskflow_theme_prefs"
   private const val KEY_THEME_MODE = "app_theme_mode"
 
-  private val _currentThemeMode = MutableStateFlow(AppThemeMode.SYSTEM_DEFAULT)
+  private val _currentThemeMode = MutableStateFlow(AppThemeMode.LIGHT)
   val currentThemeMode: StateFlow<AppThemeMode> = _currentThemeMode.asStateFlow()
 
   fun init(context: Context) {
     val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    val savedName = prefs.getString(KEY_THEME_MODE, AppThemeMode.SYSTEM_DEFAULT.name)
+    val savedName = prefs.getString(KEY_THEME_MODE, AppThemeMode.LIGHT.name)
     val mode =
       try {
-        AppThemeMode.valueOf(savedName ?: AppThemeMode.SYSTEM_DEFAULT.name)
+        AppThemeMode.valueOf(savedName ?: AppThemeMode.LIGHT.name)
       } catch (e: Exception) {
-        AppThemeMode.SYSTEM_DEFAULT
+        AppThemeMode.LIGHT
       }
     _currentThemeMode.value = mode
   }
@@ -49,7 +49,7 @@ object ThemePreferences {
   }
 }
 
-// TaskFlow Premium Neon Glassmorphism Dark Theme (Default & Primary Vibe)
+// TaskFlow Dark Theme
 private val DarkColorScheme =
   darkColorScheme(
     primary = Color(0xFFA855F7),
@@ -74,10 +74,38 @@ private val DarkColorScheme =
     onError = Color(0xFFFFFFFF),
     errorContainer = Color(0xFF881337),
     onErrorContainer = Color(0xFFFFE4E6),
-    outline = Color(0x60A855F7)
+    outline = Color(0x60A855F7),
+    outlineVariant = Color(0x33A855F7)
   )
 
-private val LightColorScheme = DarkColorScheme // Default to rich Neon Dark palette for cohesive aesthetic
+// TaskFlow Light Minimal Professional Theme (Default)
+private val LightColorScheme =
+  lightColorScheme(
+    primary = Color(0xFF4F46E5),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFEEF2FF),
+    onPrimaryContainer = Color(0xFF312E81),
+    secondary = Color(0xFF0D9488),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFCCFBF1),
+    onSecondaryContainer = Color(0xFF134E4A),
+    tertiary = Color(0xFFD97706),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFFEF3C7),
+    onTertiaryContainer = Color(0xFF78350F),
+    background = Color(0xFFF8FAFC),
+    onBackground = Color(0xFF0F172A),
+    surface = Color(0xFFFFFFFF),
+    onSurface = Color(0xFF0F172A),
+    surfaceVariant = Color(0xFFF1F5F9),
+    onSurfaceVariant = Color(0xFF475569),
+    error = Color(0xFFDC2626),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFFEE2E2),
+    onErrorContainer = Color(0xFF7F1D1D),
+    outline = Color(0xFFCBD5E1),
+    outlineVariant = Color(0xFFE2E8F0)
+  )
 
 
 val TaskFlowTypography =

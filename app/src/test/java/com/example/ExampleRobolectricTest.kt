@@ -593,7 +593,7 @@ class ExampleRobolectricTest {
     assertEquals("https://play.google.com/store/apps/details?id=com.example.app", createdLink)
     assertEquals("1. Tap Play Store link\n2. Take screenshot of home screen", createdInstructions)
     assertEquals("Username and home screen screenshot", createdRequiredProof)
-    assertEquals("15.00", createdReward)
+    assertEquals("500", createdReward)
   }
 
   @Test
@@ -1813,15 +1813,18 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("watch_ad_action_button").performScrollTo().assertIsNotEnabled()
     composeTestRule.onNodeWithTag("claim_watch_reward_button").assertDoesNotExist()
 
-    // 5. Transition to READY_TO_CLAIM after verified video completion -> Claim button is displayed
+    // 5. Transition to READY_TO_CLAIM after verified video completion -> Exact random Coins and Claim button are displayed
     watchEarnStateHolder.value =
       com.example.data.model.WatchEarnUiState(
         status = com.example.data.model.WatchEarnFlowStatus.READY_TO_CLAIM,
         activeSessionId = "verified_session_123",
-        statusMessage = "Video completed! Tap Claim to receive your reward."
+        lastRewardCoins = 32L,
+        statusMessage = "You won +32 Coins! Tap Claim to watch the next video and add it to your wallet."
       )
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("watch_earn_ready_to_claim_banner").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("+32 Coins").assertIsDisplayed()
+    composeTestRule.onNodeWithText("+1–200 Coins").assertDoesNotExist()
     composeTestRule.onNodeWithTag("claim_watch_reward_button").performScrollTo().assertIsDisplayed().performClick()
     assertTrue(rewardClaimed)
 
@@ -1861,6 +1864,37 @@ class ExampleRobolectricTest {
     val showOpts = com.unity3d.ads.UnityAdsShowOptions().apply { setObjectId(testOpportunityId) }
     assertEquals(testOpportunityId, loadOpts.data.optString("objectId"))
     assertEquals(testOpportunityId, showOpts.data.optString("objectId"))
+  }
+
+  @Test
+  fun `AdminDashboard renders all 10 sections and UserTaskDetail displays 5-stage flow and single instruction container`() {
+    var selectedSection = AdminTab.OVERVIEW
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        AdminDashboardScreen(
+          isAdminAuthorized = true,
+          currentUserId = "admin_1",
+          currentUserEmail = BOOTSTRAPPED_ADMIN_EMAIL,
+          currentUserDisplayName = "Primary Admin",
+          activeTab = selectedSection,
+          adminTasksState = UiState.Success(emptyList()),
+          registeredUsersState = UiState.Success(emptyList()),
+          submissionFilter = TaskStatus.SUBMITTED,
+          onSelectSubmissionFilter = {},
+          onCreateTask = { _, _, _, _, _, _, _ -> },
+          onUpdateTask = { _, _, _, _, _, _, _, _ -> },
+          onDeleteTask = {},
+          onReviewSubmission = { _, _, _ -> },
+          onToggleUserStatus = {}
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Verify 10-section navigation bar is present and Overview section renders
+    composeTestRule.onNodeWithTag("admin_10_sections_nav_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_section_overview").assertIsDisplayed()
+    assertEquals(5, TaskStatus.ALL_STAGES.size)
   }
 }
 

@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import android.util.Log
+import com.example.data.model.AdminActivityLog
 import com.example.data.model.AppItem
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.CampaignItem
@@ -123,6 +124,8 @@ interface RewardCloudFunctionsClient {
   }
 
   suspend fun recordExtraSpinVideoWatched(userId: String): Int = 1
+
+  fun getOrAssignSessionRewardCoins(sessionId: String): Long = 50L
 }
 
 class FirebaseRewardCloudFunctionsClient(
@@ -130,6 +133,13 @@ class FirebaseRewardCloudFunctionsClient(
   private val authProvider: () -> FirebaseAuth = { Firebase.auth },
   private val functionsProvider: () -> FirebaseFunctions = { FirebaseFunctions.getInstance() }
 ) : RewardCloudFunctionsClient {
+
+  private val sessionRewardsById = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+  override fun getOrAssignSessionRewardCoins(sessionId: String): Long {
+    if (sessionId.isBlank()) return pickWeightedWatchEarnRewardCoins()
+    return sessionRewardsById.getOrPut(sessionId) { pickWeightedWatchEarnRewardCoins() }
+  }
 
   private fun pickWeightedWatchEarnRewardCoins(): Long {
     // 75% probability: 1..50 Coins; 25% probability: 51..200 Coins
@@ -463,8 +473,9 @@ class FirebaseRewardCloudFunctionsClient(
         if (rewardType == "DAILY_CHECK_IN") {
           DailyCheckInConstants.getRewardCoinsForDay((streakDay ?: 1).coerceIn(1, 30))
         } else {
-          pickWeightedWatchEarnRewardCoins()
+          getOrAssignSessionRewardCoins(sessionId)
         }
+      sessionRewardsById[sessionId] = expectedReward
 
       val adSessionRef =
         firestore.collection("users").document(uid).collection("ad_sessions").document(sessionId)
@@ -547,12 +558,20 @@ class FirebaseRewardCloudFunctionsClient(
       val used = userAdSnap.getBoolean("used") ?: false
       val claimed = userAdSnap.getBoolean("claimed") ?: false
       check(!used && !claimed) { "This reward session has already been used." }
+      val rewardCoins =
+        (userAdSnap.getLong("rewardCoins")
+            ?: sessionRewardsById[sessionId]
+            ?: pickWeightedWatchEarnRewardCoins())
+          .coerceIn(1L, 200L)
+      sessionRewardsById[sessionId] = rewardCoins
       userAdSessionRef
         .update(
           mapOf(
             "s2sVerified" to true,
             "status" to "VERIFIED",
             "videosCompleted" to 1L,
+            "rewardCoins" to rewardCoins,
+            "rewardCents" to rewardCoins,
             "verifiedAt" to FieldValue.serverTimestamp()
           )
         )
@@ -562,7 +581,8 @@ class FirebaseRewardCloudFunctionsClient(
 
     if (sessionId.startsWith("ad_") && userId.isNotBlank()) {
       val today = getTodayDateKey()
-      val expectedReward = pickWeightedWatchEarnRewardCoins()
+      val expectedReward = getOrAssignSessionRewardCoins(sessionId).coerceIn(1L, 200L)
+      sessionRewardsById[sessionId] = expectedReward
       userAdSessionRef
         .set(
           mapOf(
@@ -626,17 +646,17 @@ class FirebaseRewardCloudFunctionsClient(
         val userAdSessionRef =
           firestore.collection("users").document(uid).collection("ad_sessions").document(sessionId)
         val userAdSnap = runCatching { userAdSessionRef.get().await() }.getOrNull()
-        if (userAdSnap != null && userAdSnap.exists()) {
-          val rewardType = userAdSnap.getString("rewardType") ?: "WATCH_AND_EARN"
+        if ((userAdSnap != null && userAdSnap.exists()) || sessionId.startsWith("ad_")) {
+          val rewardType = userAdSnap?.getString("rewardType") ?: "WATCH_AND_EARN"
           if (rewardType == "DAILY_CHECK_IN") {
-            val day = (userAdSnap.getLong("streakDay") ?: 1L).toInt()
+            val day = (userAdSnap?.getLong("streakDay") ?: 1L).toInt()
             userAdSessionRef.update(
               mapOf("used" to true, "claimed" to true, "status" to "CLAIMED")
             ).await()
             return@withTimeout claimDailyCheckIn(day)
           }
 
-          val today = userAdSnap.getString("dateKey")?.ifBlank { getTodayDateKey() } ?: getTodayDateKey()
+          val today = userAdSnap?.getString("dateKey")?.ifBlank { getTodayDateKey() } ?: getTodayDateKey()
           val userRef = firestore.collection("users").document(uid)
           val subStatsRef = userRef.collection("watch_stats").document(today)
           val topStatsRef = firestore.collection("watch_stats").document("${uid}_$today")
@@ -644,10 +664,9 @@ class FirebaseRewardCloudFunctionsClient(
 
           return@withTimeout firestore.runTransaction { transaction ->
             val freshSession = transaction.get(userAdSessionRef)
-            check(freshSession.exists()) { "Reward session not found." }
-            val used = freshSession.getBoolean("used") ?: false
-            val claimed = freshSession.getBoolean("claimed") ?: false
-            val verified = freshSession.getBoolean("s2sVerified") ?: false
+            val used = if (freshSession.exists()) (freshSession.getBoolean("used") ?: false) else false
+            val claimed = if (freshSession.exists()) (freshSession.getBoolean("claimed") ?: false) else false
+            val verified = if (freshSession.exists()) (freshSession.getBoolean("s2sVerified") ?: false) else true
             check(!used && !claimed) { "This reward has already been claimed." }
             check(verified) { "Please complete the first video before claiming." }
 
@@ -671,7 +690,11 @@ class FirebaseRewardCloudFunctionsClient(
                 topStatSnap.getLong("totalEarnedCoins") ?: 0L
               )
             val rewardCoins =
-              (freshSession.getLong("rewardCoins") ?: pickWeightedWatchEarnRewardCoins()).coerceIn(1L, 200L)
+              (if (freshSession.exists()) freshSession.getLong("rewardCoins") else null)
+                ?.takeIf { it > 0L }
+                ?.coerceIn(1L, 200L)
+                ?: getOrAssignSessionRewardCoins(sessionId).coerceIn(1L, 200L)
+            sessionRewardsById[sessionId] = rewardCoins
             val nextWatched = (currentWatched + 2L).coerceAtMost(25L)
             val nextEarnedCoins = currentEarnedCoins + rewardCoins
 
@@ -684,16 +707,23 @@ class FirebaseRewardCloudFunctionsClient(
             val displayName =
               (userSnap.getString("displayName") ?: "TaskFlow Member").trim().ifEmpty { "TaskFlow Member" }
 
-            transaction.update(
+            transaction.set(
               userAdSessionRef,
               mapOf(
+                "sessionId" to sessionId,
+                "userId" to uid,
+                "rewardType" to "WATCH_AND_EARN",
+                "dateKey" to today,
+                "s2sVerified" to true,
                 "used" to true,
                 "claimed" to true,
                 "status" to "CLAIMED",
                 "videosCompleted" to 2L,
                 "rewardCoins" to rewardCoins,
+                "rewardCents" to rewardCoins,
                 "claimedAt" to FieldValue.serverTimestamp()
-              )
+              ),
+              com.google.firebase.firestore.SetOptions.merge()
             )
             transaction.update(
               userRef,
@@ -908,6 +938,52 @@ class TaskFlowRepository(
   private val campaignsCollection = firestore.collection("campaigns")
   private val supportTicketsCollection = firestore.collection("support_tickets")
   private val appsCollection = firestore.collection("apps")
+  private val adminLogsCollection = firestore.collection("admin_logs")
+
+  suspend fun recordAdminActivity(
+    actionType: String,
+    title: String,
+    details: String,
+    targetId: String = ""
+  ) {
+    runCatching {
+      val docRef = adminLogsCollection.document()
+      docRef.set(
+        mapOf(
+          "actionType" to actionType,
+          "title" to title.take(160),
+          "details" to details.take(600),
+          "targetId" to targetId,
+          "timestampMillis" to System.currentTimeMillis(),
+          "createdAt" to FieldValue.serverTimestamp()
+        )
+      ).await()
+    }
+  }
+
+  fun observeAdminActivityLogs(isAdminAuthorized: Boolean): Flow<List<AdminActivityLog>> =
+    callbackFlow {
+      if (!isAdminAuthorized) {
+        trySend(emptyList())
+        awaitClose {}
+        return@callbackFlow
+      }
+      val listener =
+        adminLogsCollection.addSnapshotListener { snapshot, error ->
+          if (error != null) {
+            trySend(emptyList())
+            return@addSnapshotListener
+          }
+          val logs =
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toObject(AdminActivityLog::class.java) }
+              ?.sortedByDescending { it.createdAt?.seconds ?: (it.timestampMillis / 1000L) }
+              ?: emptyList()
+          trySend(logs)
+        }
+      awaitClose { listener.remove() }
+    }
 
   /**
    * Builds a privacy-safe public leaderboard document containing ONLY non-sensitive public fields
@@ -1370,7 +1446,15 @@ class TaskFlowRepository(
     requiredProof: String = "",
     appId: String = "",
     steps: List<TaskStep> = emptyList(),
-    referenceImages: List<String> = emptyList()
+    referenceImages: List<String> = emptyList(),
+    installationInstructions: String = "",
+    completionDurationMinutes: Int = 5,
+    targetSubmissions: Long = 0L,
+    startDate: String = "",
+    endDate: String = "",
+    eligibilityRules: String = "All Approved Users",
+    campaignId: String = "",
+    isActive: Boolean = true
   ): Result<String> = runCatching {
     val adminUid =
       authProvider().currentUser?.uid ?: error("Must be signed in as Admin to create a task.")
@@ -1379,6 +1463,7 @@ class TaskFlowRepository(
     val cleanedAppIconUrl = appIconUrl.trim()
     val cleanedDesc = description.trim()
     val cleanedInstructions = instructions.trim().ifBlank { cleanedDesc }
+    val cleanedInstallInstructions = installationInstructions.trim()
     val cleanedRequiredProof =
       requiredProof.trim().ifBlank {
         "Provide written confirmation notes and a clear screenshot showing task completion."
@@ -1413,21 +1498,29 @@ class TaskFlowRepository(
     val payload =
       mapOf(
         "appId" to appId.trim(),
+        "campaignId" to campaignId.trim(),
         "title" to cleanedTitle,
         "appName" to cleanedAppName,
         "appIconUrl" to cleanedAppIconUrl,
         "description" to cleanedDesc,
+        "installationInstructions" to cleanedInstallInstructions,
         "instructions" to cleanedInstructions,
         "requiredProof" to cleanedRequiredProof,
         "taskLink" to cleanedLink,
         "category" to cleanedCat,
         "rewardCents" to rewardCents, // Legacy
         "rewardCoins" to rewardCents, // New (map to rewardCents)
+        "completionDurationMinutes" to completionDurationMinutes.coerceIn(1, 1440),
+        "targetSubmissions" to targetSubmissions.coerceAtLeast(0L),
+        "completedSubmissions" to 0L,
+        "startDate" to startDate.trim(),
+        "endDate" to endDate.trim(),
+        "eligibilityRules" to eligibilityRules.trim().ifEmpty { "All Approved Users" },
         "assignedUserId" to assignedUserId,
         "assignedUserName" to assignedUserName.trim().ifEmpty { "Assigned User" },
         "assignedUserEmail" to assignedUserEmail.trim().ifEmpty { "user@taskflow.app" },
         "status" to TaskStatus.PENDING,
-        "isActive" to true,
+        "isActive" to isActive,
         "proofText" to "",
         "proofImageUrl" to "",
         "proofStoragePath" to "",
@@ -1459,6 +1552,12 @@ class TaskFlowRepository(
       )
     )
     batch.commit().await()
+    recordAdminActivity(
+      actionType = "TASK",
+      title = "Created Task: $cleanedTitle",
+      details = "Category: $cleanedCat • Reward: ${formatCoins(rewardCents)} • Quota: ${if (targetSubmissions > 0) targetSubmissions else "Unlimited"}",
+      targetId = docRef.id
+    )
     docRef.id
   }
 
@@ -1481,7 +1580,14 @@ class TaskFlowRepository(
     requiredProof: String = "",
     appId: String = "",
     steps: List<TaskStep> = emptyList(),
-    referenceImages: List<String> = emptyList()
+    referenceImages: List<String> = emptyList(),
+    installationInstructions: String = "",
+    completionDurationMinutes: Int = 5,
+    targetSubmissions: Long = 0L,
+    startDate: String = "",
+    endDate: String = "",
+    eligibilityRules: String = "All Approved Users",
+    campaignId: String = ""
   ): Result<Unit> = runCatching {
     require(taskId.isNotBlank()) { "taskId must not be blank" }
     val cleanedTitle = title.trim()
@@ -1489,6 +1595,7 @@ class TaskFlowRepository(
     val cleanedAppIconUrl = appIconUrl.trim()
     val cleanedDesc = description.trim()
     val cleanedInstructions = instructions.trim().ifBlank { cleanedDesc }
+    val cleanedInstallInstructions = installationInstructions.trim()
     val cleanedRequiredProof =
       requiredProof.trim().ifBlank {
         "Provide written confirmation notes and a clear screenshot showing task completion."
@@ -1529,16 +1636,23 @@ class TaskFlowRepository(
       taskRef,
       mapOf(
         "appId" to appId.trim(),
+        "campaignId" to campaignId.trim(),
         "title" to cleanedTitle,
         "appName" to cleanedAppName,
         "appIconUrl" to cleanedAppIconUrl,
         "description" to cleanedDesc,
+        "installationInstructions" to cleanedInstallInstructions,
         "instructions" to cleanedInstructions,
         "requiredProof" to cleanedRequiredProof,
         "taskLink" to cleanedLink,
         "category" to cleanedCat,
         "rewardCents" to rewardCents,
         "rewardCoins" to rewardCents,
+        "completionDurationMinutes" to completionDurationMinutes.coerceIn(1, 1440),
+        "targetSubmissions" to targetSubmissions.coerceAtLeast(0L),
+        "startDate" to startDate.trim(),
+        "endDate" to endDate.trim(),
+        "eligibilityRules" to eligibilityRules.trim().ifEmpty { "All Approved Users" },
         "assignedUserId" to assignedUserId,
         "assignedUserName" to assignedUserName.trim().ifEmpty { "Assigned User" },
         "assignedUserEmail" to assignedUserEmail.trim().ifEmpty { "user@taskflow.app" },
@@ -1580,6 +1694,12 @@ class TaskFlowRepository(
     }
 
     batch.commit().await()
+    recordAdminActivity(
+      actionType = "TASK",
+      title = "Updated Task: $cleanedTitle",
+      details = "Category: $cleanedCat • Reward: ${formatCoins(rewardCents)}",
+      targetId = taskId
+    )
   }
 
   /**
@@ -1922,6 +2042,61 @@ class TaskFlowRepository(
     }
 
     batch.commit().await()
+
+    // Update task/campaign quota and auto-close if quota is exhausted (outside atomic reward batch so firestore.rules atomic task approval check remains 100% intact)
+    if (approve) {
+      runCatching {
+        if (latestTaskSnap.exists()) {
+          val targetQuota = latestTaskSnap.getLong("targetSubmissions") ?: 0L
+          val currentCompleted = (latestTaskSnap.getLong("completedSubmissions") ?: 0L) + 1L
+          val taskQuotaUpdates = mutableMapOf<String, Any>(
+            "completedSubmissions" to currentCompleted,
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+          if (targetQuota > 0L && currentCompleted >= targetQuota) {
+            taskQuotaUpdates["isActive"] = false
+          }
+          taskRef.update(taskQuotaUpdates).await()
+
+          val linkedCampaignId = latestTaskSnap.getString("campaignId").orEmpty()
+          if (linkedCampaignId.isNotBlank()) {
+            val campRef = campaignsCollection.document(linkedCampaignId)
+            val campSnap = campRef.get().await()
+            if (campSnap.exists()) {
+              val campTarget = campSnap.getLong("targetSubmissions") ?: 0L
+              val campCompleted = (campSnap.getLong("completedSubmissions") ?: 0L) + 1L
+              val campSpent = (campSnap.getLong("spentCents") ?: 0L) + rewardCents
+              val campUpdates = mutableMapOf<String, Any>(
+                "completedSubmissions" to campCompleted,
+                "spentCents" to campSpent,
+                "updatedAt" to FieldValue.serverTimestamp()
+              )
+              if (campTarget > 0L && campCompleted >= campTarget) {
+                campUpdates["status"] = "COMPLETED"
+              }
+              campRef.update(campUpdates).await()
+            }
+          }
+        }
+        if (submittingUserId.isNotBlank()) {
+          saveUserTaskProgress(
+            userId = submittingUserId,
+            taskId = actualTaskId,
+            completedSteps = emptyList(),
+            trackingEvents = mapOf("approved" to true),
+            status = TaskStatus.STAGE_DONE,
+            installationConfirmed = true
+          )
+        }
+      }
+    }
+
+    recordAdminActivity(
+      actionType = if (approve) "REWARD" else "SUBMISSION",
+      title = if (approve) "Approved Submission: ${task.title}" else "Rejected Submission: ${task.title}",
+      details = "User: ${task.assignedUserName} • ${if (approve) "Credited ${formatRewardInr(rewardCents)}" else "Reason: $cleanedFeedback"}",
+      targetId = submissionRef.id
+    )
   }
 
   /**
@@ -2470,6 +2645,10 @@ class TaskFlowRepository(
     }
   }
 
+  fun getOrAssignWatchEarnSessionReward(sessionId: String): Long {
+    return rewardFunctionsClient.getOrAssignSessionRewardCoins(sessionId).coerceIn(1L, 200L)
+  }
+
   /**
    * Step 2 of Watch & Earn: Confirms that `/reward_sessions/{sessionId}` has been verified by the
    * Unity S2S callback (`s2sVerified == true && status == "VERIFIED"`).
@@ -2618,7 +2797,13 @@ class TaskFlowRepository(
     budgetCents: Long,
     targetSubmissions: Long,
     category: String,
-    rewardPerTaskCents: Long
+    rewardPerTaskCents: Long,
+    startDate: String = "",
+    endDate: String = "",
+    eligibilityRules: String = "All Approved Users",
+    appIconUrl: String = "",
+    taskLink: String = "",
+    linkedTaskId: String = ""
   ): Result<String> = runCatching {
     require(title.isNotBlank()) { "Campaign title cannot be blank" }
     require(clientName.isNotBlank()) { "Client/Partner name cannot be blank" }
@@ -2628,6 +2813,8 @@ class TaskFlowRepository(
       "title" to title.trim(),
       "clientName" to clientName.trim(),
       "description" to description.trim(),
+      "appIconUrl" to appIconUrl.trim(),
+      "taskLink" to taskLink.trim(),
       "budgetCents" to budgetCents,
       "spentCents" to 0L,
       "targetSubmissions" to targetSubmissions,
@@ -2635,21 +2822,100 @@ class TaskFlowRepository(
       "status" to "ACTIVE",
       "category" to category.trim().ifEmpty { "App Install" },
       "rewardPerTaskCents" to rewardPerTaskCents,
+      "startDate" to startDate.trim(),
+      "endDate" to endDate.trim(),
+      "eligibilityRules" to eligibilityRules.trim().ifEmpty { "All Approved Users" },
+      "linkedTaskId" to linkedTaskId.trim(),
       "createdAt" to FieldValue.serverTimestamp(),
       "updatedAt" to FieldValue.serverTimestamp()
     )
     docRef.set(data).await()
+    recordAdminActivity(
+      actionType = "CAMPAIGN",
+      title = "Launched Campaign: ${title.trim()}",
+      details = "Partner: ${clientName.trim()} • Quota: $targetSubmissions • Budget: ${formatRewardInr(budgetCents)}",
+      targetId = docRef.id
+    )
     docRef.id
+  }
+
+  suspend fun updateCampaignDetails(
+    campaignId: String,
+    title: String,
+    clientName: String,
+    description: String,
+    budgetCents: Long,
+    targetSubmissions: Long,
+    category: String,
+    rewardPerTaskCents: Long,
+    startDate: String = "",
+    endDate: String = "",
+    eligibilityRules: String = "All Approved Users"
+  ): Result<Unit> = runCatching {
+    require(campaignId.isNotBlank()) { "campaignId cannot be blank" }
+    require(title.isNotBlank()) { "Campaign title cannot be blank" }
+    val campRef = campaignsCollection.document(campaignId)
+    val snap = campRef.get().await()
+    val completed = snap.getLong("completedSubmissions") ?: 0L
+    val currentStatus = snap.getString("status") ?: "ACTIVE"
+    val nextStatus =
+      if (targetSubmissions > 0L && completed >= targetSubmissions) "COMPLETED"
+      else if (currentStatus == "COMPLETED" && completed < targetSubmissions) "ACTIVE"
+      else currentStatus
+
+    campRef.update(
+      mapOf(
+        "title" to title.trim(),
+        "clientName" to clientName.trim(),
+        "description" to description.trim(),
+        "budgetCents" to budgetCents,
+        "targetSubmissions" to targetSubmissions,
+        "category" to category.trim().ifEmpty { "App Install" },
+        "rewardPerTaskCents" to rewardPerTaskCents,
+        "startDate" to startDate.trim(),
+        "endDate" to endDate.trim(),
+        "eligibilityRules" to eligibilityRules.trim().ifEmpty { "All Approved Users" },
+        "status" to nextStatus,
+        "updatedAt" to FieldValue.serverTimestamp()
+      )
+    ).await()
+    recordAdminActivity(
+      actionType = "CAMPAIGN",
+      title = "Updated Campaign: ${title.trim()}",
+      details = "Quota: $completed/$targetSubmissions • Status: $nextStatus",
+      targetId = campaignId
+    )
   }
 
   suspend fun updateCampaignStatus(campaignId: String, newStatus: String): Result<Unit> = runCatching {
     require(campaignId.isNotBlank()) { "campaignId cannot be blank" }
-    campaignsCollection.document(campaignId).update(
+    val campRef = campaignsCollection.document(campaignId)
+    val campSnap = campRef.get().await()
+    val linkedTaskId = campSnap.getString("linkedTaskId").orEmpty()
+    val title = campSnap.getString("title").orEmpty()
+    campRef.update(
       mapOf(
         "status" to newStatus,
         "updatedAt" to FieldValue.serverTimestamp()
       )
     ).await()
+    if (linkedTaskId.isNotBlank()) {
+      val shouldTaskBeActive = newStatus.equals("ACTIVE", ignoreCase = true)
+      runCatching {
+        tasksCollection.document(linkedTaskId).update(
+          mapOf(
+            "isActive" to shouldTaskBeActive,
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        ).await()
+      }
+    }
+    recordAdminActivity(
+      actionType = "CAMPAIGN",
+      title = "Campaign Status Changed: ${title.ifBlank { campaignId }}",
+      details = "New status: $newStatus",
+      targetId = campaignId
+    )
   }
 
   // ==========================================
@@ -2817,7 +3083,9 @@ class TaskFlowRepository(
     taskId: String,
     completedSteps: List<Int>,
     trackingEvents: Map<String, Boolean>,
-    status: String
+    status: String,
+    installationConfirmed: Boolean = true,
+    currentStepNumber: Int = 1
   ): Result<Unit> = runCatching {
     require(userId.isNotBlank()) { "userId must not be blank" }
     require(taskId.isNotBlank()) { "taskId must not be blank" }
@@ -2825,6 +3093,8 @@ class TaskFlowRepository(
     val data = mapOf(
       "taskId" to taskId,
       "userId" to userId,
+      "installationConfirmed" to installationConfirmed,
+      "currentStepNumber" to currentStepNumber,
       "completedSteps" to completedSteps,
       "trackingEvents" to trackingEvents,
       "status" to status,

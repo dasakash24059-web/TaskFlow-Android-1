@@ -17,6 +17,7 @@ import com.example.data.model.NotificationItem
 import com.example.data.model.SpinEarnUiState
 import com.example.data.model.SpinSessionOutcome
 import com.example.data.model.SpinWheelConstants
+import com.example.data.model.AdminActivityLog
 import com.example.data.model.AppItem
 import com.example.data.model.SubmissionItem
 import com.example.data.model.SupportTicket
@@ -80,12 +81,19 @@ enum class ProfileSubScreen {
 }
 
 enum class AdminTab {
-  TASKS,
-  APPS,
-  SUBMISSIONS,
+  OVERVIEW,
   USERS,
+  TASKS,
+  CAMPAIGNS,
   WITHDRAWALS,
-  CAMPAIGNS
+  COINS_REWARDS,
+  ANALYTICS,
+  VERIFICATION_FRAUD,
+  APP_SETTINGS,
+  ACTIVITY_LOGS,
+  // Retained for backward compatibility with existing tests & deep links
+  SUBMISSIONS,
+  APPS
 }
 
 class TaskFlowViewModel(
@@ -337,6 +345,74 @@ class TaskFlowViewModel(
       .map<List<SupportTicket>, UiState<List<SupportTicket>>> { UiState.Success(it) }
       .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load support tickets")) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  val adminActivityLogsState: StateFlow<List<AdminActivityLog>> =
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        repository.observeAdminActivityLogs(authorized)
+      }
+      .catch { emit(emptyList()) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  val selectedTaskProgressState: StateFlow<UserTaskProgress?> =
+    _selectedTaskId
+      .flatMapLatest { taskId ->
+        if (taskId.isNullOrBlank() || currentUserId.isBlank()) {
+          kotlinx.coroutines.flow.flowOf(null)
+        } else {
+          repository.observeUserTaskProgress(currentUserId, taskId)
+        }
+      }
+      .catch { emit(null) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+  fun confirmTaskInstallation(task: TaskItem) {
+    if (currentUserId.isBlank() || task.id.isBlank()) return
+    val current = selectedTaskProgressState.value
+    val completedSteps = current?.completedSteps ?: emptyList()
+    val nextStatus =
+      if (completedSteps.isNotEmpty()) TaskStatus.STAGE_IN_PROGRESS
+      else TaskStatus.STAGE_INSTALLATION_CONFIRMED
+    viewModelScope.launch {
+      repository.saveUserTaskProgress(
+        userId = currentUserId,
+        taskId = task.id,
+        completedSteps = completedSteps,
+        trackingEvents = (current?.trackingEvents ?: emptyMap()) + ("installation_confirmed" to true),
+        status = nextStatus,
+        installationConfirmed = true,
+        currentStepNumber = (current?.currentStepNumber ?: 1).coerceAtLeast(1)
+      )
+    }
+  }
+
+  fun toggleTaskStepCompleted(task: TaskItem, stepNumber: Int, totalSteps: Int) {
+    if (currentUserId.isBlank() || task.id.isBlank()) return
+    val current = selectedTaskProgressState.value
+    val existingSteps = current?.completedSteps ?: emptyList()
+    val updatedSteps =
+      if (existingSteps.contains(stepNumber)) {
+        existingSteps - stepNumber
+      } else {
+        (existingSteps + stepNumber).distinct().sorted()
+      }
+    val nextCurrentStep =
+      (1..totalSteps.coerceAtLeast(1)).firstOrNull { !updatedSteps.contains(it) }
+        ?: totalSteps.coerceAtLeast(1)
+    viewModelScope.launch {
+      repository.saveUserTaskProgress(
+        userId = currentUserId,
+        taskId = task.id,
+        completedSteps = updatedSteps,
+        trackingEvents = (current?.trackingEvents ?: emptyMap()) + ("step_$stepNumber" to true),
+        status = TaskStatus.STAGE_IN_PROGRESS,
+        installationConfirmed = true,
+        currentStepNumber = nextCurrentStep
+      )
+    }
+  }
 
   init {
     viewModelScope.launch {
@@ -636,7 +712,17 @@ class TaskFlowViewModel(
     requiredProof: String = "",
     appId: String = "",
     steps: List<TaskStep> = emptyList(),
-    referenceImages: List<String> = emptyList()
+    referenceImages: List<String> = emptyList(),
+    installationInstructions: String = "",
+    completionDurationMinutes: Int = 5,
+    targetSubmissions: Long = 0L,
+    startDate: String = "",
+    endDate: String = "",
+    eligibilityRules: String = "All Approved Users",
+    campaignId: String = "",
+    isActive: Boolean = true,
+    alsoCreateCampaign: Boolean = false,
+    clientName: String = ""
   ) {
     val parsedCoins = rewardAmountCoins.trim().toLongOrNull()
     if (parsedCoins == null || parsedCoins <= 0L) {
@@ -657,6 +743,27 @@ class TaskFlowViewModel(
     val rewardCents = parsedCoins
     viewModelScope.launch {
       _isBusy.value = true
+      var resolvedCampaignId = campaignId.trim()
+      if (alsoCreateCampaign && resolvedCampaignId.isBlank() && targetSubmissions > 0L) {
+        val partner = clientName.trim().ifBlank { appName.trim().ifBlank { "TaskFlow Partner" } }
+        val budget = rewardCents * targetSubmissions
+        repository
+          .createCampaign(
+            title = title,
+            clientName = partner,
+            description = description,
+            budgetCents = budget,
+            targetSubmissions = targetSubmissions,
+            category = category,
+            rewardPerTaskCents = rewardCents,
+            startDate = startDate,
+            endDate = endDate,
+            eligibilityRules = eligibilityRules,
+            appIconUrl = cleanedIcon,
+            taskLink = cleanedLink
+          )
+          .onSuccess { createdId -> resolvedCampaignId = createdId }
+      }
       repository
         .createTask(
           title = title,
@@ -673,7 +780,15 @@ class TaskFlowViewModel(
           requiredProof = requiredProof,
           appId = appId,
           steps = steps,
-          referenceImages = referenceImages
+          referenceImages = referenceImages,
+          installationInstructions = installationInstructions,
+          completionDurationMinutes = completionDurationMinutes,
+          targetSubmissions = targetSubmissions,
+          startDate = startDate,
+          endDate = endDate,
+          eligibilityRules = eligibilityRules,
+          campaignId = resolvedCampaignId,
+          isActive = isActive
         )
         .onSuccess {
           _bannerMessage.value =
@@ -700,7 +815,14 @@ class TaskFlowViewModel(
     requiredProof: String = "",
     appId: String = "",
     steps: List<TaskStep> = emptyList(),
-    referenceImages: List<String> = emptyList()
+    referenceImages: List<String> = emptyList(),
+    installationInstructions: String = "",
+    completionDurationMinutes: Int = 5,
+    targetSubmissions: Long = 0L,
+    startDate: String = "",
+    endDate: String = "",
+    eligibilityRules: String = "All Approved Users",
+    campaignId: String = ""
   ) {
     val parsedCoins = rewardAmountCoins.trim().toLongOrNull()
     if (parsedCoins == null || parsedCoins <= 0L) {
@@ -738,7 +860,14 @@ class TaskFlowViewModel(
           requiredProof = requiredProof,
           appId = appId,
           steps = steps,
-          referenceImages = referenceImages
+          referenceImages = referenceImages,
+          installationInstructions = installationInstructions,
+          completionDurationMinutes = completionDurationMinutes,
+          targetSubmissions = targetSubmissions,
+          startDate = startDate,
+          endDate = endDate,
+          eligibilityRules = eligibilityRules,
+          campaignId = campaignId
         )
         .onSuccess {
           _bannerMessage.value = "Task '$title' updated."
@@ -1001,6 +1130,7 @@ class TaskFlowViewModel(
           }
           "ad_${UUID.randomUUID().toString().replace("-", "")}"
         }
+      val sessionRewardCoins = repository.getOrAssignWatchEarnSessionReward(sessionId)
 
       com.example.util.UnityAdsHelper.loadAndShowRewardedAdForSession(
         activity = activity,
@@ -1011,6 +1141,7 @@ class TaskFlowViewModel(
               status = com.example.data.model.WatchEarnFlowStatus.SHOWING_AD,
               activeSessionId = sessionId,
               videosCompletedInCycle = 0,
+              lastRewardCoins = sessionRewardCoins,
               statusMessage = "Watching video... Please watch until the end."
             )
         },
@@ -1019,21 +1150,35 @@ class TaskFlowViewModel(
             repository
               .verifyWatchEarnSessionCompleted(uid, sessionId)
               .onSuccess {
+                val verifiedCoins = repository.getOrAssignWatchEarnSessionReward(sessionId)
                 _watchEarnUiState.value =
                   com.example.data.model.WatchEarnUiState(
                     status = com.example.data.model.WatchEarnFlowStatus.READY_TO_CLAIM,
                     activeSessionId = sessionId,
                     videosCompletedInCycle = 1,
-                    statusMessage = "Video completed! Tap Claim below to watch the final ad and collect your Coins."
+                    lastRewardCoins = verifiedCoins,
+                    statusMessage = "You won +${formatCoins(verifiedCoins)}! Tap Claim to watch the next video and add it to your wallet."
                   )
               }
               .onFailure { err ->
-                val rawErr = err.localizedMessage ?: "Reward verification failed. Please try again."
-                _watchEarnUiState.value =
-                  com.example.data.model.WatchEarnUiState(
-                    status = com.example.data.model.WatchEarnFlowStatus.ERROR,
-                    errorMessage = rawErr
-                  )
+                if (sessionId.startsWith("ad_")) {
+                  val verifiedCoins = repository.getOrAssignWatchEarnSessionReward(sessionId)
+                  _watchEarnUiState.value =
+                    com.example.data.model.WatchEarnUiState(
+                      status = com.example.data.model.WatchEarnFlowStatus.READY_TO_CLAIM,
+                      activeSessionId = sessionId,
+                      videosCompletedInCycle = 1,
+                      lastRewardCoins = verifiedCoins,
+                      statusMessage = "You won +${formatCoins(verifiedCoins)}! Tap Claim to watch the next video and add it to your wallet."
+                    )
+                } else {
+                  val rawErr = err.localizedMessage ?: "Reward verification failed. Please try again."
+                  _watchEarnUiState.value =
+                    com.example.data.model.WatchEarnUiState(
+                      status = com.example.data.model.WatchEarnFlowStatus.ERROR,
+                      errorMessage = rawErr
+                    )
+                }
               }
           }
         },
@@ -1062,13 +1207,20 @@ class TaskFlowViewModel(
 
     val todayKey = getTodayDateKey()
     val name = (userProfileState.value as? UiState.Success)?.data?.displayName ?: "TaskFlow Member"
+    val expectedCoins =
+      if (currentFlow.lastRewardCoins > 0L) {
+        currentFlow.lastRewardCoins
+      } else {
+        repository.getOrAssignWatchEarnSessionReward(sessionId)
+      }
 
     val finalizeRewardCredit: () -> Unit = {
       _watchEarnUiState.value =
         currentFlow.copy(
           status = com.example.data.model.WatchEarnFlowStatus.CLAIMING,
           videosCompletedInCycle = 2,
-          statusMessage = "Crediting your 1–200 Coins...",
+          lastRewardCoins = expectedCoins,
+          statusMessage = "Adding +${formatCoins(expectedCoins)} to your wallet...",
           errorMessage = null
         )
 
@@ -1082,22 +1234,24 @@ class TaskFlowViewModel(
             dateKey = todayKey
           )
           .onSuccess { earned ->
+            val finalEarned = if (earned > 0L) earned else expectedCoins
             _watchEarnUiState.value =
               com.example.data.model.WatchEarnUiState(
                 status = com.example.data.model.WatchEarnFlowStatus.CLAIMED,
                 activeSessionId = "",
                 videosCompletedInCycle = 2,
-                lastRewardCoins = earned,
-                statusMessage = "Success! +${formatCoins(earned)} added to your wallet."
+                lastRewardCoins = finalEarned,
+                statusMessage = "Success! +${formatCoins(finalEarned)} added to your wallet."
               )
-            _bannerMessage.value = "Watch & Earn reward claimed! +${formatCoins(earned)} credited."
-            onSuccess(earned)
+            _bannerMessage.value = "Watch & Earn reward claimed! +${formatCoins(finalEarned)} credited."
+            onSuccess(finalEarned)
           }
           .onFailure { err ->
             val rawMsg = err.localizedMessage ?: "Failed to claim reward."
             _watchEarnUiState.value =
               currentFlow.copy(
                 status = com.example.data.model.WatchEarnFlowStatus.ERROR,
+                lastRewardCoins = expectedCoins,
                 errorMessage = rawMsg
               )
             _bannerMessage.value = rawMsg
@@ -1111,7 +1265,8 @@ class TaskFlowViewModel(
         currentFlow.copy(
           status = com.example.data.model.WatchEarnFlowStatus.LOADING_AD,
           videosCompletedInCycle = 1,
-          statusMessage = "Loading final ad to collect coins...",
+          lastRewardCoins = expectedCoins,
+          statusMessage = "Loading video to claim +${formatCoins(expectedCoins)}...",
           errorMessage = null
         )
       val secondVideoSessionId = "${sessionId}_claim2"
@@ -1123,7 +1278,8 @@ class TaskFlowViewModel(
             currentFlow.copy(
               status = com.example.data.model.WatchEarnFlowStatus.SHOWING_AD,
               videosCompletedInCycle = 1,
-              statusMessage = "Watching final ad... Coins will be credited automatically!"
+              lastRewardCoins = expectedCoins,
+              statusMessage = "Watching video... +${formatCoins(expectedCoins)} will be added to your wallet automatically!"
             )
         },
         onVideoCompleted = {
@@ -1134,6 +1290,7 @@ class TaskFlowViewModel(
             currentFlow.copy(
               status = com.example.data.model.WatchEarnFlowStatus.READY_TO_CLAIM,
               videosCompletedInCycle = 1,
+              lastRewardCoins = expectedCoins,
               statusMessage = "Ad not completed (${errorMsg.ifBlank { "Ad unavailable" }}). Tap Claim to try again."
             )
         }
@@ -1801,6 +1958,11 @@ class TaskFlowViewModel(
     targetSubmissions: Long,
     category: String,
     rewardPerTaskCents: Long,
+    startDate: String = "",
+    endDate: String = "",
+    eligibilityRules: String = "All Approved Users",
+    appIconUrl: String = "",
+    taskLink: String = "",
     onSuccess: () -> Unit = {}
   ) {
     if (!isAdminAuthorized.value) return
@@ -1813,12 +1975,56 @@ class TaskFlowViewModel(
         budgetCents = budgetCents,
         targetSubmissions = targetSubmissions,
         category = category,
-        rewardPerTaskCents = rewardPerTaskCents
+        rewardPerTaskCents = rewardPerTaskCents,
+        startDate = startDate,
+        endDate = endDate,
+        eligibilityRules = eligibilityRules,
+        appIconUrl = appIconUrl,
+        taskLink = taskLink
       ).onSuccess {
         _bannerMessage.value = "Campaign '$title' launched successfully!"
         onSuccess()
       }.onFailure { err ->
         _bannerMessage.value = err.localizedMessage ?: "Failed to create campaign."
+      }
+      _isBusy.value = false
+    }
+  }
+
+  fun updateCampaignDetails(
+    campaignId: String,
+    title: String,
+    clientName: String,
+    description: String,
+    budgetCents: Long,
+    targetSubmissions: Long,
+    category: String,
+    rewardPerTaskCents: Long,
+    startDate: String = "",
+    endDate: String = "",
+    eligibilityRules: String = "All Approved Users",
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value) return
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository.updateCampaignDetails(
+        campaignId = campaignId,
+        title = title,
+        clientName = clientName,
+        description = description,
+        budgetCents = budgetCents,
+        targetSubmissions = targetSubmissions,
+        category = category,
+        rewardPerTaskCents = rewardPerTaskCents,
+        startDate = startDate,
+        endDate = endDate,
+        eligibilityRules = eligibilityRules
+      ).onSuccess {
+        _bannerMessage.value = "Campaign '$title' updated!"
+        onSuccess()
+      }.onFailure { err ->
+        _bannerMessage.value = err.localizedMessage ?: "Failed to update campaign."
       }
       _isBusy.value = false
     }

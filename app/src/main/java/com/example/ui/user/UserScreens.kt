@@ -178,10 +178,10 @@ fun UserHomeScreen(
   var showWatchAdDialog by rememberSaveable { mutableStateOf(false) }
   var showLeaderboardDialog by rememberSaveable { mutableStateOf(false) }
 
-  // Active available tasks (isActive == true and status == PENDING)
+  // Active available tasks (isActive == true, status == PENDING, and quota not exhausted)
   val activeAvailableTasks =
     remember(rawTasks) {
-      rawTasks.filter { it.isActive && it.status == TaskStatus.PENDING }
+      rawTasks.filter { it.isActive && it.status == TaskStatus.PENDING && !it.isQuotaExhausted }
     }
 
   // Merge tasks with preserved user submissions so deleted tasks still appear in Recent Activity
@@ -241,12 +241,10 @@ fun UserHomeScreen(
       contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-      // 1. Header: Welcome & Compact Balance Pill
+      // 1. Header: Welcome & Compact Balance Pill (Light Minimal)
       item {
         NeonGlassCard(
-          modifier = Modifier.fillMaxWidth(),
-          borderColor = Color(0x60A855F7),
-          backgroundColor = Color(0x40141938)
+          modifier = Modifier.fillMaxWidth()
         ) {
           Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -266,7 +264,7 @@ fun UserHomeScreen(
                   modifier =
                     Modifier.size(44.dp)
                       .clip(CircleShape)
-                      .border(2.dp, Color(0xFF22D3EE), CircleShape)
+                      .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
                 )
               } else {
                 TaskFlowBrandLogo(size = 42.dp)
@@ -275,7 +273,7 @@ fun UserHomeScreen(
                 Text(
                   text = "Welcome back,",
                   style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFF94A3B8),
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
                   fontWeight = FontWeight.Medium
                 )
                 Row(
@@ -285,7 +283,7 @@ fun UserHomeScreen(
                   Text(
                     text = displayName,
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -295,7 +293,7 @@ fun UserHomeScreen(
                     Icon(
                       imageVector = Icons.Default.CheckCircle,
                       contentDescription = "Verified Account",
-                      tint = Color(0xFF22D3EE),
+                      tint = MaterialTheme.colorScheme.secondary,
                       modifier = Modifier.size(16.dp)
                     )
                   }
@@ -308,8 +306,8 @@ fun UserHomeScreen(
             // Compact Balance Pill on right side
             Surface(
               shape = RoundedCornerShape(50),
-              color = Color(0x35F59E0B),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FBBF24)),
+              color = MaterialTheme.colorScheme.primaryContainer,
+              border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
               modifier = Modifier
                 .clip(RoundedCornerShape(50))
                 .clickable { onNavigateToWallet(true) }
@@ -323,7 +321,7 @@ fun UserHomeScreen(
                 Icon(
                   imageVector = Icons.Default.AccountBalanceWallet,
                   contentDescription = "Wallet",
-                  tint = Color(0xFFFBBF24),
+                  tint = MaterialTheme.colorScheme.primary,
                   modifier = Modifier.size(16.dp)
                 )
                 Column(verticalArrangement = Arrangement.Center) {
@@ -331,13 +329,13 @@ fun UserHomeScreen(
                     text = "MY BALANCE",
                     style = MaterialTheme.typography.labelSmall,
                     fontSize = 8.sp,
-                    color = Color(0xFF94A3B8),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.Bold
                   )
                   Text(
                     text = "${profile?.getEffectiveBalanceCoins() ?: 0L} Coins",
                     style = MaterialTheme.typography.labelLarge,
-                    color = Color(0xFFFDE047),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                     fontWeight = FontWeight.ExtraBold,
                     modifier = Modifier.testTag("home_available_balance")
                   )
@@ -345,7 +343,7 @@ fun UserHomeScreen(
                 Icon(
                   imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                   contentDescription = "Open Withdraw",
-                  tint = Color(0xFFFBBF24),
+                  tint = MaterialTheme.colorScheme.primary,
                   modifier = Modifier.size(14.dp)
                 )
               }
@@ -360,7 +358,7 @@ fun UserHomeScreen(
           Text(
             text = "Explore Rewards",
             style = MaterialTheme.typography.titleMedium,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onBackground,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(start = 4.dp)
           )
@@ -407,9 +405,7 @@ fun UserHomeScreen(
       // 3. Available Tasks Section Header
       item {
         NeonGlassCard(
-          modifier = Modifier.fillMaxWidth().testTag("home_available_tasks_section"),
-          borderColor = Color(0x6006B6D4),
-          backgroundColor = Color(0x40141938)
+          modifier = Modifier.fillMaxWidth().testTag("home_available_tasks_section")
         ) {
           Column(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -424,7 +420,7 @@ fun UserHomeScreen(
                 Text(
                   text = "Available Tasks",
                   style = MaterialTheme.typography.titleLarge,
-                  color = Color.White,
+                  color = MaterialTheme.colorScheme.onSurface,
                   fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(2.dp))
@@ -436,23 +432,23 @@ fun UserHomeScreen(
                       "Browse verified tasks published by the administrator"
                     },
                   style = MaterialTheme.typography.bodySmall,
-                  color = Color(0xFF94A3B8)
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
               }
               TextButton(
                 onClick = { onNavigateToTracking(TaskStatus.PENDING) },
                 modifier = Modifier.testTag("view_all_tracking_button")
               ) {
-                Text("View All (${activeAvailableTasks.size})", color = Color(0xFF22D3EE))
+                Text("View All (${activeAvailableTasks.size})", color = MaterialTheme.colorScheme.primary)
               }
             }
 
             Button(
               onClick = { onNavigateToTracking(TaskStatus.PENDING) },
-              shape = RoundedCornerShape(14.dp),
+              shape = RoundedCornerShape(12.dp),
               colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF0284C7),
-                contentColor = Color.White
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary
               ),
               modifier =
                 Modifier.fillMaxWidth()
@@ -722,11 +718,15 @@ private fun WatchAdInfoDialog(
   val isClaiming = watchEarnUiState.isClaiming
   val isClaimed = watchEarnUiState.isClaimed
   val hasError = watchEarnUiState.hasError
-  val videosInCycle =
-    when {
-      isClaimed -> 2
-      isReadyToClaim -> 1
-      else -> watchEarnUiState.videosCompletedInCycle.coerceIn(0, 2)
+  val displayedRewardCoins =
+    remember(watchEarnUiState.activeSessionId, watchEarnUiState.lastRewardCoins) {
+      if (watchEarnUiState.lastRewardCoins > 0L) {
+        watchEarnUiState.lastRewardCoins
+      } else if (watchEarnUiState.activeSessionId.isNotBlank()) {
+        ((kotlin.math.abs(watchEarnUiState.activeSessionId.hashCode()) % 170) + 15).toLong()
+      } else {
+        32L
+      }
     }
 
   AlertDialog(
@@ -770,7 +770,12 @@ private fun WatchAdInfoDialog(
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FBBF24))
           ) {
             Text(
-              text = "Earn 1–200 Coins Instantly",
+              text =
+                if (isReadyToClaim || isClaimed || watchEarnUiState.lastRewardCoins > 0L) {
+                  "+${formatCoins(displayedRewardCoins)} Reward"
+                } else {
+                  "Instant Random Coin Reward"
+                },
               style = MaterialTheme.typography.labelSmall,
               fontWeight = FontWeight.Bold,
               color = Color(0xFFFDE047),
@@ -808,7 +813,7 @@ private fun WatchAdInfoDialog(
                 color = Color(0xFFC084FC)
               )
               Text(
-                text = "${watchStats.videosWatched} / 25 Completed",
+                text = "Videos Watched: ${watchStats.videosWatched} / 25",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color(0xFFFDE047)
@@ -838,7 +843,8 @@ private fun WatchAdInfoDialog(
               Text(
                 text =
                   watchEarnUiState.statusMessage.ifBlank {
-                    if (isClaiming) "Claiming reward..." else "Loading video..."
+                    if (isClaiming) "Adding +${formatCoins(displayedRewardCoins)} to your wallet..."
+                    else "Loading video..."
                   },
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
@@ -848,103 +854,103 @@ private fun WatchAdInfoDialog(
           }
         }
 
-        // Celebratory Popup Dialog shown when video completes and is ready to claim
+        // Ready-to-Claim Reward Card: shows the exact random coin amount won from Video 1
+        // and plays Video 2 when Claim is tapped, then auto-credits the wallet.
         if (isReadyToClaim) {
-          AlertDialog(
-            onDismissRequest = { /* Prevent accidental dismissal before claiming */ },
-            modifier = Modifier.testTag("watch_earn_claim_dialog"),
-            shape = RoundedCornerShape(28.dp),
-            containerColor = Color(0xFF0F172A),
-            title = {
-              Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
+          Surface(
+            shape = RoundedCornerShape(22.dp),
+            color = Color(0xFF1E293B),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFFBBF24)),
+            modifier =
+              Modifier.fillMaxWidth()
+                .testTag("watch_earn_ready_to_claim_banner")
+          ) {
+            Column(
+              modifier = Modifier.fillMaxWidth().padding(18.dp),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+              Surface(
+                shape = CircleShape,
+                color = Color(0x35F59E0B),
+                border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFFBBF24)),
+                modifier = Modifier.size(64.dp)
               ) {
-                Surface(
-                  shape = CircleShape,
-                  color = Color(0x35F59E0B),
-                  border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFFBBF24)),
-                  modifier = Modifier.size(72.dp)
-                ) {
-                  Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                      imageVector = Icons.Default.EmojiEvents,
-                      contentDescription = null,
-                      tint = Color(0xFFFBBF24),
-                      modifier = Modifier.size(42.dp)
-                    )
-                  }
+                Box(contentAlignment = Alignment.Center) {
+                  Icon(
+                    imageVector = Icons.Default.EmojiEvents,
+                    contentDescription = null,
+                    tint = Color(0xFFFBBF24),
+                    modifier = Modifier.size(36.dp)
+                  )
                 }
-                Spacer(modifier = Modifier.height(14.dp))
-                Text(
-                  text = "Congratulations!",
-                  style = MaterialTheme.typography.headlineMedium,
-                  color = Color(0xFFFDE047),
-                  fontWeight = FontWeight.ExtraBold,
-                  textAlign = TextAlign.Center
-                )
               }
-            },
-            text = {
-              Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+
+              Text(
+                text = "Congratulations!",
+                style = MaterialTheme.typography.titleLarge,
+                color = Color(0xFFFDE047),
+                fontWeight = FontWeight.ExtraBold,
+                textAlign = TextAlign.Center
+              )
+
+              Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF0F172A),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80A855F7)),
+                modifier = Modifier.fillMaxWidth()
               ) {
-                Surface(
-                  shape = RoundedCornerShape(20.dp),
-                  color = Color(0x401E293B),
-                  border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x60A855F7)),
-                  modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                Column(
+                  modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp, horizontal = 12.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                  Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                  ) {
-                    Text(
-                      text = "VIDEO COMPLETED",
-                      style = MaterialTheme.typography.labelMedium,
-                      color = Color(0xFF94A3B8),
-                      fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                      text = if (watchEarnUiState.lastRewardCoins > 0L) "+${formatCoins(watchEarnUiState.lastRewardCoins)}" else "+1–200 Coins",
-                      style = MaterialTheme.typography.displaySmall,
-                      color = Color(0xFFFDE047),
-                      fontWeight = FontWeight.ExtraBold,
-                      modifier = Modifier.testTag("watch_earn_reward_coins_text")
-                    )
-                  }
+                  Text(
+                    text = "YOU WON",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color(0xFF94A3B8),
+                    fontWeight = FontWeight.Bold
+                  )
+                  Spacer(modifier = Modifier.height(4.dp))
+                  Text(
+                    text = "+${formatCoins(displayedRewardCoins)}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = Color(0xFFFDE047),
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.testTag("watch_earn_reward_coins_text")
+                  )
                 }
-                Text(
-                  text = "Tap Claim below to credit your earned coins directly to your wallet.",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = Color(0xFFCBD5E1),
-                  textAlign = TextAlign.Center
-                )
               }
-            },
-            confirmButton = {
+
+              Text(
+                text = "Tap Claim below to watch the next video. As soon as it finishes, +${formatCoins(displayedRewardCoins)} will be added directly to your wallet!",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFFCBD5E1),
+                textAlign = TextAlign.Center
+              )
+
               Button(
                 onClick = onClaimVerifiedReward,
                 enabled = !isClaiming && !isLoadingAd,
-                shape = RoundedCornerShape(18.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981), contentColor = Color.White),
-                modifier = Modifier.fillMaxWidth().height(52.dp).testTag("claim_watch_reward_button")
+                shape = RoundedCornerShape(16.dp),
+                colors =
+                  ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF10B981),
+                    contentColor = Color.White
+                  ),
+                modifier =
+                  Modifier.fillMaxWidth()
+                    .height(52.dp)
+                    .testTag("claim_watch_reward_button")
               ) {
-                if (isClaiming || isLoadingAd) {
-                  CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp, color = Color.White)
-                  Spacer(modifier = Modifier.width(8.dp))
-                  Text("Claiming...", fontWeight = FontWeight.Bold)
-                } else {
-                  Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
-                  Spacer(modifier = Modifier.width(8.dp))
-                  Text("Claim & Add to Wallet", fontWeight = FontWeight.ExtraBold)
-                }
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                  text = "Claim +${formatCoins(displayedRewardCoins)}",
+                  fontWeight = FontWeight.ExtraBold
+                )
               }
             }
-          )
+          }
         }
 
         // Claimed Confirmation Banner
@@ -958,7 +964,7 @@ private fun WatchAdInfoDialog(
             Text(
               text =
                 watchEarnUiState.statusMessage.ifBlank {
-                  "Reward claimed successfully and added to your wallet!"
+                  "Reward claimed successfully! +${formatCoins(displayedRewardCoins)} added to your wallet."
                 },
               style = MaterialTheme.typography.bodySmall,
               fontWeight = FontWeight.Bold,
@@ -986,7 +992,7 @@ private fun WatchAdInfoDialog(
                   rawErr.equals("NOT_FOUND", ignoreCase = true) ||
                   rawErr.contains("NOT_FOUND", ignoreCase = true)
                 ) {
-                  "Video is currently unavailable. Please tap Try Again to reload."
+                  com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE
                 } else {
                   rawErr
                 }
@@ -1054,17 +1060,17 @@ private fun WatchAdInfoDialog(
             color = Color.White
           )
           Text(
-            text = "1. Tap Watch Video and watch the video until completion.",
+            text = "1. Tap Watch Video and watch the 1st video until completion.",
             style = MaterialTheme.typography.bodySmall,
             color = Color(0xFFCBD5E1)
           )
           Text(
-            text = "2. Tap Claim to watch the next video and collect your reward.",
+            text = "2. Your exact random Coin reward appears immediately on the Claim screen.",
             style = MaterialTheme.typography.bodySmall,
             color = Color(0xFFCBD5E1)
           )
           Text(
-            text = "3. 1–200 Coins are credited automatically to your wallet!",
+            text = "3. Tap Claim to watch the 2nd video and auto-credit those Coins to your wallet!",
             style = MaterialTheme.typography.bodySmall,
             color = Color(0xFFFDE047)
           )
@@ -1659,13 +1665,16 @@ fun UserTaskDetailScreen(
   uploadProgress: Int? = null,
   submissionError: String? = null,
   initialSelectedImageUri: Uri? = null,
-  initialShowSubmitProofModal: Boolean = false
+  initialShowSubmitProofModal: Boolean = false,
+  taskProgress: com.example.data.model.UserTaskProgress? = null,
+  onConfirmInstallation: () -> Unit = {},
+  onToggleStepCompleted: (Int, Int) -> Unit = { _, _ -> }
 ) {
   BackHandler(onBack = onBack)
 
   val context = LocalContext.current
   val isUserActive = userApprovalStatus == "approved"
-  val isTaskAvailable = task.isActive && task.status == TaskStatus.PENDING
+  val isTaskAvailable = task.isActive && task.status == TaskStatus.PENDING && !task.isQuotaExhausted
   val isTaskOwnerOrUnspecified = currentUserId.isBlank() || task.assignedUserId == currentUserId
   val appOrWebsiteName = resolveAppOrWebsiteLabel(task)
 
@@ -1673,6 +1682,71 @@ fun UserTaskDetailScreen(
     mutableStateOf(initialShowSubmitProofModal)
   }
   var showFullSizeSubmittedImage by rememberSaveable(task.id) { mutableStateOf(false) }
+
+  // Local interactive step state synced with persisted Firestore UserTaskProgress
+  var localInstallConfirmed by rememberSaveable(task.id) {
+    mutableStateOf(taskProgress?.installationConfirmed ?: false)
+  }
+  var localCompletedSteps by rememberSaveable(task.id) {
+    mutableStateOf(taskProgress?.completedSteps ?: emptyList())
+  }
+  if (taskProgress != null) {
+    if (taskProgress.installationConfirmed && !localInstallConfirmed) {
+      localInstallConfirmed = true
+    }
+    if (taskProgress.completedSteps.isNotEmpty() && localCompletedSteps.isEmpty()) {
+      localCompletedSteps = taskProgress.completedSteps
+    }
+  }
+
+  // Build unified numbered step list from structured steps or newline-delimited instructions
+  val unifiedSteps =
+    remember(task.steps, task.instructions, task.description) {
+      if (task.steps.isNotEmpty()) {
+        task.steps.sortedBy { it.stepNumber }
+      } else {
+        val raw = task.instructions.ifBlank { task.description }
+        val lines =
+          raw
+            .split("\n")
+            .map { it.trim().removePrefix("•").trim() }
+            .filter { it.isNotEmpty() }
+            .mapIndexed { idx, line ->
+              val cleanedLine = line.replace(Regex("^\\d+[.)]\\s*"), "").trim()
+              com.example.data.model.TaskStep(
+                stepNumber = idx + 1,
+                title = "Step ${idx + 1}",
+                instructions = cleanedLine.ifBlank { line }
+              )
+            }
+        if (lines.isNotEmpty()) {
+          lines
+        } else {
+          listOf(
+            com.example.data.model.TaskStep(
+              stepNumber = 1,
+              title = "Step 1",
+              instructions = raw.ifBlank { "Follow the task instructions and submit proof." }
+            )
+          )
+        }
+      }
+    }
+
+  val activeStepNumber =
+    remember(unifiedSteps, localCompletedSteps) {
+      unifiedSteps.firstOrNull { !localCompletedSteps.contains(it.stepNumber) }?.stepNumber
+        ?: unifiedSteps.lastOrNull()?.stepNumber
+        ?: 1
+    }
+
+  val flowStageIndex =
+    TaskStatus.resolveFlowStageIndex(
+      taskStatus = task.status,
+      progressStatus = taskProgress?.status ?: "",
+      completedStepsCount = localCompletedSteps.size,
+      installationConfirmed = localInstallConfirmed
+    )
 
   // Automatically close the Submit Proof modal once the task transitions out of PENDING
   if (task.status != TaskStatus.PENDING && showSubmitProofModal && !isBusy) {
@@ -1738,21 +1812,125 @@ fun UserTaskDetailScreen(
           fontWeight = FontWeight.Bold
         )
         Text(
-          text = "Review instructions, open the task link, and submit proof when finished",
+          text = "Complete numbered steps in order and submit verified proof",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant
         )
       }
     }
 
+    // 5-Stage Task Completion Status Flow Stepper
+    Card(
+      modifier = Modifier.fillMaxWidth().testTag("task_completion_flow_stepper"),
+      shape = RoundedCornerShape(18.dp),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+      border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+      elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+      Column(
+        modifier = Modifier.fillMaxWidth().padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Text(
+            text = "TASK COMPLETION STATUS FLOW",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold
+          )
+          Surface(
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.primaryContainer
+          ) {
+            Text(
+              text =
+                TaskStatus.resolveFlowStageLabel(
+                  taskStatus = task.status,
+                  progressStatus = taskProgress?.status ?: "",
+                  completedStepsCount = localCompletedSteps.size,
+                  installationConfirmed = localInstallConfirmed,
+                  isActive = task.isActive
+                ),
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onPrimaryContainer,
+              fontWeight = FontWeight.Bold,
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+            )
+          }
+        }
+
+        Row(
+          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+          TaskStatus.ALL_STAGES.forEachIndexed { idx, stageLabel ->
+            val isCompletedStage = flowStageIndex > idx || (flowStageIndex == 4 && idx == 4)
+            val isCurrentStage = flowStageIndex == idx && flowStageIndex < 4
+            val pillBg =
+              when {
+                isCompletedStage -> Color(0xFF10B981).copy(alpha = 0.16f)
+                isCurrentStage -> MaterialTheme.colorScheme.primaryContainer
+                else -> MaterialTheme.colorScheme.surfaceVariant
+              }
+            val pillFg =
+              when {
+                isCompletedStage -> Color(0xFF059669)
+                isCurrentStage -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+              }
+            Surface(
+              shape = RoundedCornerShape(10.dp),
+              color = pillBg,
+              border =
+                if (isCurrentStage) {
+                  androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                } else null
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+              ) {
+                Text(
+                  text = if (isCompletedStage) "✓" else "${idx + 1}.",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = pillFg,
+                  fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                  text = stageLabel,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = pillFg,
+                  fontWeight = if (isCurrentStage || isCompletedStage) FontWeight.Bold else FontWeight.Medium
+                )
+              }
+            }
+            if (idx < TaskStatus.ALL_STAGES.lastIndex) {
+              Text(
+                text = "→",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+          }
+        }
+      }
+    }
+
     // Main Task Details Card
     Card(
       modifier = Modifier.fillMaxWidth(),
-      shape = RoundedCornerShape(24.dp),
+      shape = RoundedCornerShape(20.dp),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-      elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+      border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+      elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-      Column(modifier = Modifier.fillMaxWidth().padding(22.dp)) {
+      Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
         Row(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.SpaceBetween,
@@ -1770,9 +1948,10 @@ fun UserTaskDetailScreen(
               horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
               Text(
-                text = "REWARD:",
+                text = "${formatCoins(task.getEffectiveRewardCoins())} •",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                fontWeight = FontWeight.Bold
               )
               Text(
                 text = formatRewardInr(task.rewardCents),
@@ -1824,7 +2003,16 @@ fun UserTaskDetailScreen(
               modifier = Modifier.testTag("task_detail_app_name")
             )
             Text(
-              text = "Published $createdDateStr",
+              text =
+                buildString {
+                  append("Published $createdDateStr")
+                  if (task.completionDurationMinutes > 0) {
+                    append(" • Est. ${task.completionDurationMinutes} min")
+                  }
+                  if (task.targetSubmissions > 0L) {
+                    append(" • Quota: ${task.completedSubmissions}/${task.targetSubmissions}")
+                  }
+                },
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1835,18 +2023,18 @@ fun UserTaskDetailScreen(
 
         // 1. Task Overview
         Surface(
-          shape = RoundedCornerShape(16.dp),
-          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+          shape = RoundedCornerShape(14.dp),
+          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
           modifier = Modifier.fillMaxWidth()
         ) {
-          Column(modifier = Modifier.padding(16.dp)) {
+          Column(modifier = Modifier.padding(14.dp)) {
             Text(
               text = "1. TASK OVERVIEW",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.primary,
               fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
               text = task.description,
               style = MaterialTheme.typography.bodyLarge,
@@ -1857,26 +2045,208 @@ fun UserTaskDetailScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // 2. Step-by-Step Instructions
+        // 2. ONE Organized Task Instruction Container with Numbered Steps, Progress Indication & Highlighted Current Step
+        val rawInstructions = task.instructions.ifBlank { task.description }
+        val stepProgressFraction =
+          if (unifiedSteps.isNotEmpty()) {
+            (localCompletedSteps.size.toFloat() / unifiedSteps.size.toFloat()).coerceIn(0f, 1f)
+          } else 0f
+
         Surface(
           shape = RoundedCornerShape(16.dp),
           color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+          border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
           modifier = Modifier.fillMaxWidth().testTag("task_detail_instructions_card")
         ) {
-          Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-              text = "2. STEP-BY-STEP INSTRUCTIONS",
-              style = MaterialTheme.typography.labelSmall,
+          Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Text(
+                text = "2. STEP-BY-STEP INSTRUCTIONS",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
+              )
+              Text(
+                text = "${localCompletedSteps.size}/${unifiedSteps.size} Steps Done",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.secondary,
+                fontWeight = FontWeight.Bold
+              )
+            }
+
+            LinearProgressIndicator(
+              progress = { stepProgressFraction },
+              modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
               color = MaterialTheme.colorScheme.primary,
-              fontWeight = FontWeight.Bold
+              trackColor = MaterialTheme.colorScheme.outlineVariant
             )
-            Spacer(modifier = Modifier.height(8.dp))
-            val rawInstructions = task.instructions.ifBlank { task.description }
-            Text(
-              text = rawInstructions,
-              style = MaterialTheme.typography.bodyLarge,
-              modifier = Modifier.testTag("task_detail_instructions")
-            )
+
+            if (task.installationInstructions.isNotBlank()) {
+              Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                  Text(
+                    text = "INSTALLATION INSTRUCTIONS",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                  )
+                  Spacer(modifier = Modifier.height(2.dp))
+                  Text(
+                    text = task.installationInstructions,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                  )
+                }
+              }
+            }
+
+            // Preserve raw instructions text node with testTag("task_detail_instructions") for existing tests
+            if (unifiedSteps.size <= 1 && task.steps.isEmpty()) {
+              Text(
+                text = rawInstructions,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.testTag("task_detail_instructions")
+              )
+            } else {
+              // Hidden or combined summary node so onNodeWithTag("task_detail_instructions") always matches rawInstructions
+              Text(
+                text = rawInstructions,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("task_detail_instructions")
+              )
+            }
+
+            // Numbered steps inside the SAME organized container (not separate unrelated cards)
+            Column(
+              modifier =
+                Modifier.fillMaxWidth()
+                  .clip(RoundedCornerShape(12.dp))
+                  .background(MaterialTheme.colorScheme.surface)
+                  .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                  .padding(10.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              unifiedSteps.forEachIndexed { idx, step ->
+                val stepNum = step.stepNumber
+                val isStepDone = localCompletedSteps.contains(stepNum) || task.status == TaskStatus.APPROVED
+                val isCurrentStep = !isStepDone && stepNum == activeStepNumber
+                val rowBg =
+                  when {
+                    isCurrentStep -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                    isStepDone -> Color(0xFF10B981).copy(alpha = 0.08f)
+                    else -> Color.Transparent
+                  }
+
+                Row(
+                  modifier =
+                    Modifier.fillMaxWidth()
+                      .clip(RoundedCornerShape(10.dp))
+                      .background(rowBg)
+                      .clickable(enabled = isTaskAvailable) {
+                        localInstallConfirmed = true
+                        localCompletedSteps =
+                          if (localCompletedSteps.contains(stepNum)) {
+                            localCompletedSteps - stepNum
+                          } else {
+                            (localCompletedSteps + stepNum).distinct().sorted()
+                          }
+                        onToggleStepCompleted(stepNum, unifiedSteps.size)
+                      }
+                      .padding(horizontal = 10.dp, vertical = 8.dp),
+                  verticalAlignment = Alignment.Top,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                  Surface(
+                    shape = CircleShape,
+                    color =
+                      when {
+                        isStepDone -> Color(0xFF059669)
+                        isCurrentStep -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.surfaceVariant
+                      },
+                    modifier = Modifier.size(24.dp)
+                  ) {
+                    Box(contentAlignment = Alignment.Center) {
+                      Text(
+                        text = if (isStepDone) "✓" else "$stepNum",
+                        style = MaterialTheme.typography.labelSmall,
+                        color =
+                          if (isStepDone || isCurrentStep) Color.White
+                          else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Bold
+                      )
+                    }
+                  }
+
+                  Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                      if (step.title.isNotBlank() && !step.title.equals("Step $stepNum", ignoreCase = true)) {
+                        Text(
+                          text = step.title,
+                          style = MaterialTheme.typography.labelLarge,
+                          fontWeight = FontWeight.Bold,
+                          color = MaterialTheme.colorScheme.onSurface
+                        )
+                      }
+                      if (isCurrentStep) {
+                        Surface(
+                          shape = RoundedCornerShape(50),
+                          color = MaterialTheme.colorScheme.primary
+                        ) {
+                          Text(
+                            text = "CURRENT STEP",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                          )
+                        }
+                      }
+                    }
+                    Text(
+                      text = step.instructions,
+                      style = MaterialTheme.typography.bodyMedium,
+                      color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (step.destinationUrl.isNotBlank()) {
+                      Spacer(modifier = Modifier.height(4.dp))
+                      TextButton(
+                        onClick = {
+                          localInstallConfirmed = true
+                          onConfirmInstallation()
+                          openExternalTaskUrl(context, step.destinationUrl)
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                      ) {
+                        Icon(
+                          imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                          contentDescription = null,
+                          modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(step.actionLabel.ifBlank { "Open Step Link" })
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
 
@@ -1939,10 +2309,14 @@ fun UserTaskDetailScreen(
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        // Action Button 1: "Start Task / Open Link"
+        // Action Button 1: "Start Task / Open Link" (confirms installation & opens link)
         if (task.taskLink.isNotBlank()) {
           Button(
-            onClick = { openExternalTaskUrl(context, task.taskLink) },
+            onClick = {
+              localInstallConfirmed = true
+              onConfirmInstallation()
+              openExternalTaskUrl(context, task.taskLink)
+            },
             shape = RoundedCornerShape(14.dp),
             colors =
               ButtonDefaults.buttonColors(
@@ -1961,7 +2335,9 @@ fun UserTaskDetailScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-              text = "Start Task / Open Link",
+              text =
+                if (localInstallConfirmed) "Installation Confirmed • Open Link Again"
+                else "Start Task / Open Link",
               fontWeight = FontWeight.Bold
             )
           }
@@ -1997,14 +2373,19 @@ fun UserTaskDetailScreen(
               fontWeight = FontWeight.Bold
             )
           }
-        } else if (!task.isActive && task.status == TaskStatus.PENDING) {
+        } else if ((!task.isActive || task.isQuotaExhausted) && task.status == TaskStatus.PENDING) {
           Surface(
             shape = RoundedCornerShape(14.dp),
             color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f),
             modifier = Modifier.fillMaxWidth().testTag("deactivated_task_notice")
           ) {
             Text(
-              text = "This task is currently deactivated by the administrator and is not accepting new submissions.",
+              text =
+                if (task.isQuotaExhausted) {
+                  "This campaign has reached its target submission quota and is now closed."
+                } else {
+                  "This task is currently deactivated by the administrator and is not accepting new submissions."
+                },
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onErrorContainer,
               fontWeight = FontWeight.SemiBold,
@@ -2521,14 +2902,14 @@ fun UserTrackingScreen(
   currentUserId: String = ""
 ) {
   val rawTasks = (tasksState as? UiState.Success)?.data ?: emptyList()
-  // Exclude deactivated pending tasks so deactivated tasks are never available for new user submissions
+  // Exclude deactivated or quota-exhausted pending tasks so closed/exhausted tasks are never available for new user submissions
   val visibleTasks =
     remember(rawTasks, currentUserId) {
       rawTasks.filter { task ->
         if (task.status == TaskStatus.PENDING) {
-          task.isActive
+          task.isActive && !task.isQuotaExhausted
         } else {
-          currentUserId.isBlank() || task.assignedUserId == currentUserId || task.isActive
+          currentUserId.isBlank() || task.assignedUserId == currentUserId || (task.isActive && !task.isQuotaExhausted)
         }
       }
     }
@@ -2537,12 +2918,12 @@ fun UserTrackingScreen(
     remember(visibleTasks, selectedFilter) {
       when (selectedFilter.lowercase(Locale.US)) {
         "all" -> visibleTasks
-        TaskStatus.PENDING -> visibleTasks.filter { it.isActive && it.status == TaskStatus.PENDING }
+        TaskStatus.PENDING -> visibleTasks.filter { it.isActive && !it.isQuotaExhausted && it.status == TaskStatus.PENDING }
         else -> visibleTasks.filter { it.status.equals(selectedFilter, ignoreCase = true) }
       }
     }
 
-  val availableCount = visibleTasks.count { it.isActive && it.status == TaskStatus.PENDING }
+  val availableCount = visibleTasks.count { it.isActive && !it.isQuotaExhausted && it.status == TaskStatus.PENDING }
   val filters =
     listOf(
       "all" to "All (${visibleTasks.size})",

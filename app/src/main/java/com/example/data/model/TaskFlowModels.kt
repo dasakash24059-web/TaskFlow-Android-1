@@ -94,14 +94,34 @@ object TaskStatus {
   const val APPROVED = "approved"
   const val REJECTED = "rejected"
 
+  // 5-Stage User Task Completion Flow constants
+  const val STAGE_INSTALLATION_CONFIRMED = "installation_confirmed"
+  const val STAGE_IN_PROGRESS = "in_progress"
+  const val STAGE_SUBMITTED = "submitted"
+  const val STAGE_PENDING_APPROVAL = "pending_approval"
+  const val STAGE_DONE = "done"
+
+  val ALL_STAGES =
+    listOf(
+      "Installation Confirmed",
+      "In Progress",
+      "Submitted",
+      "Pending Approval",
+      "Done"
+    )
+
   fun label(status: String, isActive: Boolean = true): String {
     if (!isActive && status.lowercase(Locale.US) == PENDING) {
       return "Deactivated"
     }
     return when (status.lowercase(Locale.US)) {
       PENDING -> "Available"
+      STAGE_INSTALLATION_CONFIRMED -> "Installation Confirmed"
+      STAGE_IN_PROGRESS -> "In Progress"
       SUBMITTED -> "Pending Review"
+      STAGE_PENDING_APPROVAL -> "Pending Approval"
       APPROVED -> "Approved"
+      STAGE_DONE -> "Done"
       REJECTED -> "Rejected"
       else -> status.replaceFirstChar { it.uppercase() }
     }
@@ -109,11 +129,74 @@ object TaskStatus {
 
   fun historyLabel(status: String): String =
     when (status.lowercase(Locale.US)) {
-      APPROVED -> "Approved"
+      APPROVED, STAGE_DONE -> "Approved"
       REJECTED -> "Rejected"
       SUBMITTED, PENDING -> "Pending"
       else -> "Pending"
     }
+
+  /**
+   * Computes the current 0-based stage index (0..4) in the 5-stage user task completion flow:
+   * 0: Installation Confirmed
+   * 1: In Progress
+   * 2: Submitted
+   * 3: Pending Approval
+   * 4: Done
+   * Returns -1 if not yet started.
+   */
+  fun resolveFlowStageIndex(
+    taskStatus: String,
+    progressStatus: String = "",
+    completedStepsCount: Int = 0,
+    installationConfirmed: Boolean = false
+  ): Int {
+    return when (taskStatus.lowercase(Locale.US)) {
+      APPROVED, STAGE_DONE -> 4
+      SUBMITTED, STAGE_PENDING_APPROVAL -> 3
+      REJECTED -> 1
+      else -> {
+        when (progressStatus.lowercase(Locale.US)) {
+          STAGE_DONE -> 4
+          STAGE_PENDING_APPROVAL -> 3
+          STAGE_SUBMITTED -> 2
+          STAGE_IN_PROGRESS -> 1
+          STAGE_INSTALLATION_CONFIRMED -> if (completedStepsCount > 0) 1 else 0
+          else -> {
+            when {
+              completedStepsCount > 0 -> 1
+              installationConfirmed -> 0
+              else -> -1
+            }
+          }
+        }
+      }
+    }
+  }
+
+  fun resolveFlowStageLabel(
+    taskStatus: String,
+    progressStatus: String = "",
+    completedStepsCount: Int = 0,
+    installationConfirmed: Boolean = false,
+    isActive: Boolean = true
+  ): String {
+    if (!isActive && taskStatus.lowercase(Locale.US) == PENDING) {
+      return "Closed"
+    }
+    if (taskStatus.lowercase(Locale.US) == REJECTED) {
+      return "Needs Revision"
+    }
+    return when (
+      resolveFlowStageIndex(taskStatus, progressStatus, completedStepsCount, installationConfirmed)
+    ) {
+      4 -> "Done"
+      3 -> "Pending Approval"
+      2 -> "Submitted"
+      1 -> "In Progress"
+      0 -> "Installation Confirmed"
+      else -> "Available"
+    }
+  }
 }
 
 object WithdrawalMethod {
@@ -391,16 +474,24 @@ data class TaskStep(
 data class TaskItem(
   @DocumentId val id: String = "",
   val appId: String = "",
+  val campaignId: String = "",
   val title: String = "",
   val appName: String = "",
   val appIconUrl: String = "",
   val description: String = "",
+  val installationInstructions: String = "",
   val instructions: String = "",
   val requiredProof: String = "",
   val taskLink: String = "",
   val category: String = "App Install",
   val rewardCents: Long = 0L, // Legacy
   val rewardCoins: Long = 0L, // New
+  val completionDurationMinutes: Int = 5,
+  val targetSubmissions: Long = 0L, // 0 = unlimited, >0 = quota
+  val completedSubmissions: Long = 0L,
+  val startDate: String = "",
+  val endDate: String = "",
+  val eligibilityRules: String = "All Approved Users",
   val assignedUserId: String = "",
   val assignedUserName: String = "",
   val assignedUserEmail: String = "",
@@ -416,7 +507,17 @@ data class TaskItem(
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
-  fun isAvailableForNewSubmission(): Boolean = status == TaskStatus.PENDING && isActive
+  val isQuotaExhausted: Boolean
+    get() = targetSubmissions > 0L && completedSubmissions >= targetSubmissions
+
+  val remainingQuota: Long
+    get() =
+      if (targetSubmissions > 0L) (targetSubmissions - completedSubmissions).coerceAtLeast(0L)
+      else -1L
+
+  fun isAvailableForNewSubmission(): Boolean =
+    status == TaskStatus.PENDING && isActive && !isQuotaExhausted
+
   fun getEffectiveRewardCoins(): Long =
     if (rewardCoins > 0L) rewardCoins else centsToCoins(rewardCents)
 }
@@ -614,16 +715,28 @@ data class CampaignItem(
   val title: String = "",
   val clientName: String = "",
   val description: String = "",
+  val appIconUrl: String = "",
+  val taskLink: String = "",
   val budgetCents: Long = 0L,
   val spentCents: Long = 0L,
   val targetSubmissions: Long = 0L,
   val completedSubmissions: Long = 0L,
-  val status: String = "ACTIVE", // ACTIVE, PAUSED, COMPLETED
+  val status: String = "ACTIVE", // ACTIVE, PAUSED, COMPLETED, CLOSED
   val category: String = "App Install",
   val rewardPerTaskCents: Long = 0L,
+  val startDate: String = "",
+  val endDate: String = "",
+  val eligibilityRules: String = "All Approved Users",
+  val linkedTaskId: String = "",
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
-)
+) {
+  val isQuotaExhausted: Boolean
+    get() = targetSubmissions > 0L && completedSubmissions >= targetSubmissions
+
+  val remainingQuota: Long
+    get() = (targetSubmissions - completedSubmissions).coerceAtLeast(0L)
+}
 
 data class NotificationItem(
   @DocumentId val id: String = "",
@@ -661,10 +774,22 @@ data class UserTaskProgress(
   @DocumentId val id: String = "",
   val taskId: String = "",
   val userId: String = "",
+  val installationConfirmed: Boolean = false,
+  val currentStepNumber: Int = 1,
   val completedSteps: List<Int> = emptyList(),
   val trackingEvents: Map<String, Boolean> = emptyMap(),
   val status: String = "IN_PROGRESS",
   @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+data class AdminActivityLog(
+  @DocumentId val id: String = "",
+  val actionType: String = "SYSTEM", // TASK, CAMPAIGN, SUBMISSION, USER, REWARD, WITHDRAWAL
+  val title: String = "",
+  val details: String = "",
+  val targetId: String = "",
+  val timestampMillis: Long = 0L,
+  @ServerTimestamp val createdAt: Timestamp? = null
 )
 
 

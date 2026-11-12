@@ -98,7 +98,7 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 
 /**
- * Ambient Neon Background with subtle glowing purple/cyan halos over deep midnight navy.
+ * Clean Minimal Background container adapting to Light Minimal (#F8FAFC) or Dark theme.
  */
 @Composable
 fun NeonBackgroundBox(
@@ -108,67 +108,42 @@ fun NeonBackgroundBox(
   Box(
     modifier = modifier
       .fillMaxSize()
-      .background(Color(0xFF070A17))
+      .background(MaterialTheme.colorScheme.background)
   ) {
-    Canvas(modifier = Modifier.matchParentSize()) {
-      drawCircle(
-        color = Color(0x357C3AED),
-        radius = size.width * 0.55f,
-        center = Offset(size.width * 0.1f, size.height * 0.08f)
-      )
-      drawCircle(
-        color = Color(0x280284C7),
-        radius = size.width * 0.5f,
-        center = Offset(size.width * 0.9f, size.height * 0.18f)
-      )
-      drawCircle(
-        color = Color(0x22DB2777),
-        radius = size.width * 0.45f,
-        center = Offset(size.width * 0.05f, size.height * 0.55f)
-      )
-      drawCircle(
-        color = Color(0x286366F1),
-        radius = size.width * 0.6f,
-        center = Offset(size.width * 0.85f, size.height * 0.88f)
-      )
-    }
     content()
   }
 }
 
 /**
- * Premium Glassmorphic Card container with neon gradient borders and translucent dark background.
+ * Clean Minimal Card container with subtle border and crisp surface elevation.
  */
 @Composable
 fun NeonGlassCard(
   modifier: Modifier = Modifier,
-  shape: RoundedCornerShape = RoundedCornerShape(22.dp),
-  borderColor: Color = Color(0x50A855F7),
-  backgroundColor: Color = Color(0x2E141938),
+  shape: RoundedCornerShape = RoundedCornerShape(18.dp),
+  borderColor: Color = Color.Unspecified,
+  backgroundColor: Color = Color.Unspecified,
   onClick: (() -> Unit)? = null,
   content: @Composable () -> Unit
 ) {
+  val resolvedBg =
+    if (backgroundColor != Color.Unspecified && backgroundColor != Color(0x2E141938)) {
+      backgroundColor
+    } else {
+      MaterialTheme.colorScheme.surface
+    }
+  val resolvedBorder =
+    if (borderColor != Color.Unspecified && borderColor != Color(0x50A855F7)) {
+      borderColor
+    } else {
+      MaterialTheme.colorScheme.outlineVariant
+    }
+
   val baseModifier = modifier
     .clip(shape)
-    .background(
-      Brush.verticalGradient(
-        colors = listOf(
-          backgroundColor,
-          Color(0x3B1F174B)
-        )
-      )
-    )
+    .background(resolvedBg)
     .border(
-      border = BorderStroke(
-        width = 1.dp,
-        brush = Brush.linearGradient(
-          colors = listOf(
-            borderColor,
-            Color(0x3022D3EE),
-            borderColor.copy(alpha = 0.2f)
-          )
-        )
-      ),
+      border = BorderStroke(width = 1.dp, color = resolvedBorder),
       shape = shape
     )
 
@@ -709,15 +684,14 @@ fun RewardBadge(rewardCents: Long, modifier: Modifier = Modifier) {
 }
 
 /**
- * Clean, compact individual Task Card for the Available Tasks screen.
- * Displays ONLY:
- * - App/site icon or image
+ * Compact horizontal Task Card for the User Dashboard & Available Tasks list (Light Minimal UI).
+ * Displays:
+ * - App/campaign icon
  * - Task title
- * - App or website name
- * - Category
- * - Reward in INR (₹)
- * - "View Task" button
- * Does NOT show the full task description or submission form on the task list.
+ * - Short description
+ * - Reward coins (125 Coins = ₹1)
+ * - Task status badge
+ * - Clear Open / View action button
  */
 @Composable
 fun TaskItemCard(
@@ -728,32 +702,36 @@ fun TaskItemCard(
   showProofPreview: Boolean = false
 ) {
   val appOrSiteLabel = resolveAppOrWebsiteLabel(task)
+  val shortDescription =
+    task.description.trim().ifBlank { "$appOrSiteLabel • ${task.category}" }
+  val coinsText = com.example.data.model.formatCoins(task.getEffectiveRewardCoins())
 
   Card(
     modifier =
       modifier
         .fillMaxWidth()
-        .clip(RoundedCornerShape(20.dp))
+        .clip(RoundedCornerShape(16.dp))
         .clickable(onClick = onClick)
+        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
         .testTag("task_card_${task.id}"),
-    shape = RoundedCornerShape(20.dp),
+    shape = RoundedCornerShape(16.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
   ) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(16.dp),
-      verticalArrangement = Arrangement.spacedBy(12.dp)
+      modifier = Modifier.fillMaxWidth().padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
       ) {
         AppIconThumbnail(
           appIconUrl = task.appIconUrl,
           appName = task.appName,
           category = task.category,
-          size = 50.dp
+          size = 48.dp
         )
 
         Column(modifier = Modifier.weight(1f)) {
@@ -761,21 +739,59 @@ fun TaskItemCard(
             text = task.title,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
           )
           Spacer(modifier = Modifier.height(2.dp))
           Text(
-            text = appOrSiteLabel,
+            text = shortDescription,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis
           )
+          Spacer(modifier = Modifier.height(4.dp))
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+          ) {
+            Text(
+              text = appOrSiteLabel,
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.primary,
+              fontWeight = FontWeight.SemiBold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis
+            )
+            if (task.targetSubmissions > 0L) {
+              Text(
+                text = "• Quota: ${task.completedSubmissions}/${task.targetSubmissions}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+          }
         }
 
-        RewardBadge(rewardCents = task.rewardCents)
+        Column(
+          horizontalAlignment = Alignment.End,
+          verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+          Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.primaryContainer
+          ) {
+            Text(
+              text = coinsText,
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onPrimaryContainer,
+              fontWeight = FontWeight.ExtraBold,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+          }
+          RewardBadge(rewardCents = task.rewardCents)
+        }
       }
 
       Row(
@@ -783,23 +799,29 @@ fun TaskItemCard(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        Surface(
-          shape = RoundedCornerShape(8.dp),
-          color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-          Text(
-            text = task.category,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-          )
+          StatusBadge(status = task.status, isActive = task.isActive)
+          Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant
+          ) {
+            Text(
+              text = task.category,
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              fontWeight = FontWeight.SemiBold,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+          }
         }
 
         Button(
           onClick = onClick,
-          shape = RoundedCornerShape(12.dp),
-          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+          shape = RoundedCornerShape(10.dp),
+          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
           colors =
             ButtonDefaults.buttonColors(
               containerColor = MaterialTheme.colorScheme.primary,
@@ -812,11 +834,11 @@ fun TaskItemCard(
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold
           )
-          Spacer(modifier = Modifier.width(6.dp))
+          Spacer(modifier = Modifier.width(4.dp))
           Icon(
             imageVector = Icons.AutoMirrored.Filled.ArrowForward,
             contentDescription = null,
-            modifier = Modifier.size(16.dp)
+            modifier = Modifier.size(15.dp)
           )
         }
       }

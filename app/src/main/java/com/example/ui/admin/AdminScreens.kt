@@ -55,6 +55,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -81,6 +82,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.model.AdminActivityLog
 import com.example.data.model.AppItem
 import com.example.data.model.CampaignItem
 import com.example.data.model.DemoWithdrawalRequest
@@ -89,6 +91,7 @@ import com.example.data.model.TaskCategories
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TaskStep
+import com.example.data.model.TransactionRecord
 import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethod
 import com.example.data.model.formatRewardInr
@@ -107,6 +110,29 @@ import com.example.ui.viewmodel.AdminTab
 import com.example.ui.viewmodel.UiState
 import java.text.SimpleDateFormat
 import java.util.Locale
+
+data class UnifiedTaskFormPayload(
+  val title: String,
+  val description: String,
+  val category: String,
+  val rewardCoinsStr: String,
+  val assignee: UserProfile,
+  val instructions: String,
+  val taskLink: String,
+  val appName: String,
+  val appIconUrl: String,
+  val requiredProof: String,
+  val installationInstructions: String = "",
+  val steps: List<TaskStep> = emptyList(),
+  val referenceImages: List<String> = emptyList(),
+  val completionDurationMinutes: Int = 5,
+  val targetSubmissions: Long = 0L,
+  val startDate: String = "",
+  val endDate: String = "",
+  val eligibilityRules: String = "All Approved Users",
+  val campaignId: String = "",
+  val isActive: Boolean = true
+)
 
 @Composable
 fun AdminDashboardScreen(
@@ -140,17 +166,37 @@ fun AdminDashboardScreen(
      onUpdateCampaignStatus: ((String, String) -> Unit)? = null,
    appsState: UiState<List<AppItem>> = UiState.Success(emptyList()),
    onCreateApp: (String, String) -> Unit = { _, _ -> },
-   onUpdateApp: (String, String, String, Boolean) -> Unit = { _, _, _, _ -> }
+   onUpdateApp: (String, String, String, Boolean) -> Unit = { _, _, _, _ -> },
+   onSelectAdminTab: ((AdminTab) -> Unit)? = null,
+   adminTransactionsState: UiState<List<TransactionRecord>> = UiState.Success(emptyList()),
+   adminActivityLogsState: UiState<List<AdminActivityLog>> = UiState.Success(emptyList()),
+   onCreateTaskFull: ((UnifiedTaskFormPayload) -> Unit)? = null,
+   onUpdateTaskFull: ((String, UnifiedTaskFormPayload) -> Unit)? = null,
+   onCreateCampaignFull: ((String, String, String, Long, Long, String, Long, String, String, String, String, String) -> Unit)? = null,
+   onUpdateCampaignDetails: ((String, String, String, String, Long, Long, String, Long, String, String, String, String, String) -> Unit)? = null,
+   databaseId: String = "(default)",
+   onOpenSecuritySheet: () -> Unit = {},
+   onTriggerUpdateCheck: () -> Unit = {}
 ) {
   if (!isAdminAuthorized) {
     UnauthorizedAdminGate(currentUserEmail = currentUserEmail)
     return
   }
 
+  var internalTabOverride by remember(activeTab) { mutableStateOf(activeTab) }
+  val currentTab = if (onSelectAdminTab != null) activeTab else internalTabOverride
+  val navigateToTab: (AdminTab) -> Unit = { targetTab ->
+    internalTabOverride = targetTab
+    onSelectAdminTab?.invoke(targetTab)
+  }
+
   val tasks = (adminTasksState as? UiState.Success)?.data ?: emptyList()
   val submissions = (adminSubmissionsState as? UiState.Success)?.data ?: emptyList()
   val withdrawalRequests =
     (adminWithdrawalRequestsState as? UiState.Success)?.data ?: emptyList()
+  val campaigns = (campaignsState as? UiState.Success)?.data ?: emptyList()
+  val transactions = (adminTransactionsState as? UiState.Success)?.data ?: emptyList()
+  val activityLogs = (adminActivityLogsState as? UiState.Success)?.data ?: emptyList()
   val registeredUsers =
     (registeredUsersState as? UiState.Success)?.data.let { list ->
       if (list.isNullOrEmpty()) {
@@ -233,6 +279,7 @@ fun AdminDashboardScreen(
     TaskEditorDialog(
       existingTask = editingTask,
       registeredUsers = registeredUsers,
+      campaigns = campaigns,
       defaultAssignee = preselectedAssignee ?: registeredUsers.firstOrNull(),
       onDismiss = {
         showTaskModal = false
@@ -290,6 +337,69 @@ fun AdminDashboardScreen(
         showTaskModal = false
         editingTask = null
         preselectedAssignee = null
+      },
+      onSaveFull = { payload ->
+        val target = editingTask
+        if (target == null) {
+          if (onCreateTaskFull != null) {
+            onCreateTaskFull(payload)
+          } else if (onCreateTaskExtended != null) {
+            onCreateTaskExtended(
+              payload.title,
+              payload.description,
+              payload.category,
+              payload.rewardCoinsStr,
+              payload.assignee,
+              payload.instructions,
+              payload.taskLink,
+              payload.appName,
+              payload.appIconUrl,
+              payload.requiredProof
+            )
+          } else {
+            onCreateTask(
+              payload.title,
+              payload.description,
+              payload.category,
+              payload.rewardCoinsStr,
+              payload.assignee,
+              payload.instructions,
+              payload.taskLink
+            )
+          }
+        } else {
+          if (onUpdateTaskFull != null) {
+            onUpdateTaskFull(target.id, payload)
+          } else if (onUpdateTaskExtended != null) {
+            onUpdateTaskExtended(
+              target.id,
+              payload.title,
+              payload.description,
+              payload.category,
+              payload.rewardCoinsStr,
+              payload.assignee,
+              payload.instructions,
+              payload.taskLink,
+              payload.appName,
+              payload.appIconUrl,
+              payload.requiredProof
+            )
+          } else {
+            onUpdateTask(
+              target.id,
+              payload.title,
+              payload.description,
+              payload.category,
+              payload.rewardCoinsStr,
+              payload.assignee,
+              payload.instructions,
+              payload.taskLink
+            )
+          }
+        }
+        showTaskModal = false
+        editingTask = null
+        preselectedAssignee = null
       }
     )
   }
@@ -298,10 +408,12 @@ fun AdminDashboardScreen(
     mergedReviewTasks.count { it.status == TaskStatus.SUBMITTED }
   val approvedSubmissionsCount =
     mergedReviewTasks.count { it.status == TaskStatus.APPROVED }
+  val pendingUsersCount =
+    registeredUsers.count { it.approvalStatus.equals("pending", ignoreCase = true) }
 
   Scaffold(
     floatingActionButton = {
-      if (activeTab == AdminTab.TASKS) {
+      if (currentTab == AdminTab.TASKS || currentTab == AdminTab.OVERVIEW) {
         FloatingActionButton(
           onClick = {
             editingTask = null
@@ -330,6 +442,14 @@ fun AdminDashboardScreen(
           .padding(innerPadding)
           .padding(horizontal = 18.dp, vertical = 12.dp)
     ) {
+      // 10-Section Admin Navigation Bar
+      AdminSectionNavigationBar(
+        activeTab = currentTab,
+        pendingUsersCount = pendingUsersCount,
+        pendingSubmissionsCount = pendingSubmissionsCount,
+        onSelectTab = navigateToTab
+      )
+
       // 4 Dashboard Statistics Cards: Total Tasks, Needs Review (Pending), Approved, Users
       AdminMetricsBanner(
         totalTasks = tasks.size,
@@ -340,7 +460,23 @@ fun AdminDashboardScreen(
 
       Spacer(modifier = Modifier.height(14.dp))
 
-      when (activeTab) {
+      when (currentTab) {
+        AdminTab.OVERVIEW -> {
+          AdminOverviewSection(
+            users = registeredUsers,
+            tasks = activeManagedTasks,
+            campaigns = campaigns,
+            reviewTasks = mergedReviewTasks,
+            transactions = transactions,
+            activityLogs = activityLogs,
+            onNavigateTab = navigateToTab,
+            onCreateTaskClick = {
+              editingTask = null
+              preselectedAssignee = null
+              showTaskModal = true
+            }
+          )
+        }
         AdminTab.TASKS -> {
           AdminTasksTabContent(
             tasks = activeManagedTasks,
@@ -367,9 +503,21 @@ fun AdminDashboardScreen(
             onReviewSubmission = onReviewSubmission
           )
         }
+        AdminTab.VERIFICATION_FRAUD -> {
+          AdminVerificationFraudSection(
+            reviewTasks = mergedReviewTasks,
+            users = registeredUsers,
+            withdrawalRequests = withdrawalRequests,
+            selectedFilter = submissionFilter,
+            onSelectFilter = onSelectSubmissionFilter,
+            onReviewSubmission = onReviewSubmission
+          )
+        }
         AdminTab.USERS -> {
           AdminUsersTabContent(
             users = registeredUsers,
+            reviewTasks = mergedReviewTasks,
+            transactions = transactions,
             onAssignTaskToUser = { user ->
               editingTask = null
               preselectedAssignee = user
@@ -395,7 +543,41 @@ fun AdminDashboardScreen(
           AdminCampaignsTabContent(
             campaignsState = campaignsState,
             onCreateCampaign = onCreateCampaign,
-            onUpdateCampaignStatus = onUpdateCampaignStatus
+            onCreateCampaignFull = onCreateCampaignFull,
+            onUpdateCampaignStatus = onUpdateCampaignStatus,
+            onUpdateCampaignDetails = onUpdateCampaignDetails
+          )
+        }
+        AdminTab.COINS_REWARDS -> {
+          AdminCoinsRewardsSection(
+            users = registeredUsers,
+            reviewTasks = mergedReviewTasks,
+            transactions = transactions
+          )
+        }
+        AdminTab.ANALYTICS -> {
+          AdminAnalyticsReportsSection(
+            users = registeredUsers,
+            tasks = activeManagedTasks,
+            campaigns = campaigns,
+            reviewTasks = mergedReviewTasks,
+            transactions = transactions
+          )
+        }
+        AdminTab.APP_SETTINGS -> {
+          AdminAppSettingsSection(
+            databaseId = databaseId,
+            onOpenSecurityDialog = onOpenSecuritySheet,
+            onTriggerUpdateCheck = onTriggerUpdateCheck
+          )
+        }
+        AdminTab.ACTIVITY_LOGS -> {
+          AdminActivityLogsSection(
+            activityLogs = activityLogs,
+            reviewTasks = mergedReviewTasks,
+            tasks = activeManagedTasks,
+            campaigns = campaigns,
+            transactions = transactions
           )
         }
         AdminTab.APPS -> {
@@ -878,17 +1060,15 @@ private fun AdminTasksTabContent(
                     fontWeight = FontWeight.Bold
                   )
                 }
-                if (task.status == TaskStatus.PENDING) {
-                  IconButton(
-                    onClick = { onEditTask(task) },
-                    modifier = Modifier.testTag("edit_task_${task.id}")
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.Edit,
-                      contentDescription = "Edit Task",
-                      tint = MaterialTheme.colorScheme.primary
-                    )
-                  }
+                IconButton(
+                  onClick = { onEditTask(task) },
+                  modifier = Modifier.testTag("edit_task_${task.id}")
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = "Edit Task",
+                    tint = MaterialTheme.colorScheme.primary
+                  )
                 }
                 IconButton(
                   onClick = { taskPendingDeletion = task },
@@ -910,12 +1090,13 @@ private fun AdminTasksTabContent(
 }
 
 @Composable
-private fun AdminSubmissionsTabContent(
+internal fun AdminSubmissionsTabContent(
   tasks: List<TaskItem>,
   withdrawalRequests: List<DemoWithdrawalRequest>,
   selectedFilter: String,
   onSelectFilter: (String) -> Unit,
-  onReviewSubmission: (TaskItem, Boolean, String) -> Unit
+  onReviewSubmission: (TaskItem, Boolean, String) -> Unit,
+  suspiciousSubmissionIds: Set<String> = emptySet()
 ) {
   val filtered =
     remember(tasks, selectedFilter) {
@@ -981,6 +1162,7 @@ private fun AdminSubmissionsTabContent(
           items(filtered, key = { it.id }) { task ->
             SubmissionReviewCard(
               task = task,
+              isFlaggedSuspicious = suspiciousSubmissionIds.contains(task.id),
               onReview = { approve, feedback -> onReviewSubmission(task, approve, feedback) }
             )
           }
@@ -993,6 +1175,7 @@ private fun AdminSubmissionsTabContent(
 @Composable
 private fun SubmissionReviewCard(
   task: TaskItem,
+  isFlaggedSuspicious: Boolean = false,
   onReview: (Boolean, String) -> Unit
 ) {
   var feedbackInput by rememberSaveable(task.id) { mutableStateOf(task.adminFeedback) }
@@ -1025,7 +1208,26 @@ private fun SubmissionReviewCard(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        StatusBadge(status = task.status)
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          StatusBadge(status = task.status)
+          if (isFlaggedSuspicious) {
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = MaterialTheme.colorScheme.errorContainer
+            ) {
+              Text(
+                text = "Duplicate / Flagged",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+              )
+            }
+          }
+        }
         RewardBadge(rewardCents = task.rewardCents)
       }
 
@@ -1280,6 +1482,8 @@ private fun SubmissionReviewCard(
 @Composable
 private fun AdminUsersTabContent(
   users: List<UserProfile>,
+  reviewTasks: List<TaskItem> = emptyList(),
+  transactions: List<TransactionRecord> = emptyList(),
   onAssignTaskToUser: (UserProfile) -> Unit,
   onToggleUserStatus: (UserProfile) -> Unit,
   onUpdateUserStatus: ((UserProfile, String) -> Unit)? = null,
@@ -1334,7 +1538,7 @@ private fun AdminUsersTabContent(
       },
       text = {
         Text(
-          text = "Are you sure you want to change ${user.displayName.ifBlank { "this user" }} status to ${targetStatus.uppercase(Locale.US)}?\n\nEmail: ${user.email}",
+          text = "Are you sure you want to change ${user.displayName.ifBlank { "this user" }} status to ${targetStatus.uppercase(Locale.US)}?\n\nEmail: ${formatVisibleUserEmail(user.email, user.role)}",
           style = MaterialTheme.typography.bodyMedium
         )
       },
@@ -1364,13 +1568,22 @@ private fun AdminUsersTabContent(
     )
   }
 
-  // User Detail Dialog
+  // User Detail Dialog with User Task History & Reward History
   selectedUserForDetail?.let { user ->
     val uid = user.userId.ifBlank { user.id }
     val formattedDate =
       (user.createdAt ?: user.updatedAt)?.toDate()?.let {
         SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
       } ?: "Recently registered"
+
+    val userTaskHistory =
+      remember(reviewTasks, uid) {
+        reviewTasks.filter { it.assignedUserId == uid }
+      }
+    val userRewardHistory =
+      remember(transactions, uid) {
+        transactions.filter { it.userId == uid }
+      }
 
     var isEditingName by remember(user) { mutableStateOf(false) }
     var editedNameInput by remember(user) { mutableStateOf(user.displayName) }
@@ -1403,7 +1616,7 @@ private fun AdminUsersTabContent(
               fontWeight = FontWeight.Bold
             )
             Text(
-              text = user.email,
+              text = formatVisibleUserEmail(user.email, user.role),
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1415,7 +1628,6 @@ private fun AdminUsersTabContent(
           modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
           verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-          // Display Name Editor
           if (isEditingName) {
             Column(
               modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -1494,7 +1706,75 @@ private fun AdminUsersTabContent(
           }
           AdminDetailInfoRow(label = "Registered At", value = formattedDate)
 
-          Spacer(modifier = Modifier.height(8.dp))
+          Spacer(modifier = Modifier.height(6.dp))
+
+          // User Task History
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Column(
+              modifier = Modifier.padding(10.dp),
+              verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+              Text(
+                text = "USER TASK HISTORY (${userTaskHistory.size})",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
+              )
+              if (userTaskHistory.isEmpty()) {
+                Text(
+                  text = "No task submissions recorded for this user.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+              } else {
+                userTaskHistory.take(5).forEach { sub ->
+                  Text(
+                    text = "• ${sub.title} — ${TaskStatus.label(sub.status)} (${formatRewardInr(sub.rewardCents)})",
+                    style = MaterialTheme.typography.bodySmall
+                  )
+                }
+              }
+            }
+          }
+
+          // User Reward History
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Column(
+              modifier = Modifier.padding(10.dp),
+              verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+              Text(
+                text = "USER REWARD HISTORY (${userRewardHistory.size})",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
+              )
+              if (userRewardHistory.isEmpty()) {
+                Text(
+                  text = "No coin ledger entries recorded yet.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+              } else {
+                userRewardHistory.take(5).forEach { tx ->
+                  Text(
+                    text = "• ${tx.title}: +${formatRewardInr(tx.amountCents)}",
+                    style = MaterialTheme.typography.bodySmall
+                  )
+                }
+              }
+            }
+          }
+
+          Spacer(modifier = Modifier.height(6.dp))
 
           Text(
             text = "Status Actions:",
@@ -1829,21 +2109,20 @@ private fun AdminDetailInfoRow(label: String, value: String) {
 }
 
 /**
- * Admin Create / Edit Task Dialog supporting all 9 fields:
- * 1. Task Title
- * 2. App Name or Website Name
- * 3. Optional App Icon / Image (HTTPS URL or Gallery Picker)
- * 4. Category
- * 5. Reward Amount (INR ₹)
- * 6. Download / Website URL
- * 7. Task Overview
- * 8. Step-by-Step Instructions
- * 9. Required Proof Description
+ * ONE Unified Task / Campaign Creation & Edit Form (`TaskEditorDialog`)
+ * Organized into step-by-step sections inside the same form:
+ * - Section A: Basic Task / Campaign Info (Title, App/Website Name, Icon, Category)
+ * - Section B: Link, Reward & Availability (Coins, HTTPS URL, Active/Paused status)
+ * - Section C: Installation & Dynamic Step-by-Step Instructions (Add/Edit/Delete/Reorder steps + Duration)
+ * - Section D: Proof & Verification Requirements (Mandatory Written + Screenshot Proof, Sample Reference Image)
+ * - Section E: Campaign Quota, Schedule & Eligibility (Quota, Start/End Dates, Eligibility Rules, Assignee)
+ * - Live User Task Preview Before Publishing
  */
 @Composable
 private fun TaskEditorDialog(
   existingTask: TaskItem?,
   registeredUsers: List<UserProfile>,
+  campaigns: List<CampaignItem> = emptyList(),
   defaultAssignee: UserProfile?,
   onDismiss: () -> Unit,
   onSave: (
@@ -1857,7 +2136,8 @@ private fun TaskEditorDialog(
     appName: String,
     appIconUrl: String,
     requiredProof: String
-  ) -> Unit
+  ) -> Unit,
+  onSaveFull: ((UnifiedTaskFormPayload) -> Unit)? = null
 ) {
   val context = LocalContext.current
   var title by rememberSaveable { mutableStateOf(existingTask?.title ?: "") }
@@ -1873,6 +2153,9 @@ private fun TaskEditorDialog(
     )
   }
   var description by rememberSaveable { mutableStateOf(existingTask?.description ?: "") }
+  var installationInstructions by rememberSaveable {
+    mutableStateOf(existingTask?.installationInstructions ?: "")
+  }
   var instructions by rememberSaveable { mutableStateOf(existingTask?.instructions ?: "") }
   var requiredProof by rememberSaveable {
     mutableStateOf(
@@ -1880,6 +2163,33 @@ private fun TaskEditorDialog(
         ?: "Submit written completion notes and a clear screenshot showing the completed task."
     )
   }
+  var completionDurationStr by rememberSaveable {
+    mutableStateOf((existingTask?.completionDurationMinutes ?: 5).toString())
+  }
+  var targetQuotaStr by rememberSaveable {
+    mutableStateOf((existingTask?.targetSubmissions ?: 0L).toString())
+  }
+  var startDate by rememberSaveable { mutableStateOf(existingTask?.startDate ?: "") }
+  var endDate by rememberSaveable { mutableStateOf(existingTask?.endDate ?: "") }
+  var eligibilityRules by rememberSaveable {
+    mutableStateOf(existingTask?.eligibilityRules?.ifBlank { "All Approved Users" } ?: "All Approved Users")
+  }
+  var selectedCampaignId by rememberSaveable { mutableStateOf(existingTask?.campaignId ?: "") }
+  var isTaskActive by rememberSaveable { mutableStateOf(existingTask?.isActive ?: true) }
+  var showUserPreview by rememberSaveable { mutableStateOf(false) }
+
+  // Dynamic step-by-step builder state
+  var dynamicSteps by remember {
+    mutableStateOf(existingTask?.steps ?: emptyList())
+  }
+  var newStepTitle by rememberSaveable { mutableStateOf("") }
+  var newStepDesc by rememberSaveable { mutableStateOf("") }
+
+  // Sample / Reference proof screenshots
+  var referenceImages by remember {
+    mutableStateOf(existingTask?.referenceImages ?: emptyList())
+  }
+  var refImageUrlInput by rememberSaveable { mutableStateOf("") }
 
   val iconPickerLauncher =
     rememberLauncherForActivityResult(
@@ -1889,6 +2199,18 @@ private fun TaskEditorDialog(
         val dataUri =
           encodeGalleryImageAsDataUri(context, uri, maxDimensionPx = 256, initialQuality = 75)
         appIconUrl = dataUri ?: uri.toString()
+      }
+    }
+
+  val refImagePickerLauncher =
+    rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+      if (uri != null) {
+        val dataUri =
+          encodeGalleryImageAsDataUri(context, uri, maxDimensionPx = 512, initialQuality = 75)
+        val encoded = dataUri ?: uri.toString()
+        referenceImages = referenceImages + encoded
       }
     }
 
@@ -1913,233 +2235,592 @@ private fun TaskEditorDialog(
   AlertDialog(
     onDismissRequest = onDismiss,
     title = {
-      Text(
-        text = if (existingTask == null) "Create & Publish Task" else "Edit Task",
-        style = MaterialTheme.typography.titleLarge
-      )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Text(
+          text = if (existingTask == null) "Unified Task & Campaign Form" else "Edit Task / Campaign",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.Bold,
+          modifier = Modifier.weight(1f)
+        )
+        OutlinedButton(
+          onClick = { showUserPreview = !showUserPreview },
+          shape = RoundedCornerShape(8.dp),
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier.testTag("task_modal_preview_button")
+        ) {
+          Text(
+            text = if (showUserPreview) "Back to Form" else "Preview",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold
+          )
+        }
+      }
     },
     text = {
-      Column(
-        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-      ) {
-        // 1. Task Title
-        OutlinedTextField(
-          value = title,
-          onValueChange = { title = it },
-          label = { Text("Task Title") },
-          placeholder = { Text("e.g., Install & Review App on Google Play") },
-          singleLine = true,
-          modifier = Modifier.fillMaxWidth().testTag("task_modal_title_input")
-        )
-
-        // 2. App Name or Website Name
-        OutlinedTextField(
-          value = appName,
-          onValueChange = { appName = it },
-          label = { Text("App Name or Website Name") },
-          placeholder = { Text("e.g., TaskFlow Companion / Acme Store") },
-          singleLine = true,
-          modifier = Modifier.fillMaxWidth().testTag("task_modal_app_name_input")
-        )
-
-        // 3. Optional App Icon / Image
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(10.dp)
+      if (showUserPreview) {
+        // LIVE USER PREVIEW MODE BEFORE PUBLISHING
+        Column(
+          modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+          verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-          AppIconThumbnail(
-            appIconUrl = appIconUrl,
-            appName = appName,
-            category = category,
-            size = 48.dp
-          )
-          Column(modifier = Modifier.weight(1f)) {
-            OutlinedTextField(
-              value =
-                if (appIconUrl.startsWith("data:image/")) {
-                  "(Gallery Image Attached)"
-                } else {
-                  appIconUrl
-                },
-              onValueChange = {
-                if (!it.startsWith("(Gallery")) {
-                  appIconUrl = it
-                }
-              },
-              label = { Text("App Icon URL (Optional HTTPS)") },
-              placeholder = { Text("https://example.com/icon.png") },
-              singleLine = true,
-              isError = !isIconValid,
-              modifier = Modifier.fillMaxWidth().testTag("task_modal_app_icon_input")
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.primaryContainer
+          ) {
+            Text(
+              text = "LIVE USER PREVIEW — How users see this task before you publish",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onPrimaryContainer,
+              fontWeight = FontWeight.Bold,
+              modifier = Modifier.padding(10.dp)
             )
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          }
+
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+          ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+              Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AppIconThumbnail(
+                  appIconUrl = appIconUrl,
+                  appName = appName,
+                  category = category,
+                  size = 44.dp
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(title.ifBlank { "Untitled Task" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                  Text("${appName.ifBlank { category }} • $category", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+                RewardBadge(rewardCents = rewardCoinsStr.toLongOrNull() ?: 500L)
+              }
+              Text(description.ifBlank { "No description entered yet." }, style = MaterialTheme.typography.bodySmall)
+              if (installationInstructions.isNotBlank()) {
+                Text("Install Guide: $installationInstructions", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
+              }
+              HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+              Text("UNIFIED STEP-BY-STEP INSTRUCTIONS", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+              if (dynamicSteps.isNotEmpty()) {
+                dynamicSteps.forEachIndexed { idx, step ->
+                  Text("${idx + 1}. ${step.title}: ${step.instructions}", style = MaterialTheme.typography.bodySmall)
+                }
+              } else {
+                Text(instructions.ifBlank { "1. Open link\n2. Complete action\n3. Submit written + screenshot proof" }, style = MaterialTheme.typography.bodySmall)
+              }
+              HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+              Text("Required Proof (Mandatory Text + Screenshot): $requiredProof", style = MaterialTheme.typography.labelSmall)
+              Text(
+                text = "Duration: ${completionDurationStr.ifBlank { "5" }} mins • Quota: ${if ((targetQuotaStr.toLongOrNull() ?: 0L) > 0L) targetQuotaStr else "Unlimited"} • Eligibility: $eligibilityRules",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+          }
+        }
+      } else {
+        Column(
+          modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+          verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+          // SECTION A: BASIC TASK & CAMPAIGN INFO
+          Text(
+            text = "1. Basic Task & Campaign Identity",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold
+          )
+
+          // 1. Task Title
+          OutlinedTextField(
+            value = title,
+            onValueChange = { title = it },
+            label = { Text("Task / Campaign Title") },
+            placeholder = { Text("e.g., Install & Review App on Google Play") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("task_modal_title_input")
+          )
+
+          // 2. App Name or Website Name
+          OutlinedTextField(
+            value = appName,
+            onValueChange = { appName = it },
+            label = { Text("App Name or Website Name") },
+            placeholder = { Text("e.g., TaskFlow Companion / Acme Store") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("task_modal_app_name_input")
+          )
+
+          // 3. Optional App Icon / Image
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+          ) {
+            AppIconThumbnail(
+              appIconUrl = appIconUrl,
+              appName = appName,
+              category = category,
+              size = 48.dp
+            )
+            Column(modifier = Modifier.weight(1f)) {
+              OutlinedTextField(
+                value =
+                  if (appIconUrl.startsWith("data:image/")) {
+                    "(Gallery Image Attached)"
+                  } else {
+                    appIconUrl
+                  },
+                onValueChange = {
+                  if (!it.startsWith("(Gallery")) {
+                    appIconUrl = it
+                  }
+                },
+                label = { Text("App Icon URL (Optional HTTPS)") },
+                placeholder = { Text("https://example.com/icon.png") },
+                singleLine = true,
+                isError = !isIconValid,
+                modifier = Modifier.fillMaxWidth().testTag("task_modal_app_icon_input")
+              )
+              Spacer(modifier = Modifier.height(6.dp))
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                  onClick = {
+                    iconPickerLauncher.launch(
+                      PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                  },
+                  shape = RoundedCornerShape(10.dp),
+                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                  modifier = Modifier.testTag("task_modal_pick_icon_button")
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.AddPhotoAlternate,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                  )
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("Gallery Icon", style = MaterialTheme.typography.labelSmall)
+                }
+                if (appIconUrl.isNotBlank()) {
+                  TextButton(
+                    onClick = { appIconUrl = "" },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                  ) {
+                    Text("Clear Icon", style = MaterialTheme.typography.labelSmall)
+                  }
+                }
+              }
+            }
+          }
+
+          // 4. Task Category
+          Text(
+            text = "Task Category",
+            style = MaterialTheme.typography.labelLarge
+          )
+          Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+          ) {
+            TaskCategories.ALL.forEach { cat ->
+              FilterChip(
+                selected = category == cat,
+                onClick = { category = cat },
+                label = { Text(cat) },
+                modifier = Modifier.testTag("task_modal_category_$cat")
+              )
+            }
+          }
+
+          // SECTION B: LINK, REWARD & DESCRIPTION
+          Text(
+            text = "2. Reward, Link & Overview",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold
+          )
+
+          // 5. Reward Amount (Coins)
+          OutlinedTextField(
+            value = rewardCoinsStr,
+            onValueChange = { rewardCoinsStr = it.filter { ch -> ch.isDigit() } },
+            label = { Text("Reward Amount (Coins • 125 Coins = ₹1)") },
+            placeholder = { Text("e.g. 500") },
+            singleLine = true,
+            isError = rewardCoinsStr.isNotBlank() && !isRewardValid,
+            modifier = Modifier.fillMaxWidth().testTag("task_modal_reward_input")
+          )
+
+          // 6. Download / Website URL
+          OutlinedTextField(
+            value = taskLink,
+            onValueChange = { taskLink = it },
+            label = { Text("App Installation Link or External HTTPS URL") },
+            placeholder = { Text("https://play.google.com/store/apps/details?id=...") },
+            singleLine = true,
+            isError = taskLink.isNotBlank() && !isLinkValid,
+            supportingText = {
+              if (taskLink.isNotBlank() && !isLinkValid) {
+                Text(
+                  text = "Enter a valid HTTPS URL starting with https:// (e.g., Google Play Store or website link).",
+                  color = MaterialTheme.colorScheme.error,
+                  modifier = Modifier.testTag("task_modal_link_error")
+                )
+              } else {
+                Text("Supports Google Play Store links, website links, or any valid https:// URL.")
+              }
+            },
+            modifier = Modifier.fillMaxWidth().testTag("task_modal_link_input")
+          )
+
+          // 7. Task Overview / Description
+          OutlinedTextField(
+            value = description,
+            onValueChange = { description = it },
+            label = { Text("Task Overview / Description") },
+            placeholder = { Text("Summarize the goal and overview of this task…") },
+            minLines = 2,
+            maxLines = 5,
+            modifier = Modifier.fillMaxWidth().testTag("task_modal_desc_input")
+          )
+
+          // SECTION C: INSTALLATION & DYNAMIC STEP-BY-STEP INSTRUCTIONS
+          Text(
+            text = "3. Installation & Step-by-Step Instructions",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold
+          )
+
+          OutlinedTextField(
+            value = installationInstructions,
+            onValueChange = { installationInstructions = it },
+            label = { Text("Installation Instructions (Optional)") },
+            placeholder = { Text("e.g., Download from Play Store, keep installed for at least 3 days") },
+            singleLine = false,
+            minLines = 2,
+            maxLines = 3,
+            modifier = Modifier.fillMaxWidth().testTag("task_modal_install_instructions_input")
+          )
+
+          // 8. Step-by-Step Instructions (Text + Dynamic Reorderable Steps)
+          OutlinedTextField(
+            value = instructions,
+            onValueChange = { instructions = it },
+            label = { Text("Step-by-Step Instructions") },
+            placeholder = {
+              Text(
+                "1. Tap the task link above\n2. Complete the action\n3. Take a screenshot & submit written + photo proof…"
+              )
+            },
+            minLines = 3,
+            maxLines = 6,
+            modifier = Modifier.fillMaxWidth().testTag("task_modal_instructions_input")
+          )
+
+          // Dynamic Step Builder (Add / Edit / Delete / Reorder)
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Column(
+              modifier = Modifier.padding(10.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              Text(
+                text = "Dynamic Structured Steps (${dynamicSteps.size}) — Add / Reorder / Delete",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold
+              )
+              dynamicSteps.forEachIndexed { idx, step ->
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                  Text(
+                    text = "${idx + 1}. ${step.title}: ${step.instructions}",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f)
+                  )
+                  Row {
+                    if (idx > 0) {
+                      TextButton(
+                        onClick = {
+                          val mutable = dynamicSteps.toMutableList()
+                          val item = mutable.removeAt(idx)
+                          mutable.add(idx - 1, item)
+                          dynamicSteps =
+                            mutable.mapIndexed { i, s -> s.copy(stepNumber = i + 1) }
+                        },
+                        contentPadding = PaddingValues(2.dp)
+                      ) {
+                        Text("↑")
+                      }
+                    }
+                    if (idx < dynamicSteps.lastIndex) {
+                      TextButton(
+                        onClick = {
+                          val mutable = dynamicSteps.toMutableList()
+                          val item = mutable.removeAt(idx)
+                          mutable.add(idx + 1, item)
+                          dynamicSteps =
+                            mutable.mapIndexed { i, s -> s.copy(stepNumber = i + 1) }
+                        },
+                        contentPadding = PaddingValues(2.dp)
+                      ) {
+                        Text("↓")
+                      }
+                    }
+                    IconButton(
+                      onClick = {
+                        dynamicSteps =
+                          dynamicSteps
+                            .filterIndexed { i, _ -> i != idx }
+                            .mapIndexed { i, s -> s.copy(stepNumber = i + 1) }
+                      },
+                      modifier = Modifier.size(28.dp)
+                    ) {
+                      Icon(Icons.Default.Delete, contentDescription = "Delete Step", modifier = Modifier.size(16.dp))
+                    }
+                  }
+                }
+              }
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                OutlinedTextField(
+                  value = newStepTitle,
+                  onValueChange = { newStepTitle = it },
+                  label = { Text("Step Title") },
+                  singleLine = true,
+                  modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                  value = newStepDesc,
+                  onValueChange = { newStepDesc = it },
+                  label = { Text("Step Action") },
+                  singleLine = true,
+                  modifier = Modifier.weight(1.2f)
+                )
+              }
               OutlinedButton(
                 onClick = {
-                  iconPickerLauncher.launch(
+                  if (newStepTitle.isNotBlank() || newStepDesc.isNotBlank()) {
+                    val nextNum = dynamicSteps.size + 1
+                    val added =
+                      TaskStep(
+                        stepNumber = nextNum,
+                        title = newStepTitle.trim().ifBlank { "Step $nextNum" },
+                        instructions = newStepDesc.trim().ifBlank { newStepTitle.trim() }
+                      )
+                    dynamicSteps = dynamicSteps + added
+                    if (instructions.isBlank()) {
+                      instructions = "${added.stepNumber}. ${added.title}: ${added.instructions}"
+                    } else {
+                      instructions = "$instructions\n${added.stepNumber}. ${added.title}: ${added.instructions}"
+                    }
+                    newStepTitle = ""
+                    newStepDesc = ""
+                  }
+                },
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth().testTag("task_modal_add_step_btn")
+              ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Add Step to Container")
+              }
+            }
+          }
+
+          OutlinedTextField(
+            value = completionDurationStr,
+            onValueChange = { completionDurationStr = it.filter { ch -> ch.isDigit() } },
+            label = { Text("Required Completion Duration (Minutes)") },
+            placeholder = { Text("e.g. 5") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("task_modal_duration_input")
+          )
+
+          // SECTION D: PROOF & VERIFICATION REQUIREMENTS
+          Text(
+            text = "4. Proof & Sample Screenshot Requirements",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold
+          )
+
+          // 9. Required Proof Description
+          OutlinedTextField(
+            value = requiredProof,
+            onValueChange = { requiredProof = it },
+            label = { Text("Written Feedback & Mandatory Proof Photo Requirement") },
+            placeholder = {
+              Text("Specify what written details and screenshot the user must submit…")
+            },
+            minLines = 2,
+            maxLines = 4,
+            modifier = Modifier.fillMaxWidth().testTag("task_modal_required_proof_input")
+          )
+
+          // Sample Proof Screenshot Preview / Reference Images
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            OutlinedTextField(
+              value = refImageUrlInput,
+              onValueChange = { refImageUrlInput = it },
+              label = { Text("Sample Proof Image URL (Optional)") },
+              singleLine = true,
+              modifier = Modifier.weight(1f)
+            )
+            OutlinedButton(
+              onClick = {
+                if (refImageUrlInput.isNotBlank()) {
+                  referenceImages = referenceImages + refImageUrlInput.trim()
+                  refImageUrlInput = ""
+                } else {
+                  refImagePickerLauncher.launch(
                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                   )
-                },
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                modifier = Modifier.testTag("task_modal_pick_icon_button")
-              ) {
-                Icon(
-                  imageVector = Icons.Default.AddPhotoAlternate,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Gallery Icon", style = MaterialTheme.typography.labelSmall)
-              }
-              if (appIconUrl.isNotBlank()) {
-                TextButton(
-                  onClick = { appIconUrl = "" },
-                  contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                  Text("Clear Icon", style = MaterialTheme.typography.labelSmall)
                 }
-              }
-            }
-          }
-        }
-
-        // 4. Task Category
-        Text(
-          text = "Task Category",
-          style = MaterialTheme.typography.labelLarge
-        )
-        Row(
-          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-          TaskCategories.ALL.forEach { cat ->
-            FilterChip(
-              selected = category == cat,
-              onClick = { category = cat },
-              label = { Text(cat) },
-              modifier = Modifier.testTag("task_modal_category_$cat")
-            )
-          }
-        }
-
-        // 5. Reward Amount (Coins)
-        OutlinedTextField(
-          value = rewardCoinsStr,
-          onValueChange = { rewardCoinsStr = it.filter { ch -> ch.isDigit() } },
-          label = { Text("Reward Amount (Coins)") },
-          placeholder = { Text("e.g. 500") },
-          singleLine = true,
-          isError = rewardCoinsStr.isNotBlank() && !isRewardValid,
-          modifier = Modifier.fillMaxWidth().testTag("task_modal_reward_input")
-        )
-
-        // 6. Download / Website URL
-        OutlinedTextField(
-          value = taskLink,
-          onValueChange = { taskLink = it },
-          label = { Text("Download / Website Link (HTTPS URL)") },
-          placeholder = { Text("https://play.google.com/store/apps/details?id=...") },
-          singleLine = true,
-          isError = taskLink.isNotBlank() && !isLinkValid,
-          supportingText = {
-            if (taskLink.isNotBlank() && !isLinkValid) {
-              Text(
-                text = "Enter a valid HTTPS URL starting with https:// (e.g., Google Play Store or website link).",
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("task_modal_link_error")
-              )
-            } else {
-              Text("Supports Google Play Store links, website links, or any valid https:// URL.")
-            }
-          },
-          modifier = Modifier.fillMaxWidth().testTag("task_modal_link_input")
-        )
-
-        // 7. Task Overview / Description
-        OutlinedTextField(
-          value = description,
-          onValueChange = { description = it },
-          label = { Text("Task Overview / Description") },
-          placeholder = { Text("Summarize the goal and overview of this task…") },
-          minLines = 2,
-          maxLines = 5,
-          modifier = Modifier.fillMaxWidth().testTag("task_modal_desc_input")
-        )
-
-        // 8. Step-by-Step Instructions
-        OutlinedTextField(
-          value = instructions,
-          onValueChange = { instructions = it },
-          label = { Text("Step-by-Step Instructions") },
-          placeholder = {
-            Text(
-              "1. Tap the task link above\n2. Complete the action\n3. Take a screenshot & submit written + photo proof…"
-            )
-          },
-          minLines = 3,
-          maxLines = 6,
-          modifier = Modifier.fillMaxWidth().testTag("task_modal_instructions_input")
-        )
-
-        // 9. Required Proof Description
-        OutlinedTextField(
-          value = requiredProof,
-          onValueChange = { requiredProof = it },
-          label = { Text("Required Proof Description") },
-          placeholder = {
-            Text("Specify what written details and screenshot the user must submit…")
-          },
-          minLines = 2,
-          maxLines = 4,
-          modifier = Modifier.fillMaxWidth().testTag("task_modal_required_proof_input")
-        )
-
-        Text(
-          text = "Initial Highlighted Assignee (All users can view & complete)",
-          style = MaterialTheme.typography.labelLarge
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-          registeredUsers.forEach { user ->
-            val uid = user.userId.ifBlank { user.id }
-            val isSelected = (selectedAssignee.userId.ifBlank { selectedAssignee.id }) == uid
-            Surface(
-              shape = RoundedCornerShape(12.dp),
-              color =
-                if (isSelected) {
-                  MaterialTheme.colorScheme.primaryContainer
-                } else {
-                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                },
-              modifier =
-                Modifier.fillMaxWidth()
-                  .clip(RoundedCornerShape(12.dp))
-                  .clickable { selectedAssignee = user }
+              },
+              shape = RoundedCornerShape(8.dp)
             ) {
-              Row(
-                modifier = Modifier.padding(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+              Text(if (refImageUrlInput.isNotBlank()) "Add URL" else "Pick Sample")
+            }
+          }
+          if (referenceImages.isNotEmpty()) {
+            Text(
+              text = "${referenceImages.size} sample reference screenshot(s) attached",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.primary
+            )
+          }
+
+          // SECTION E: CAMPAIGN QUOTA, SCHEDULE & ELIGIBILITY
+          Text(
+            text = "5. Campaign Quota, Dates, Eligibility & Availability",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold
+          )
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            OutlinedTextField(
+              value = targetQuotaStr,
+              onValueChange = { targetQuotaStr = it.filter { ch -> ch.isDigit() } },
+              label = { Text("Quota (0 = Unlimited)") },
+              singleLine = true,
+              modifier = Modifier.weight(1f).testTag("task_modal_quota_input")
+            )
+            OutlinedTextField(
+              value = eligibilityRules,
+              onValueChange = { eligibilityRules = it },
+              label = { Text("Eligibility Rules") },
+              singleLine = true,
+              modifier = Modifier.weight(1f).testTag("task_modal_eligibility_input")
+            )
+          }
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            OutlinedTextField(
+              value = startDate,
+              onValueChange = { startDate = it },
+              label = { Text("Start Date (YYYY-MM-DD)") },
+              placeholder = { Text("2025-01-01") },
+              singleLine = true,
+              modifier = Modifier.weight(1f).testTag("task_modal_start_date_input")
+            )
+            OutlinedTextField(
+              value = endDate,
+              onValueChange = { endDate = it },
+              label = { Text("End Date (YYYY-MM-DD)") },
+              placeholder = { Text("2025-12-31") },
+              singleLine = true,
+              modifier = Modifier.weight(1f).testTag("task_modal_end_date_input")
+            )
+          }
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Text("Task Availability:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            FilterChip(
+              selected = isTaskActive,
+              onClick = { isTaskActive = true },
+              label = { Text("Active / Published") }
+            )
+            FilterChip(
+              selected = !isTaskActive,
+              onClick = { isTaskActive = false },
+              label = { Text("Paused / Hidden") }
+            )
+          }
+
+          Text(
+            text = "Initial Highlighted Assignee (All eligible users can view & complete)",
+            style = MaterialTheme.typography.labelLarge
+          )
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            registeredUsers.forEach { user ->
+              val uid = user.userId.ifBlank { user.id }
+              val isSelected = (selectedAssignee.userId.ifBlank { selectedAssignee.id }) == uid
+              Surface(
+                shape = RoundedCornerShape(12.dp),
+                color =
+                  if (isSelected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                  } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                  },
+                modifier =
+                  Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { selectedAssignee = user }
               ) {
-                Column(modifier = Modifier.weight(1f)) {
-                  Text(
-                    text = user.displayName,
-                    style = MaterialTheme.typography.labelLarge
-                  )
-                  Text(
-                    text = formatVisibleUserEmail(user.email, user.role),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                  )
-                }
-                if (isSelected) {
-                  Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = "Selected",
-                    tint = MaterialTheme.colorScheme.primary
-                  )
+                Row(
+                  modifier = Modifier.padding(10.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                      text = user.displayName,
+                      style = MaterialTheme.typography.labelLarge
+                    )
+                    Text(
+                      text = formatVisibleUserEmail(user.email, user.role),
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                  }
+                  if (isSelected) {
+                    Icon(
+                      imageVector = Icons.Default.Check,
+                      contentDescription = "Selected",
+                      tint = MaterialTheme.colorScheme.primary
+                    )
+                  }
                 }
               }
             }
@@ -2150,18 +2831,46 @@ private fun TaskEditorDialog(
     confirmButton = {
       Button(
         onClick = {
-          onSave(
-            title.trim(),
-            description.trim(),
-            category,
-            rewardCoinsStr.trim(),
-            selectedAssignee,
-            instructions.trim().ifBlank { description.trim() },
-            taskLink.trim(),
-            appName.trim(),
-            appIconUrl.trim(),
-            requiredProof.trim()
-          )
+          val resolvedInstructions = instructions.trim().ifBlank { description.trim() }
+          val payload =
+            UnifiedTaskFormPayload(
+              title = title.trim(),
+              description = description.trim(),
+              category = category,
+              rewardCoinsStr = rewardCoinsStr.trim(),
+              assignee = selectedAssignee,
+              instructions = resolvedInstructions,
+              taskLink = taskLink.trim(),
+              appName = appName.trim(),
+              appIconUrl = appIconUrl.trim(),
+              requiredProof = requiredProof.trim(),
+              installationInstructions = installationInstructions.trim(),
+              steps = dynamicSteps,
+              referenceImages = referenceImages,
+              completionDurationMinutes = (completionDurationStr.toIntOrNull() ?: 5).coerceAtLeast(1),
+              targetSubmissions = (targetQuotaStr.toLongOrNull() ?: 0L).coerceAtLeast(0L),
+              startDate = startDate.trim(),
+              endDate = endDate.trim(),
+              eligibilityRules = eligibilityRules.trim().ifBlank { "All Approved Users" },
+              campaignId = selectedCampaignId,
+              isActive = isTaskActive
+            )
+          if (onSaveFull != null) {
+            onSaveFull(payload)
+          } else {
+            onSave(
+              payload.title,
+              payload.description,
+              payload.category,
+              payload.rewardCoinsStr,
+              payload.assignee,
+              payload.instructions,
+              payload.taskLink,
+              payload.appName,
+              payload.appIconUrl,
+              payload.requiredProof
+            )
+          }
         },
         enabled = canSave,
         modifier = Modifier.testTag("task_modal_save_button")
@@ -2221,17 +2930,48 @@ private fun UnauthorizedAdminGate(currentUserEmail: String) {
 fun AdminCampaignsTabContent(
   campaignsState: UiState<List<CampaignItem>>,
   onCreateCampaign: ((String, String, String, Long, Long, String, Long) -> Unit)?,
-  onUpdateCampaignStatus: ((String, String) -> Unit)?
+  onCreateCampaignFull: ((String, String, String, Long, Long, String, Long, String, String, String, String, String) -> Unit)? = null,
+  onUpdateCampaignStatus: ((String, String) -> Unit)?,
+  onUpdateCampaignDetails: ((String, String, String, String, Long, Long, String, Long, String, String, String, String, String) -> Unit)? = null
 ) {
   var showCreateDialog by remember { mutableStateOf(false) }
+  var editingCampaign by remember { mutableStateOf<CampaignItem?>(null) }
   val campaigns = (campaignsState as? UiState.Success)?.data ?: emptyList()
 
-  if (showCreateDialog) {
+  if (showCreateDialog || editingCampaign != null) {
     CampaignEditorDialog(
-      onDismiss = { showCreateDialog = false },
-      onSave = { title, client, desc, budget, target, cat, reward ->
-        onCreateCampaign?.invoke(title, client, desc, budget, target, cat, reward)
+      existingCampaign = editingCampaign,
+      onDismiss = {
         showCreateDialog = false
+        editingCampaign = null
+      },
+      onSave = { title, client, desc, budget, target, cat, reward, startDate, endDate, eligibility, iconUrl, taskLink ->
+        val targetCamp = editingCampaign
+        if (targetCamp == null) {
+          if (onCreateCampaignFull != null) {
+            onCreateCampaignFull(title, client, desc, budget, target, cat, reward, startDate, endDate, eligibility, iconUrl, taskLink)
+          } else {
+            onCreateCampaign?.invoke(title, client, desc, budget, target, cat, reward)
+          }
+        } else {
+          onUpdateCampaignDetails?.invoke(
+            targetCamp.id,
+            title,
+            client,
+            desc,
+            budget,
+            target,
+            cat,
+            reward,
+            startDate,
+            endDate,
+            eligibility,
+            iconUrl,
+            taskLink
+          )
+        }
+        showCreateDialog = false
+        editingCampaign = null
       }
     )
   }
@@ -2254,18 +2994,21 @@ fun AdminCampaignsTabContent(
         ) {
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              text = "Client & Partner Campaigns",
+              text = "Campaign Management & Quotas",
               style = MaterialTheme.typography.titleMedium,
               fontWeight = FontWeight.Bold
             )
             Text(
-              text = "Manage advertiser budgets, targets, and live task campaigns.",
+              text = "Create campaigns with quotas, dates & eligibility; auto-closes when quota is reached.",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
           }
           Button(
-            onClick = { showCreateDialog = true },
+            onClick = {
+              editingCampaign = null
+              showCreateDialog = true
+            },
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.testTag("admin_new_campaign_button")
           ) {
@@ -2314,6 +3057,7 @@ fun AdminCampaignsTabContent(
       items(campaigns, key = { it.id }) { campaign ->
         CampaignCardItem(
           campaign = campaign,
+          onEdit = { editingCampaign = campaign },
           onUpdateStatus = { newStatus ->
             onUpdateCampaignStatus?.invoke(campaign.id, newStatus)
           }
@@ -2326,6 +3070,7 @@ fun AdminCampaignsTabContent(
 @Composable
 fun CampaignCardItem(
   campaign: CampaignItem,
+  onEdit: () -> Unit = {},
   onUpdateStatus: (String) -> Unit
 ) {
   val progress = if (campaign.targetSubmissions > 0L) {
@@ -2385,7 +3130,7 @@ fun CampaignCardItem(
           }
         ) {
           Text(
-            text = campaign.status.uppercase(Locale.US),
+            text = if (campaign.isQuotaExhausted) "QUOTA CLOSED" else campaign.status.uppercase(Locale.US),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -2409,6 +3154,15 @@ fun CampaignCardItem(
         )
       }
 
+      if (campaign.startDate.isNotBlank() || campaign.endDate.isNotBlank() || campaign.eligibilityRules.isNotBlank()) {
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+          text = "Dates: ${campaign.startDate.ifBlank { "Now" }} → ${campaign.endDate.ifBlank { "Open" }} • Eligible: ${campaign.eligibilityRules}",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      }
+
       Spacer(modifier = Modifier.height(12.dp))
 
       Row(
@@ -2428,7 +3182,7 @@ fun CampaignCardItem(
           Text(formatRewardInr(campaign.rewardPerTaskCents), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
         }
         Column {
-          Text("Target", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text("Quota (Rem: ${campaign.remainingQuota})", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
           Text("${campaign.completedSubmissions}/${campaign.targetSubmissions}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
         }
       }
@@ -2446,6 +3200,9 @@ fun CampaignCardItem(
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically
       ) {
+        IconButton(onClick = onEdit, modifier = Modifier.testTag("edit_campaign_${campaign.id}")) {
+          Icon(Icons.Default.Edit, contentDescription = "Edit Campaign", tint = MaterialTheme.colorScheme.primary)
+        }
         if (campaign.status.equals("ACTIVE", ignoreCase = true)) {
           OutlinedButton(
             onClick = { onUpdateStatus("PAUSED") },
@@ -2473,7 +3230,7 @@ fun CampaignCardItem(
           ) {
             Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(14.dp))
             Spacer(modifier = Modifier.width(4.dp))
-            Text("Complete")
+            Text("Close")
           }
         }
       }
@@ -2483,20 +3240,39 @@ fun CampaignCardItem(
 
 @Composable
 fun CampaignEditorDialog(
+  existingCampaign: CampaignItem? = null,
   onDismiss: () -> Unit,
-  onSave: (title: String, client: String, desc: String, budgetCents: Long, target: Long, category: String, rewardCents: Long) -> Unit
+  onSave: (
+    title: String,
+    client: String,
+    desc: String,
+    budgetCents: Long,
+    target: Long,
+    category: String,
+    rewardCents: Long,
+    startDate: String,
+    endDate: String,
+    eligibilityRules: String,
+    appIconUrl: String,
+    taskLink: String
+  ) -> Unit
 ) {
-  var title by remember { mutableStateOf("") }
-  var clientName by remember { mutableStateOf("") }
-  var description by remember { mutableStateOf("") }
-  var budgetStr by remember { mutableStateOf("50000") } // 50,000 Coins
-  var targetStr by remember { mutableStateOf("100") } // 100 submissions
-  var rewardStr by remember { mutableStateOf("500") } // 500 Coins per task
-  var category by remember { mutableStateOf("App Install") }
+  var title by remember { mutableStateOf(existingCampaign?.title ?: "") }
+  var clientName by remember { mutableStateOf(existingCampaign?.clientName ?: "") }
+  var description by remember { mutableStateOf(existingCampaign?.description ?: "") }
+  var budgetStr by remember { mutableStateOf((existingCampaign?.budgetCents ?: 50000L).toString()) }
+  var targetStr by remember { mutableStateOf((existingCampaign?.targetSubmissions ?: 100L).toString()) }
+  var rewardStr by remember { mutableStateOf((existingCampaign?.rewardPerTaskCents ?: 500L).toString()) }
+  var category by remember { mutableStateOf(existingCampaign?.category ?: "App Install") }
+  var startDate by remember { mutableStateOf(existingCampaign?.startDate ?: "") }
+  var endDate by remember { mutableStateOf(existingCampaign?.endDate ?: "") }
+  var eligibilityRules by remember { mutableStateOf(existingCampaign?.eligibilityRules ?: "All Approved Users") }
+  var appIconUrl by remember { mutableStateOf(existingCampaign?.appIconUrl ?: "") }
+  var taskLink by remember { mutableStateOf(existingCampaign?.taskLink ?: "") }
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text("Launch Partner Campaign", fontWeight = FontWeight.Bold) },
+    title = { Text(if (existingCampaign == null) "Launch Partner Campaign" else "Edit Campaign", fontWeight = FontWeight.Bold) },
     text = {
       Column(
         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -2525,6 +3301,18 @@ fun CampaignEditorDialog(
           minLines = 2
         )
         Row(
+          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+          TaskCategories.ALL.forEach { cat ->
+            FilterChip(
+              selected = category == cat,
+              onClick = { category = cat },
+              label = { Text(cat) }
+            )
+          }
+        }
+        Row(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -2541,10 +3329,48 @@ fun CampaignEditorDialog(
             modifier = Modifier.weight(1f)
           )
         }
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          OutlinedTextField(
+            value = targetStr,
+            onValueChange = { targetStr = it.filter { ch -> ch.isDigit() } },
+            label = { Text("Campaign Quota") },
+            modifier = Modifier.weight(1f)
+          )
+          OutlinedTextField(
+            value = eligibilityRules,
+            onValueChange = { eligibilityRules = it },
+            label = { Text("Eligible Users") },
+            modifier = Modifier.weight(1f)
+          )
+        }
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          OutlinedTextField(
+            value = startDate,
+            onValueChange = { startDate = it },
+            label = { Text("Start Date") },
+            placeholder = { Text("2025-01-01") },
+            modifier = Modifier.weight(1f)
+          )
+          OutlinedTextField(
+            value = endDate,
+            onValueChange = { endDate = it },
+            label = { Text("End Date") },
+            placeholder = { Text("2025-12-31") },
+            modifier = Modifier.weight(1f)
+          )
+        }
         OutlinedTextField(
-          value = targetStr,
-          onValueChange = { targetStr = it.filter { ch -> ch.isDigit() } },
-          label = { Text("Target Submissions") },
+          value = taskLink,
+          onValueChange = { taskLink = it },
+          label = { Text("Campaign / App HTTPS Link (Optional)") },
+          placeholder = { Text("https://play.google.com/store/apps/details?id=...") },
+          singleLine = true,
           modifier = Modifier.fillMaxWidth()
         )
       }
@@ -2555,11 +3381,24 @@ fun CampaignEditorDialog(
           val budget = budgetStr.toLongOrNull() ?: 50000L
           val target = targetStr.toLongOrNull() ?: 100L
           val reward = rewardStr.toLongOrNull() ?: 500L
-          onSave(title, clientName, description, budget, target, category, reward)
+          onSave(
+            title.trim(),
+            clientName.trim(),
+            description.trim(),
+            budget,
+            target,
+            category,
+            reward,
+            startDate.trim(),
+            endDate.trim(),
+            eligibilityRules.trim().ifBlank { "All Approved Users" },
+            appIconUrl.trim(),
+            taskLink.trim()
+          )
         },
         enabled = title.isNotBlank() && clientName.isNotBlank()
       ) {
-        Text("Launch Campaign")
+        Text(if (existingCampaign == null) "Launch Campaign" else "Save Changes")
       }
     },
     dismissButton = {
