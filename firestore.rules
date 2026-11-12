@@ -245,10 +245,40 @@ service cloud.firestore {
     // Admin crediting a user's wallet as part of an atomic task + submission approval batch
     function isAtomicTaskApprovalForUser(userId) {
       return isAdmin() &&
-             changedKeys().hasOnly(['balanceCents', 'completedTasksCount', 'assignedTaskId', 'updatedAt']) &&
+             changedKeys().hasOnly(['balanceCents', 'balanceCoins', 'eligibleCoins', 'completedTasksCount', 'assignedTaskId', 'updatedAt']) &&
              isNonEmptyString(incoming().assignedTaskId, 128) &&
              incoming().updatedAt is timestamp &&
              isTaskAndSubmissionApprovedForUser(incoming().assignedTaskId, userId);
+    }
+
+    // Approved user updating promotional Coin balance or Spin/Check-in state atomically
+    // Never allows modifying balanceCents, eligibleCoins, role, approvalStatus, or completedTasksCount.
+    function isAtomicPromotionalCoinOrSpinUpdate(userId) {
+      let oldPromo = ('promotionalCoins' in existing() && existing().promotionalCoins is int) ? existing().promotionalCoins : 0;
+      let newPromo = ('promotionalCoins' in incoming() && incoming().promotionalCoins is int) ? incoming().promotionalCoins : oldPromo;
+      let promoDelta = newPromo - oldPromo;
+      return request.auth.uid == userId &&
+             isApprovedUser(userId) &&
+             incoming().balanceCents == existing().balanceCents &&
+             incoming().role == existing().role &&
+             incoming().approvalStatus == existing().approvalStatus &&
+             incoming().completedTasksCount == existing().completedTasksCount &&
+             changedKeys().hasOnly([
+               'balanceCoins',
+               'promotionalCoins',
+               'lastCheckInDate',
+               'checkInStreak',
+               'lastCheckInTimestamp',
+               'lastFreeSpinAt',
+               'extraSpinVideosWatched',
+               'extraSpinAvailable',
+               'updatedAt'
+             ]) &&
+             promoDelta >= 0 &&
+             promoDelta <= 1000 &&
+             (!('extraSpinVideosWatched' in incoming()) || (incoming().extraSpinVideosWatched is int && incoming().extraSpinVideosWatched >= 0 && incoming().extraSpinVideosWatched <= 2)) &&
+             (!('extraSpinAvailable' in incoming()) || incoming().extraSpinAvailable is bool) &&
+             incoming().updatedAt is timestamp;
     }
 
     // =========================================================================
@@ -299,6 +329,7 @@ service cloud.firestore {
                'taskLink',
                'category',
                'rewardCents',
+               'rewardCoins',
                'assignedUserId',
                'assignedUserName',
                'assignedUserEmail',
@@ -340,6 +371,7 @@ service cloud.firestore {
              incoming().rewardCents is int &&
              incoming().rewardCents > 0 &&
              incoming().rewardCents <= 10000000 &&
+             (!('rewardCoins' in incoming()) || (incoming().rewardCoins is int && incoming().rewardCoins > 0)) &&
              isNonEmptyString(incoming().assignedUserId, 128) &&
              isNonEmptyString(incoming().assignedUserName, 100) &&
              isNonEmptyString(incoming().assignedUserEmail, 254) &&
@@ -382,6 +414,7 @@ service cloud.firestore {
                'taskLink',
                'category',
                'rewardCents',
+               'rewardCoins',
                'assignedUserId',
                'assignedUserName',
                'assignedUserEmail',
@@ -459,6 +492,7 @@ service cloud.firestore {
                'appName',
                'appIconUrl',
                'rewardCents',
+               'rewardCoins',
                'userId',
                'userName',
                'userEmail',
@@ -522,6 +556,7 @@ service cloud.firestore {
                'appName',
                'appIconUrl',
                'rewardCents',
+               'rewardCoins',
                'userId',
                'userName',
                'userEmail',
@@ -634,7 +669,18 @@ service cloud.firestore {
       let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
       return isSignedIn() &&
              isApprovedUser(request.auth.uid) &&
-             hasExactKeys([
+             incoming().keys().hasOnly([
+               'requestId',
+               'userId',
+               'userName',
+               'amountCents',
+               'amountCoins',
+               'method',
+               'status',
+               'isDemo',
+               'createdAt'
+             ]) &&
+             incoming().keys().hasAll([
                'requestId',
                'userId',
                'userName',
@@ -675,7 +721,18 @@ service cloud.firestore {
 
     function isValidAdminTaskRewardTransaction() {
       return isAdmin() &&
-             hasExactKeys([
+             incoming().keys().hasOnly([
+               'userId',
+               'userName',
+               'type',
+               'title',
+               'amountCents',
+               'amountCoins',
+               'status',
+               'referenceId',
+               'createdAt'
+             ]) &&
+             incoming().keys().hasAll([
                'userId',
                'userName',
                'type',
@@ -707,7 +764,18 @@ service cloud.firestore {
     function isValidClientDemoWithdrawalTransaction() {
       return isSignedIn() &&
              isApprovedUser(request.auth.uid) &&
-             hasExactKeys([
+             incoming().keys().hasOnly([
+               'userId',
+               'userName',
+               'type',
+               'title',
+               'amountCents',
+               'amountCoins',
+               'status',
+               'referenceId',
+               'createdAt'
+             ]) &&
+             incoming().keys().hasAll([
                'userId',
                'userName',
                'type',
@@ -727,6 +795,49 @@ service cloud.firestore {
              incoming().amountCents >= 20000 &&
              incoming().createdAt is timestamp &&
              isMatchingWithdrawalRequestAfter(incoming().referenceId, request.auth.uid, incoming().amountCents);
+    }
+
+    function isValidAtomicPromotionalCoinTransaction() {
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let oldPromo = ('promotionalCoins' in get(userPath).data && get(userPath).data.promotionalCoins is int)
+        ? get(userPath).data.promotionalCoins
+        : 0;
+      return isSignedIn() &&
+             isApprovedUser(request.auth.uid) &&
+             incoming().keys().hasOnly([
+               'userId',
+               'userName',
+               'type',
+               'title',
+               'amountCents',
+               'amountCoins',
+               'status',
+               'referenceId',
+               'createdAt'
+             ]) &&
+             incoming().keys().hasAll([
+               'userId',
+               'userName',
+               'type',
+               'title',
+               'amountCents',
+               'amountCoins',
+               'status',
+               'referenceId',
+               'createdAt'
+             ]) &&
+             incoming().userId == request.auth.uid &&
+             (incoming().type == 'DAILY_CHECKIN' || incoming().type == 'WATCH_EARN' || incoming().type == 'SPIN_EARN') &&
+             incoming().status == 'CREDITED' &&
+             isNonEmptyString(incoming().referenceId, 128) &&
+             isNonEmptyString(incoming().userName, 100) &&
+             isNonEmptyString(incoming().title, 200) &&
+             incoming().amountCoins is int &&
+             incoming().amountCoins >= 1 &&
+             incoming().amountCoins <= 1000 &&
+             incoming().createdAt is timestamp &&
+             existsAfter(userPath) &&
+             getAfter(userPath).data.promotionalCoins == oldPromo + incoming().amountCoins;
     }
 
     function isValidAdminDoc(adminId) {
@@ -774,20 +885,51 @@ service cloud.firestore {
         isValidAdminDisplayNameUpdate() ||
         isAtomicTaskAssignmentToUser(userId) ||
         isAtomicTaskUnassignmentFromUser(userId) ||
-        isAtomicTaskApprovalForUser(userId)
+        isAtomicTaskApprovalForUser(userId) ||
+        isAtomicPromotionalCoinOrSpinUpdate(userId)
       );
       allow delete: if false;
 
-      // Daily check-in records are strictly written by trusted Cloud Functions (Admin SDK).
+      // Daily check-in records: only allowed when atomically paired with a promotionalCoins update
       match /check_ins/{dateKey} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow create, update, delete: if false;
+        allow create: if isSignedIn() &&
+                      request.auth.uid == userId &&
+                      isApprovedUser(userId) &&
+                      ('rewardCoins' in incoming()) &&
+                      incoming().rewardCoins is int &&
+                      incoming().rewardCoins >= 1 &&
+                      incoming().rewardCoins <= 1000 &&
+                      getAfter(/databases/$(database)/documents/users/$(userId)).data.lastCheckInDate == dateKey;
+        allow update, delete: if false;
       }
 
-      // Per-user watch stats are strictly written by trusted Cloud Functions (Admin SDK).
+      // Per-user watch stats: only allowed when atomically paired with a promotionalCoins update
       match /watch_stats/{dateKey} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow create, update, delete: if false;
+        allow create, update: if isSignedIn() &&
+                              request.auth.uid == userId &&
+                              isApprovedUser(userId) &&
+                              ('totalEarnedCoins' in incoming()) &&
+                              incoming().totalEarnedCoins is int &&
+                              incoming().videosWatched is int &&
+                              incoming().videosWatched >= 1 &&
+                              incoming().videosWatched <= 50 &&
+                              getAfter(/databases/$(database)/documents/users/$(userId)).data.promotionalCoins > 0;
+        allow delete: if false;
+      }
+
+      // Per-user spin sessions & watch ad sessions
+      match /spin_sessions/{sessionId} {
+        allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create, update: if isSignedIn() && request.auth.uid == userId && isApprovedUser(userId);
+        allow delete: if false;
+      }
+
+      match /ad_sessions/{sessionId} {
+        allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create, update: if isSignedIn() && request.auth.uid == userId && isApprovedUser(userId);
+        allow delete: if false;
       }
 
       // In-app notifications
@@ -809,27 +951,28 @@ service cloud.firestore {
     }
 
     // Transactions:
-    // - Daily Check-in and Watch & Earn reward transactions are created exclusively by Cloud Functions.
     // - Task reward transactions require atomic Admin task approval.
     // - Demo withdrawal transactions require atomic approved-user withdrawal request creation.
+    // - Promotional Coin transactions (DAILY_CHECKIN, WATCH_EARN, SPIN_EARN) require atomic promotionalCoins credit.
     match /transactions/{transactionId} {
       allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && (
         isValidAdminTaskRewardTransaction() ||
-        isValidClientDemoWithdrawalTransaction()
+        isValidClientDemoWithdrawalTransaction() ||
+        isValidAtomicPromotionalCoinTransaction()
       );
       allow update, delete: if false;
     }
 
-    // Reward sessions are created, S2S-verified, and claimed exclusively by Cloud Functions (Admin SDK).
+    // Legacy reward_sessions collection remains locked down to Admin SDK only.
     match /reward_sessions/{sessionId} {
       allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create, update, delete: if false;
     }
 
-    // Top-level watch_stats are written exclusively by Cloud Functions (Admin SDK).
+    // Top-level watch_stats: only allowed when atomically paired with a promotionalCoins update
     match /watch_stats/{statId} {
       allow get: if isSignedIn() && (
         statId.matches('^' + request.auth.uid + '_.*') ||
@@ -837,7 +980,16 @@ service cloud.firestore {
         isAdmin()
       );
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create, update, delete: if false;
+      allow create, update: if isSignedIn() &&
+                            isApprovedUser(request.auth.uid) &&
+                            incoming().userId == request.auth.uid &&
+                            ('totalEarnedCoins' in incoming()) &&
+                            incoming().totalEarnedCoins is int &&
+                            incoming().videosWatched is int &&
+                            incoming().videosWatched >= 1 &&
+                            incoming().videosWatched <= 50 &&
+                            getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.promotionalCoins > 0;
+      allow delete: if false;
     }
 
     match /tasks/{taskId} {

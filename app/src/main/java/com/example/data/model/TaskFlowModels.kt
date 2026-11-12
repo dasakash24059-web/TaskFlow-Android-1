@@ -15,9 +15,27 @@ const val BOOTSTRAPPED_ADMIN_EMAIL = "dasakash24059@gmail.com"
 const val ADMIN_EMAIL_PRIVACY_PLACEHOLDER = "Authorized Administrator"
 
 /**
- * Minimum withdrawal amount in INR paise (₹200.00 = 20,000 paise).
+ * Minimum withdrawal amount in INR paise (₹200.00 = 20,000 paise) and in Coins (25,000 Coins).
+ * Conversion: 125 Coins = ₹1 (100 paise).
  */
 const val MIN_WITHDRAWAL_CENTS = 20_000L
+const val MIN_WITHDRAWAL_COINS = 25_000L
+const val COINS_PER_RUPEE = 125L
+
+/**
+ * Converts legacy INR paise (cents) to integer Coins using 125 Coins = ₹1 (100 paise).
+ */
+fun centsToCoins(cents: Long): Long = (cents * COINS_PER_RUPEE) / 100L
+
+/**
+ * Converts integer Coins to INR paise (cents) using 125 Coins = ₹1 (100 paise).
+ */
+fun coinsToCents(coins: Long): Long = (coins * 100L) / COINS_PER_RUPEE
+
+/**
+ * Formats integer Coins for user-facing display (e.g., "25,000 Coins").
+ */
+fun formatCoins(coins: Long): String = "${String.format(Locale.US, "%,d", coins)} Coins"
 
 /**
  * Returns true if the given email or role belongs to the administrator.
@@ -123,6 +141,7 @@ object TransactionType {
   const val TASK_REWARD = "TASK_REWARD"
   const val DEMO_WITHDRAWAL = "DEMO_WITHDRAWAL"
   const val WATCH_EARN = "WATCH_EARN"
+  const val SPIN_EARN = "SPIN_EARN"
 }
 
 data class TransactionRecord(
@@ -132,16 +151,21 @@ data class TransactionRecord(
   val type: String = TransactionType.DAILY_CHECKIN,
   val title: String = "",
   val amountCents: Long = 0L,
+  val amountCoins: Long = 0L,
   val status: String = "CREDITED",
   val referenceId: String = "",
   @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+  fun getEffectiveAmountCoins(): Long =
+    if (amountCoins > 0L) amountCoins else centsToCoins(amountCents)
+}
 
 data class WatchStats(
   val userId: String = "",
   val dateKey: String = "",
   val videosWatched: Long = 0L,
-  val totalEarnedCents: Long = 0L
+  val totalEarnedCents: Long = 0L,
+  val totalEarnedCoins: Long = 0L
 )
 
 enum class WatchEarnFlowStatus {
@@ -157,6 +181,8 @@ enum class WatchEarnFlowStatus {
 data class WatchEarnUiState(
   val status: WatchEarnFlowStatus = WatchEarnFlowStatus.IDLE,
   val activeSessionId: String = "",
+  val videosCompletedInCycle: Int = 0,
+  val lastRewardCoins: Long = 0L,
   val statusMessage: String = "",
   val errorMessage: String? = null
 ) {
@@ -172,11 +198,40 @@ data class WatchEarnUiState(
     get() = status == WatchEarnFlowStatus.ERROR
 }
 
+object SpinWheelConstants {
+  val SEGMENTS_COINS = listOf(10L, 20L, 30L, 40L, 50L, 100L, 125L, 150L)
+  const val FREE_SPIN_COOLDOWN_MS = 24L * 60L * 60L * 1000L
+  const val EXTRA_SPIN_REQUIRED_VIDEOS = 2
+}
+
+data class SpinSessionOutcome(
+  val sessionId: String,
+  val segmentIndex: Int,
+  val rewardCoins: Long,
+  val usedFreeSpin: Boolean = false
+)
+
 data class SpinEarnUiState(
   val spinsUsed: Int = 0,
-  val lastSpinResult: Long = 0,
+  val lastSpinResult: Long = 0L,
   val isSpinning: Boolean = false,
-  val activeSessionId: String = ""
+  val isLoadingAd: Boolean = false,
+  val isClaiming: Boolean = false,
+  val activeSessionId: String = "",
+  val selectedSegmentIndex: Int? = null,
+  val selectedRewardCoins: Long? = null,
+  val freeSpinAvailable: Boolean = true,
+  val freeSpinNextAvailableAtMillis: Long = 0L,
+  val extraSpinVideosWatched: Int = 0,
+  val adsWatchedForSpin: Int = 0,
+  val extraSpinAvailable: Boolean = false,
+  val isWatchingExtraSpinAd: Boolean = false,
+  val isReadyToClaim: Boolean = false,
+  val isClaimingRewardAd: Boolean = false,
+  val claimedRewardCoins: Long = 0L,
+  val lastClaimedCoins: Long = 0L,
+  val statusMessage: String = "",
+  val errorMessage: String? = null
 )
 
 object DailyCheckInConstants {
@@ -278,26 +333,48 @@ data class UserProfile(
   val userId: String = "",
   val email: String = "",
   val displayName: String = "",
+  val photoUrl: String = "",
   val role: String = "user",
   val approvalStatus: String = "approved",
-  val balanceCents: Long = 0L, // Legacy
-  val balanceCoins: Long = 0L, // New
+  val balanceCents: Long = 0L, // Legacy (100 paise = ₹1 = 125 Coins)
+  val balanceCoins: Long = 0L, // Total Coin balance
+  val eligibleCoins: Long = 0L, // Eligible task-earned withdrawable Coins
+  val promotionalCoins: Long = 0L, // Ad/Spin/Check-in promotional Coins (non-withdrawable directly)
   val virtualPoints: Long = 0L,
   val completedTasksCount: Long = 0L,
   val assignedTaskId: String = "",
   val lastCheckInDate: String = "",
   val checkInStreak: Long = 0L,
+  val lastFreeSpinAt: Timestamp? = null,
+  val extraSpinVideosWatched: Long = 0L,
+  val extraSpinAvailable: Boolean = false,
   @ServerTimestamp val lastCheckInTimestamp: Timestamp? = null,
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
-// Helper to convert legacy cents to coins
-fun UserProfile.getEffectiveBalanceCoins(): Long {
-    if (balanceCoins > 0) return balanceCoins
-    return balanceCents / 125 // Migration: 125 Coins = ₹1 (100 paise) -> 1.25 Coins = 1 paise
+/**
+ * Returns the user's eligible withdrawable Coins (earned from approved tasks).
+ * 125 Coins = ₹1 (100 paise).
+ */
+fun UserProfile.getEligibleWithdrawalCoins(): Long {
+  if (eligibleCoins > 0L) return eligibleCoins
+  return centsToCoins(balanceCents)
 }
 
+/**
+ * Returns the user's promotional Coins (earned from Spin, Watch & Earn, Daily Check-in).
+ */
+fun UserProfile.getPromotionalBalanceCoins(): Long = promotionalCoins
+
+/**
+ * Returns the user's total effective Coin balance (eligible + promotional Coins).
+ * 125 Coins = ₹1 (100 paise) -> centsToCoins(balanceCents) = (balanceCents * 125) / 100.
+ */
+fun UserProfile.getEffectiveBalanceCoins(): Long {
+  val combined = getEligibleWithdrawalCoins() + promotionalCoins
+  return maxOf(balanceCoins, combined)
+}
 
 data class TaskItem(
   @DocumentId val id: String = "",
@@ -325,6 +402,8 @@ data class TaskItem(
   @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
   fun isAvailableForNewSubmission(): Boolean = status == TaskStatus.PENDING && isActive
+  fun getEffectiveRewardCoins(): Long =
+    if (rewardCoins > 0L) rewardCoins else centsToCoins(rewardCents)
 }
 
 data class SubmissionItem(
@@ -346,6 +425,9 @@ data class SubmissionItem(
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+  fun getEffectiveRewardCoins(): Long =
+    if (rewardCoins > 0L) rewardCoins else centsToCoins(rewardCents)
+
   /**
    * Converts a preserved `/submissions/{id}` document into a `TaskItem` representation so user
    * history and activity remain intact even if the original task in `/tasks` was deleted by Admin.
@@ -419,11 +501,15 @@ data class DemoWithdrawalRequest(
   val userId: String = "",
   val userName: String = "",
   val amountCents: Long = 0L,
+  val amountCoins: Long = 0L,
   val method: String = WithdrawalMethod.BANK_ACCOUNT,
   val status: String = "pending_demo",
   val isDemo: Boolean = true,
   @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+  fun getEffectiveAmountCoins(): Long =
+    if (amountCoins > 0L) amountCoins else centsToCoins(amountCents)
+}
 
 data class UserActivityItem(
   val id: String,

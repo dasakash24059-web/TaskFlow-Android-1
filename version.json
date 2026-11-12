@@ -1,7 +1,7 @@
 {
-  "latest_version_code": 10,
-  "latest_version_name": "2.9",
+  "latest_version_code": 24,
+  "latest_version_name": "4.4",
   "download_url": "https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk",
-  "release_notes": "TaskFlow update v2.9: Complete full APK update with updated UI layouts, button sizes, branding assets, colors, and direct Daily Check-in rewards.",
+  "release_notes": "TaskFlow update v4.4: Complete Coin reward system (125 Coins = ₹1), 30-day 5x6 Daily Check-in grid, 2-video Watch & Earn flow, 24h Spin & Earn wheel with extra spins, and dark glassmorphism UI.",
   "force_update": false
 }

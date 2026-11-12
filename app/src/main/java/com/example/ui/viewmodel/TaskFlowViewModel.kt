@@ -12,7 +12,11 @@ import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DailyCheckInState
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
+import com.example.data.model.MIN_WITHDRAWAL_COINS
 import com.example.data.model.NotificationItem
+import com.example.data.model.SpinEarnUiState
+import com.example.data.model.SpinSessionOutcome
+import com.example.data.model.SpinWheelConstants
 import com.example.data.model.SubmissionItem
 import com.example.data.model.SupportTicket
 import com.example.data.model.TaskItem
@@ -24,13 +28,18 @@ import com.example.data.model.UserProfile
 import com.example.data.model.WatchStats
 import com.example.data.model.WithdrawalMethod
 import com.example.data.model.calculateDailyCheckInState
+import com.example.data.model.centsToCoins
+import com.example.data.model.coinsToCents
+import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
+import com.example.data.model.getEligibleWithdrawalCoins
 import com.example.data.model.getTodayDateKey
 import com.example.data.model.isValidImageUrlOrDataUri
 import com.example.data.model.isValidTaskUrl
 import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.data.repository.TaskFlowRepository
 import com.example.ui.auth.PortalLoginTarget
+import java.util.UUID
 import kotlin.math.roundToLong
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -314,6 +323,33 @@ class TaskFlowViewModel(
           }
       }
     }
+
+    // Continuously synchronize Spin & Earn 24-hour Free Spin cooldown and Extra Spin progress from Firestore
+    viewModelScope.launch {
+      userProfileState.collect { state ->
+        val profile = (state as? UiState.Success)?.data ?: return@collect
+        val lastFreeSpinMillis = profile.lastFreeSpinAt?.toDate()?.time ?: 0L
+        val nextAvailableAt =
+          if (lastFreeSpinMillis > 0L) {
+            lastFreeSpinMillis + SpinWheelConstants.FREE_SPIN_COOLDOWN_MS
+          } else {
+            0L
+          }
+        val now = System.currentTimeMillis()
+        val isFreeAvailable = lastFreeSpinMillis <= 0L || now >= nextAvailableAt
+        val videosWatched = profile.extraSpinVideosWatched.toInt().coerceIn(0, 2)
+        val isExtraAvailable = profile.extraSpinAvailable || videosWatched >= 2
+        val currentSpin = _spinEarnUiState.value
+        _spinEarnUiState.value =
+          currentSpin.copy(
+            freeSpinAvailable = isFreeAvailable,
+            freeSpinNextAvailableAtMillis = if (isFreeAvailable) 0L else nextAvailableAt,
+            extraSpinVideosWatched = videosWatched,
+            extraSpinAvailable = isExtraAvailable,
+            adsWatchedForSpin = videosWatched
+          )
+      }
+    }
   }
 
   fun setPortal(portal: PortalLoginTarget) {
@@ -424,25 +460,35 @@ class TaskFlowViewModel(
       }
     }
 
-    val parsedAmountInr = amountInrInput.trim().toDoubleOrNull()
-    if (parsedAmountInr == null || parsedAmountInr <= 0.0) {
-      val msg = "Please enter a valid withdrawal amount in INR (₹)."
+    val cleanedInput = amountInrInput.trim().replace(",", "")
+    val parsedValue = cleanedInput.toDoubleOrNull()
+    if (parsedValue == null || parsedValue <= 0.0) {
+      val msg = "Please enter a valid withdrawal amount in Coins (Minimum: 25,000 Coins)."
       _withdrawalValidationError.value = msg
       return
     }
 
-    val amountCents = (parsedAmountInr * 100.0).roundToLong()
+    // Support both Coin input (>= 25,000 Coins) and legacy INR test input (200..24999)
+    val amountCents =
+      if (parsedValue >= MIN_WITHDRAWAL_COINS.toDouble()) {
+        coinsToCents(parsedValue.roundToLong())
+      } else {
+        (parsedValue * 100.0).roundToLong()
+      }
+    val requestedCoins = centsToCoins(amountCents)
+
     if (amountCents < MIN_WITHDRAWAL_CENTS) {
-      val msg = "Minimum withdrawal amount is ₹200.00."
+      val msg = "Minimum withdrawal amount is 25,000 Coins."
       _withdrawalValidationError.value = msg
       return
     }
 
     val profile = (userProfileState.value as? UiState.Success)?.data
     val availableBalanceCents = profile?.balanceCents ?: 0L
+    val availableEligibleCoins = profile?.getEligibleWithdrawalCoins() ?: 0L
     if (amountCents > availableBalanceCents) {
       val msg =
-        "Entered amount (${formatRewardInr(amountCents)}) exceeds your available balance of ${formatRewardInr(availableBalanceCents)}."
+        "Entered amount (${formatCoins(requestedCoins)}) exceeds your eligible withdrawable balance of ${formatCoins(availableEligibleCoins)}."
       _withdrawalValidationError.value = msg
       return
     }
@@ -464,7 +510,7 @@ class TaskFlowViewModel(
         .onSuccess {
           _withdrawalValidationError.value = null
           _bannerMessage.value =
-            "Demo withdrawal request of ${formatRewardInr(amountCents)} via $cleanedMethod submitted! Status: Demo / Pending."
+            "Withdrawal request of ${formatCoins(requestedCoins)} via $cleanedMethod submitted!"
           onSuccess()
         }
         .onFailure { err ->
@@ -744,7 +790,7 @@ class TaskFlowViewModel(
     onSuccess: (Long) -> Unit = {}
   ) {
     val currentState = dailyCheckInState.value
-    val targetStreak = if (day in 1..7) day else currentState.nextClaimDay
+    val targetStreak = if (day in 1..30) day else currentState.nextClaimDay
 
     if (!currentState.canCheckInToday) {
       _bannerMessage.value = "You have already claimed today's check-in reward! Come back tomorrow."
@@ -755,12 +801,13 @@ class TaskFlowViewModel(
       if (targetStreak <= currentState.currentStreak) {
         _bannerMessage.value = "Day $targetStreak has already been claimed!"
       } else {
-        _bannerMessage.value = "Day $targetStreak is locked. Please complete Day ${currentState.nextClaimDay} first."
+        _bannerMessage.value =
+          "Day $targetStreak is locked. Please complete Day ${currentState.nextClaimDay} first."
       }
       return
     }
 
-    val rewardCents = DailyCheckInConstants.getRewardForDay(targetStreak)
+    val rewardCoins = DailyCheckInConstants.getRewardCoinsForDay(targetStreak)
     val todayKey = com.example.data.model.getTodayDateKey()
     val uid = currentUserId
     val name = (userProfileState.value as? UiState.Success)?.data?.displayName ?: "TaskFlow Member"
@@ -774,27 +821,58 @@ class TaskFlowViewModel(
       return
     }
 
-    viewModelScope.launch {
+    val executeClaim: () -> Unit = {
+      viewModelScope.launch {
+        _isBusy.value = true
+        repository
+          .claimDailyCheckIn(
+            userId = uid,
+            streakDay = targetStreak,
+            rewardCents = rewardCoins,
+            dateKey = todayKey,
+            userName = name,
+            verifiedAdCallbackToken = null
+          )
+          .onSuccess { earned ->
+            _bannerMessage.value =
+              "Success! Day $targetStreak check-in claimed: +${formatCoins(earned)}"
+            onSuccess(earned)
+          }
+          .onFailure { error ->
+            val rawMsg = error.localizedMessage ?: "Failed to claim check-in reward."
+            val cleanMsg =
+              if (rawMsg.contains("NOT_FOUND", ignoreCase = true)) {
+                "Unable to complete check-in right now. Please try again."
+              } else {
+                rawMsg
+              }
+            _bannerMessage.value = cleanMsg
+          }
+        _isBusy.value = false
+      }
+    }
+
+    if (activity != null) {
       _isBusy.value = true
-      repository
-        .claimDailyCheckIn(
-          userId = uid,
-          streakDay = targetStreak,
-          rewardCents = rewardCents,
-          dateKey = todayKey,
-          userName = name,
-          verifiedAdCallbackToken = null
-        )
-        .onSuccess { earned ->
+      val adSessionId = "checkin_${uid}_${todayKey}_${UUID.randomUUID()}"
+      com.example.util.UnityAdsHelper.loadAndShowRewardedAdForSession(
+        activity = activity,
+        sessionId = adSessionId,
+        onAdShowing = {
+          _bannerMessage.value = "Watching video to unlock Day $targetStreak check-in reward..."
+        },
+        onVideoCompleted = {
+          _isBusy.value = false
+          executeClaim()
+        },
+        onFailed = { errMsg ->
+          _isBusy.value = false
           _bannerMessage.value =
-            "Success! Day $targetStreak check-in claimed: +${formatRewardInr(earned)}"
-          onSuccess(earned)
+            errMsg.ifBlank { com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE }
         }
-        .onFailure { error ->
-          _bannerMessage.value =
-            error.localizedMessage ?: "Failed to claim check-in reward."
-        }
-      _isBusy.value = false
+      )
+    } else {
+      executeClaim()
     }
   }
 
@@ -817,14 +895,11 @@ class TaskFlowViewModel(
   }
 
   /**
-   * Step 1 & 2 of Watch & Earn:
-   * - Prevents rapid duplicate taps
-   * - Shows loading indicator
-   * - Creates a unique server-verified reward session bound to currentUserId
-   * - Binds sessionId via PlayerMetaData.setServerId(sessionId)
-   * - Loads and shows BP_Rewarded_Android
-   * - Upon COMPLETED state and backend verification, transitions to READY_TO_CLAIM so the
-   *   "Claim" button appears (never auto-credits on ad start or completion).
+   * Watch & Earn 2-Video Cycle — Step 1 (Video 1 of 2):
+   * - User taps "Watch Video"
+   * - Creates an authenticated reward session bound to currentUserId
+   * - Plays 1st rewarded video via UnityAdsHelper
+   * - Only after 1st video completes does the Claim button appear (videosCompletedInCycle = 1).
    */
   fun startWatchEarnVideo(activity: android.app.Activity) {
     android.util.Log.i("WatchEarnFlow", "[Step 1] startWatchEarnVideo invoked by user tap")
@@ -836,15 +911,10 @@ class TaskFlowViewModel(
     }
     val currentFlow = _watchEarnUiState.value
     if (currentFlow.isLoadingAd || currentFlow.isClaiming) {
-      android.util.Log.w(
-        "WatchEarnFlow",
-        "[Step 1] Ignored duplicate tap: isLoadingAd=${currentFlow.isLoadingAd}, isClaiming=${currentFlow.isClaiming}"
-      )
       return
     }
     val stats = watchStats.value
     if (stats.videosWatched >= 25L) {
-      android.util.Log.w("WatchEarnFlow", "[Step 1] Daily limit reached: ${stats.videosWatched}/25")
       _watchEarnUiState.value =
         com.example.data.model.WatchEarnUiState(
           status = com.example.data.model.WatchEarnFlowStatus.ERROR,
@@ -857,86 +927,72 @@ class TaskFlowViewModel(
     _watchEarnUiState.value =
       com.example.data.model.WatchEarnUiState(
         status = com.example.data.model.WatchEarnFlowStatus.LOADING_AD,
-        statusMessage = "Loading video..."
+        videosCompletedInCycle = 0,
+        statusMessage = "Loading Video 1 of 2..."
       )
 
     viewModelScope.launch {
       val sessionResult = repository.createWatchEarnSession(uid, todayKey)
       val sessionId =
         sessionResult.getOrElse { err ->
-          android.util.Log.e(
-            "WatchEarnFlow",
-            "[Step 4] Reward session creation failed: ${err.message}",
-            err
-          )
           val msg = err.localizedMessage ?: ""
-          val userMessage =
-            if (msg.contains("Daily limit", ignoreCase = true) || msg.contains("sign in", ignoreCase = true)) {
-              msg
-            } else {
-              msg.ifBlank { "Failed to create reward session. Please try again." }
-            }
-          _watchEarnUiState.value =
-            com.example.data.model.WatchEarnUiState(
-              status = com.example.data.model.WatchEarnFlowStatus.ERROR,
-              errorMessage = userMessage
-            )
-          return@launch
+          if (
+            msg.contains("Daily limit", ignoreCase = true) ||
+              msg.contains("sign in", ignoreCase = true) ||
+              msg.contains("approved", ignoreCase = true)
+          ) {
+            _watchEarnUiState.value =
+              com.example.data.model.WatchEarnUiState(
+                status = com.example.data.model.WatchEarnFlowStatus.ERROR,
+                errorMessage = msg
+              )
+            return@launch
+          }
+          "ad_${UUID.randomUUID().toString().replace("-", "")}"
         }
 
       com.example.util.UnityAdsHelper.loadAndShowRewardedAdForSession(
         activity = activity,
         sessionId = sessionId,
         onAdShowing = {
-          android.util.Log.i("WatchEarnFlow", "[Step 9] Rewarded video is now showing on screen")
           _watchEarnUiState.value =
             com.example.data.model.WatchEarnUiState(
               status = com.example.data.model.WatchEarnFlowStatus.SHOWING_AD,
               activeSessionId = sessionId,
-              statusMessage = "Watching video... Please watch until the end."
+              videosCompletedInCycle = 0,
+              statusMessage = "Watching Video 1 of 2... Please watch until the end."
             )
         },
         onVideoCompleted = {
-          android.util.Log.i(
-            "WatchEarnFlow",
-            "[Step 9] Rewarded video COMPLETED; verifying session on backend before enabling Claim"
-          )
           viewModelScope.launch {
             repository
               .verifyWatchEarnSessionCompleted(uid, sessionId)
               .onSuccess {
-                android.util.Log.i(
-                  "WatchEarnFlow",
-                  "[Step 9] Session verified; transitioning UI to READY_TO_CLAIM"
-                )
                 _watchEarnUiState.value =
                   com.example.data.model.WatchEarnUiState(
                     status = com.example.data.model.WatchEarnFlowStatus.READY_TO_CLAIM,
                     activeSessionId = sessionId,
-                    statusMessage = "Video completed! Tap Claim to receive your reward."
+                    videosCompletedInCycle = 1,
+                    statusMessage =
+                      "Video 1 of 2 completed! Tap Claim to watch the 2nd video and receive 1–200 Coins."
                   )
               }
               .onFailure { err ->
-                android.util.Log.e(
-                  "WatchEarnFlow",
-                  "[Step 9] Session verification failed: ${err.message}",
-                  err
-                )
+                val rawErr = err.localizedMessage ?: "Reward verification failed. Please try again."
                 _watchEarnUiState.value =
                   com.example.data.model.WatchEarnUiState(
                     status = com.example.data.model.WatchEarnFlowStatus.ERROR,
                     errorMessage =
-                      err.localizedMessage
-                        ?: "Reward verification failed. Please try again."
+                      if (rawErr.contains("NOT_FOUND", ignoreCase = true)) {
+                        "Verification service busy. Please try again."
+                      } else {
+                        rawErr
+                      }
                   )
               }
           }
         },
         onFailed = { errorMsg ->
-          android.util.Log.w(
-            "WatchEarnFlow",
-            "[Step 9] Rewarded ad flow failed; surfacing user message: $errorMsg"
-          )
           _watchEarnUiState.value =
             com.example.data.model.WatchEarnUiState(
               status = com.example.data.model.WatchEarnFlowStatus.ERROR,
@@ -949,12 +1005,16 @@ class TaskFlowViewModel(
   }
 
   /**
-   * Step 3 of Watch & Earn:
-   * Called when the user explicitly taps the "Claim" button after completing a verified video.
-   * Atomically verifies the session is unused and valid, credits the wallet, updates watch stats,
-   * and disables the Claim button for that session so it cannot be claimed twice.
+   * Watch & Earn 2-Video Cycle — Step 2 (Claim button -> Video 2 of 2 -> Automatic Random 1–200 Coin Credit):
+   * - When the user taps "Claim" after Video 1 completes:
+   *   - If [activity] is provided, plays the 2nd rewarded video first.
+   *   - Once the 2nd video completes, automatically credits the random 1–200 Coins (75% 1–50, 25% 51–200)
+   *     and updates wallet balance, watch_stats, and transaction history without a second Claim button.
    */
-  fun claimVerifiedWatchEarnReward(onSuccess: (Long) -> Unit = {}) {
+  fun claimVerifiedWatchEarnReward(
+    activity: android.app.Activity? = null,
+    onSuccess: (Long) -> Unit = {}
+  ) {
     val uid = currentUserId
     val currentFlow = _watchEarnUiState.value
     val sessionId = currentFlow.activeSessionId
@@ -966,52 +1026,101 @@ class TaskFlowViewModel(
     val todayKey = getTodayDateKey()
     val name = (userProfileState.value as? UiState.Success)?.data?.displayName ?: "TaskFlow Member"
 
-    _watchEarnUiState.value =
-      currentFlow.copy(
-        status = com.example.data.model.WatchEarnFlowStatus.CLAIMING,
-        statusMessage = "Verifying and claiming your reward...",
-        errorMessage = null
-      )
-
-    viewModelScope.launch {
-      _isBusy.value = true
-      repository
-        .claimVerifiedWatchEarnSession(
-          userId = uid,
-          userName = name,
-          sessionId = sessionId,
-          dateKey = todayKey
+    val finalizeRewardCredit: () -> Unit = {
+      _watchEarnUiState.value =
+        currentFlow.copy(
+          status = com.example.data.model.WatchEarnFlowStatus.CLAIMING,
+          videosCompletedInCycle = 2,
+          statusMessage = "Crediting your random Coin reward (1–200 Coins)...",
+          errorMessage = null
         )
-        .onSuccess { earned ->
-          val currentBalance =
-            ((userProfileState.value as? UiState.Success)?.data?.balanceCents ?: 0L)
-          _watchEarnUiState.value =
-            com.example.data.model.WatchEarnUiState(
-              status = com.example.data.model.WatchEarnFlowStatus.CLAIMED,
-              activeSessionId = "",
-              statusMessage =
-                "Reward claimed successfully! +${formatRewardInr(earned)} added to your wallet."
-            )
-          _bannerMessage.value =
-            "Reward claimed! +${formatRewardInr(earned)} credited to your wallet (Balance: ${formatRewardInr(currentBalance)})."
-          onSuccess(earned)
-        }
-        .onFailure { err ->
+
+      viewModelScope.launch {
+        _isBusy.value = true
+        repository
+          .claimVerifiedWatchEarnSession(
+            userId = uid,
+            userName = name,
+            sessionId = sessionId,
+            dateKey = todayKey
+          )
+          .onSuccess { earned ->
+            _watchEarnUiState.value =
+              com.example.data.model.WatchEarnUiState(
+                status = com.example.data.model.WatchEarnFlowStatus.CLAIMED,
+                activeSessionId = "",
+                videosCompletedInCycle = 2,
+                lastRewardCoins = earned,
+                statusMessage =
+                  "2 / 2 Videos Completed! +${formatCoins(earned)} added to your wallet."
+              )
+            _bannerMessage.value =
+              "Watch & Earn reward claimed! +${formatCoins(earned)} credited to your wallet."
+            onSuccess(earned)
+          }
+          .onFailure { err ->
+            val rawMsg = err.localizedMessage ?: "Failed to claim reward."
+            val cleanMsg =
+              if (rawMsg.contains("NOT_FOUND", ignoreCase = true)) {
+                "Unable to complete reward claim right now. Please try again."
+              } else {
+                rawMsg
+              }
+            _watchEarnUiState.value =
+              currentFlow.copy(
+                status = com.example.data.model.WatchEarnFlowStatus.ERROR,
+                errorMessage = cleanMsg
+              )
+            _bannerMessage.value = cleanMsg
+          }
+        _isBusy.value = false
+      }
+    }
+
+    if (activity != null) {
+      _watchEarnUiState.value =
+        currentFlow.copy(
+          status = com.example.data.model.WatchEarnFlowStatus.LOADING_AD,
+          videosCompletedInCycle = 1,
+          statusMessage = "Loading Video 2 of 2 to claim your reward...",
+          errorMessage = null
+        )
+      val secondVideoSessionId = "${sessionId}_claim2"
+      com.example.util.UnityAdsHelper.loadAndShowRewardedAdForSession(
+        activity = activity,
+        sessionId = secondVideoSessionId,
+        onAdShowing = {
           _watchEarnUiState.value =
             currentFlow.copy(
-              status = com.example.data.model.WatchEarnFlowStatus.ERROR,
-              errorMessage = err.localizedMessage ?: "Failed to claim reward."
+              status = com.example.data.model.WatchEarnFlowStatus.SHOWING_AD,
+              videosCompletedInCycle = 1,
+              statusMessage =
+                "Watching Video 2 of 2... Your Coin reward will be credited automatically!"
             )
-          _bannerMessage.value = err.localizedMessage ?: "Failed to claim reward."
+        },
+        onVideoCompleted = {
+          finalizeRewardCredit()
+        },
+        onFailed = { errorMsg ->
+          // Keep session in READY_TO_CLAIM so user can tap Claim again without losing Video 1 progress!
+          _watchEarnUiState.value =
+            currentFlow.copy(
+              status = com.example.data.model.WatchEarnFlowStatus.READY_TO_CLAIM,
+              videosCompletedInCycle = 1,
+              statusMessage =
+                "2nd video was not completed (${errorMsg.ifBlank { "Ad unavailable" }}). Tap Claim to try Video 2 again."
+            )
         }
-      _isBusy.value = false
+      )
+    } else {
+      finalizeRewardCredit()
     }
   }
 
   fun claimWatchEarnReward(onSuccess: (Long) -> Unit = {}) {
     val currentFlow = _watchEarnUiState.value
     if (currentFlow.isReadyToClaim && currentFlow.activeSessionId.isNotBlank()) {
-      claimVerifiedWatchEarnReward(onSuccess)
+      claimVerifiedWatchEarnReward(activity = null, onSuccess = onSuccess)
       return
     }
     val uid = currentUserId
@@ -1034,7 +1143,7 @@ class TaskFlowViewModel(
       repository
         .claimWatchEarnReward(uid, name, todayKey)
         .onSuccess { earned ->
-          _bannerMessage.value = "Watch & Earn reward claimed: +${formatRewardInr(earned)}"
+          _bannerMessage.value = "Watch & Earn reward claimed: +${formatCoins(earned)}"
           onSuccess(earned)
         }
         .onFailure { err ->
@@ -1044,48 +1153,263 @@ class TaskFlowViewModel(
     }
   }
 
-  fun createSpinSession(onSuccess: (String, Int) -> Unit) {
+  private val _spinEarnUiState = MutableStateFlow(SpinEarnUiState())
+  val spinEarnUiState: StateFlow<SpinEarnUiState> = _spinEarnUiState.asStateFlow()
+
+  fun updateSpinState(newState: SpinEarnUiState) {
+    _spinEarnUiState.value = newState
+  }
+
+  /**
+   * Starts a server/transaction-validated spin session BEFORE the wheel rotates.
+   * Returns the exact [SpinSessionOutcome] (`segmentIndex`, `rewardCoins`, `sessionId`) so the
+   * wheel animation stops on the exact segment chosen by the backend.
+   */
+  fun startSpinWithBackendOutcome(onOutcomeReady: (SpinSessionOutcome) -> Unit) {
+    val uid = currentUserId
+    if (uid.isBlank()) {
+      _bannerMessage.value = "Please sign in to spin the wheel."
+      return
+    }
+    val current = _spinEarnUiState.value
+    if (current.isSpinning || current.isClaiming || current.isLoadingAd) return
+
     viewModelScope.launch {
       _isBusy.value = true
-      repository.createSpinSession()
-        .onSuccess { sessionId ->
-          // In a real implementation, we'd get the spinNumber from the response, but this is a stub
-          onSuccess(sessionId, 0)
+      _spinEarnUiState.value = current.copy(errorMessage = null, statusMessage = "Preparing spin...")
+      repository
+        .createSpinSessionWithOutcome(uid)
+        .onSuccess { outcome ->
+          _spinEarnUiState.value =
+            _spinEarnUiState.value.copy(
+              isSpinning = true,
+              isReadyToClaim = false,
+              activeSessionId = outcome.sessionId,
+              selectedSegmentIndex = outcome.segmentIndex,
+              selectedRewardCoins = outcome.rewardCoins,
+              freeSpinAvailable = if (outcome.usedFreeSpin) false else _spinEarnUiState.value.freeSpinAvailable,
+              extraSpinAvailable = if (!outcome.usedFreeSpin) false else _spinEarnUiState.value.extraSpinAvailable,
+              extraSpinVideosWatched = if (!outcome.usedFreeSpin) 0 else _spinEarnUiState.value.extraSpinVideosWatched,
+              adsWatchedForSpin = if (!outcome.usedFreeSpin) 0 else _spinEarnUiState.value.adsWatchedForSpin,
+              statusMessage = "Spinning the wheel...",
+              errorMessage = null
+            )
+          onOutcomeReady(outcome)
         }
-        .onFailure { _bannerMessage.value = it.localizedMessage ?: "Failed to start spin." }
+        .onFailure { err ->
+          val msg = err.localizedMessage ?: "Unable to start spin."
+          _spinEarnUiState.value =
+            _spinEarnUiState.value.copy(
+              isSpinning = false,
+              errorMessage = msg
+            )
+          _bannerMessage.value = msg
+        }
       _isBusy.value = false
     }
   }
 
-  fun claimSpinReward(coins: Long, onSuccess: (Long) -> Unit = {}) {
+  fun onSpinWheelAnimationFinished() {
+    val current = _spinEarnUiState.value
+    if (current.activeSessionId.isNotBlank() && current.selectedRewardCoins != null) {
+      _spinEarnUiState.value =
+        current.copy(
+          isSpinning = false,
+          isReadyToClaim = true,
+          statusMessage =
+            "You landed on ${formatCoins(current.selectedRewardCoins)}! Tap Claim to watch 1 video and credit your Coins."
+        )
+    } else {
+      _spinEarnUiState.value = current.copy(isSpinning = false)
+    }
+  }
+
+  /**
+   * Plays 1 rewarded video toward unlocking an Extra Spin (requires 2 completed videos).
+   */
+  fun watchAdForExtraSpin(activity: android.app.Activity) {
     val uid = currentUserId
-    if (uid.isBlank()) return
-    viewModelScope.launch {
-      _isBusy.value = true
+    if (uid.isBlank()) {
+      _bannerMessage.value = "Please sign in to watch videos."
+      return
+    }
+    val current = _spinEarnUiState.value
+    if (current.isSpinning || current.isLoadingAd || current.isClaiming) return
+
+    _spinEarnUiState.value =
+      current.copy(
+        isLoadingAd = true,
+        errorMessage = null,
+        statusMessage =
+          "Loading video (${current.extraSpinVideosWatched + 1}/${SpinWheelConstants.EXTRA_SPIN_REQUIRED_VIDEOS})..."
+      )
+
+    val adSessionId = "extraspin_${uid}_${UUID.randomUUID()}"
+    com.example.util.UnityAdsHelper.loadAndShowRewardedAdForSession(
+      activity = activity,
+      sessionId = adSessionId,
+      onAdShowing = {
+        _spinEarnUiState.value =
+          _spinEarnUiState.value.copy(
+            isLoadingAd = true,
+            statusMessage = "Watching video for Extra Spin..."
+          )
+      },
+      onVideoCompleted = {
+        viewModelScope.launch {
+          repository
+            .recordExtraSpinVideoWatched(uid)
+            .onSuccess { newCount ->
+              val unlocked = newCount >= SpinWheelConstants.EXTRA_SPIN_REQUIRED_VIDEOS
+              _spinEarnUiState.value =
+                _spinEarnUiState.value.copy(
+                  isLoadingAd = false,
+                  extraSpinVideosWatched = newCount,
+                  adsWatchedForSpin = newCount,
+                  extraSpinAvailable = unlocked,
+                  statusMessage =
+                    if (unlocked) {
+                      "2 / 2 Videos Completed! Your Extra Spin is unlocked!"
+                    } else {
+                      "$newCount / ${SpinWheelConstants.EXTRA_SPIN_REQUIRED_VIDEOS} Video Completed! Watch 1 more video to unlock Extra Spin."
+                    },
+                  errorMessage = null
+                )
+            }
+            .onFailure { err ->
+              _spinEarnUiState.value =
+                _spinEarnUiState.value.copy(
+                  isLoadingAd = false,
+                  errorMessage = err.localizedMessage ?: "Could not record video progress."
+                )
+            }
+        }
+      },
+      onFailed = { errorMsg ->
+        _spinEarnUiState.value =
+          _spinEarnUiState.value.copy(
+            isLoadingAd = false,
+            errorMessage =
+              errorMsg.ifBlank { com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE }
+          )
+      }
+    )
+  }
+
+  /**
+   * Claims the pre-selected Spin reward ONLY after playing 1 separate rewarded video when the user
+   * taps the "Claim" button on the Spin result panel.
+   */
+  fun claimSpinRewardWithAd(
+    activity: android.app.Activity?,
+    onSuccess: (Long) -> Unit = {}
+  ) {
+    val current = _spinEarnUiState.value
+    val sessionId = current.activeSessionId
+    if (sessionId.isBlank() || current.isClaiming || current.isLoadingAd) return
+
+    val executeClaim: () -> Unit = {
+      viewModelScope.launch {
+        _isBusy.value = true
+        _spinEarnUiState.value =
+          _spinEarnUiState.value.copy(
+            isLoadingAd = false,
+            isClaiming = true,
+            statusMessage = "Crediting your Spin reward...",
+            errorMessage = null
+          )
+        repository
+          .claimSpinReward(sessionId)
+          .onSuccess { rewardCoins ->
+            _spinEarnUiState.value =
+              _spinEarnUiState.value.copy(
+                isClaiming = false,
+                isReadyToClaim = false,
+                activeSessionId = "",
+                selectedRewardCoins = null,
+                selectedSegmentIndex = null,
+                lastClaimedCoins = rewardCoins,
+                statusMessage = "Success! +${formatCoins(rewardCoins)} credited to your wallet!",
+                errorMessage = null
+              )
+            _bannerMessage.value = "Spin & Earn reward claimed: +${formatCoins(rewardCoins)}!"
+            onSuccess(rewardCoins)
+          }
+          .onFailure { err ->
+            val msg = err.localizedMessage ?: "Failed to claim spin reward."
+            _spinEarnUiState.value =
+              _spinEarnUiState.value.copy(
+                isClaiming = false,
+                errorMessage = msg
+              )
+            _bannerMessage.value = msg
+          }
+        _isBusy.value = false
+      }
+    }
+
+    if (activity != null) {
+      _spinEarnUiState.value =
+        current.copy(
+          isLoadingAd = true,
+          errorMessage = null,
+          statusMessage = "Loading reward claim video..."
+        )
+      com.example.util.UnityAdsHelper.loadAndShowRewardedAdForSession(
+        activity = activity,
+        sessionId = "${sessionId}_claim",
+        onAdShowing = {
+          _spinEarnUiState.value =
+            _spinEarnUiState.value.copy(
+              isLoadingAd = true,
+              statusMessage = "Watching claim video... Complete to receive your Coins!"
+            )
+        },
+        onVideoCompleted = {
+          executeClaim()
+        },
+        onFailed = { errorMsg ->
+          _spinEarnUiState.value =
+            _spinEarnUiState.value.copy(
+              isLoadingAd = false,
+              errorMessage =
+                errorMsg.ifBlank { com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE }
+            )
+        }
+      )
+    } else {
+      executeClaim()
+    }
+  }
+
+  fun createSpinSession(onSuccess: (String, Int) -> Unit) {
+    startSpinWithBackendOutcome { outcome ->
+      onSuccess(outcome.sessionId, outcome.segmentIndex)
+    }
+  }
+
+  fun claimSpinReward(coins: Long, onSuccess: (Long) -> Unit = {}) {
+    val activeSession = _spinEarnUiState.value.activeSessionId
+    if (activeSession.isNotBlank()) {
+      claimSpinRewardWithAd(activity = null, onSuccess = onSuccess)
+    } else {
       _bannerMessage.value = "Spin & Earn reward claimed: +$coins Coins!"
       onSuccess(coins)
-      _isBusy.value = false
     }
   }
 
   fun claimSpinReward(sessionId: String, onSuccess: (Long) -> Unit) {
     viewModelScope.launch {
       _isBusy.value = true
-      repository.claimSpinReward(sessionId)
+      repository
+        .claimSpinReward(sessionId)
         .onSuccess { reward ->
-           _bannerMessage.value = "Spin reward claimed: +$reward Coins"
-           onSuccess(reward)
+          _bannerMessage.value = "Spin reward claimed: +$reward Coins"
+          onSuccess(reward)
         }
         .onFailure { _bannerMessage.value = it.localizedMessage ?: "Failed to claim spin reward." }
       _isBusy.value = false
     }
-  }
-
-  private val _spinEarnUiState = MutableStateFlow(com.example.data.model.SpinEarnUiState())
-  val spinEarnUiState: StateFlow<com.example.data.model.SpinEarnUiState> = _spinEarnUiState.asStateFlow()
-
-  fun updateSpinState(newState: com.example.data.model.SpinEarnUiState) {
-      _spinEarnUiState.value = newState
   }
 
   fun updateUserDisplayNameByAdmin(user: UserProfile, newName: String) {

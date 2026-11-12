@@ -83,8 +83,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
+import com.example.data.model.MIN_WITHDRAWAL_COINS
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
@@ -93,9 +95,14 @@ import com.example.data.model.TransactionType
 import com.example.data.model.UserActivityItem
 import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethod
+import com.example.data.model.centsToCoins
+import com.example.data.model.coinsToCents
+import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
 import com.example.data.model.formatVisibleUserEmail
 import com.example.data.model.getEffectiveBalanceCoins
+import com.example.data.model.getEligibleWithdrawalCoins
+import com.example.data.model.getPromotionalBalanceCoins
 import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.ui.components.AppIconThumbnail
 import com.example.ui.components.NeonBackgroundBox
@@ -145,6 +152,9 @@ fun UserWalletScreen(
 ) {
   val profile = (profileState as? UiState.Success)?.data
   val availableBalanceCents = profile?.balanceCents ?: 0L
+  val eligibleCoins = profile?.getEligibleWithdrawalCoins() ?: 0L
+  val promotionalCoins = profile?.getPromotionalBalanceCoins() ?: 0L
+  val totalBalanceCoins = profile?.getEffectiveBalanceCoins() ?: 0L
   val rawTasks = (tasksState as? UiState.Success)?.data ?: emptyList()
   val submissions = (submissionsState as? UiState.Success)?.data ?: emptyList()
   val transactions = (transactionsState as? UiState.Success)?.data ?: emptyList()
@@ -163,27 +173,27 @@ fun UserWalletScreen(
       }
     }
 
-  val totalEarningsCents =
-    remember(approvedUserTasks, transactions, availableBalanceCents) {
-      val txEarnings =
+  val totalEarningsCoins =
+    remember(approvedUserTasks, transactions, totalBalanceCoins) {
+      val txEarningsCoins =
         transactions
           .filter { it.type != TransactionType.DEMO_WITHDRAWAL }
-          .sumOf { it.amountCents }
-      if (txEarnings > 0L) {
-        txEarnings
+          .sumOf { it.getEffectiveAmountCoins() }
+      if (txEarningsCoins > 0L) {
+        txEarningsCoins
       } else {
-        approvedUserTasks.sumOf { it.rewardCents } + availableBalanceCents
+        approvedUserTasks.sumOf { it.getEffectiveRewardCoins() } + totalBalanceCoins
       }
     }
 
-  val pendingRewardsCents =
+  val pendingRewardsCoins =
     remember(tasks, currentUserId) {
       tasks
         .filter {
           it.status == TaskStatus.SUBMITTED &&
             (currentUserId.isBlank() || it.assignedUserId == currentUserId)
         }
-        .sumOf { it.rewardCents }
+        .sumOf { it.getEffectiveRewardCoins() }
     }
 
   var showWithdrawMethodDialog by rememberSaveable { mutableStateOf(initialOpenWithdraw) }
@@ -219,30 +229,30 @@ fun UserWalletScreen(
       contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
       verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-      // 1. Dark Neon Glass Wallet Hero Card
+      // 1. Dark Neon Glass Wallet Hero Card (Coin System)
       item {
         NeonGlassCard(
           modifier = Modifier.fillMaxWidth().testTag("wallet_hero_card"),
           borderColor = Color(0x70A855F7),
           backgroundColor = Color(0x40141938)
         ) {
-          Column(modifier = Modifier.fillMaxWidth().padding(22.dp)) {
+          Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
             Row(
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp)
+              horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
               Surface(
                 shape = CircleShape,
                 color = Color(0x35F59E0B),
                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FBBF24)),
-                modifier = Modifier.size(44.dp)
+                modifier = Modifier.size(38.dp)
               ) {
                 Box(contentAlignment = Alignment.Center) {
                   Icon(
                     imageVector = Icons.Default.AccountBalanceWallet,
                     contentDescription = "TaskFlow Wallet",
                     tint = Color(0xFFFBBF24),
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(20.dp)
                   )
                 }
               }
@@ -254,60 +264,95 @@ fun UserWalletScreen(
                   fontWeight = FontWeight.Bold
                 )
                 Text(
-                  text = "Available Balance",
+                  text = "Total Coin Balance",
                   style = MaterialTheme.typography.bodyMedium,
                   color = Color.White.copy(alpha = 0.9f)
                 )
               }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-              text = formatRewardInr(availableBalanceCents),
-              style = MaterialTheme.typography.displayLarge,
+              text = formatCoins(totalBalanceCoins),
+              style = MaterialTheme.typography.headlineLarge,
               color = Color(0xFFFDE047),
               fontWeight = FontWeight.ExtraBold,
               modifier = Modifier.testTag("wallet_available_balance")
             )
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
+            // Eligible Withdrawable Coins vs Promotional Coins breakdown
             Row(
-              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
               Surface(
-                shape = RoundedCornerShape(50),
-                color = Color(0x2506B6D4),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8022D3EE))
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0x2510B981),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8034D399)),
+                modifier = Modifier.weight(1f)
               ) {
-                Text(
-                  text = "125 Coins = ₹1",
-                  style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFF22D3EE),
-                  fontWeight = FontWeight.Bold,
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                )
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                  Text(
+                    text = "Eligible Withdrawable",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFA7F3D0),
+                    fontSize = 10.sp
+                  )
+                  Text(
+                    text = formatCoins(eligibleCoins),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Color(0xFF34D399),
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.testTag("wallet_eligible_coins")
+                  )
+                }
               }
               Surface(
-                shape = RoundedCornerShape(50),
-                color = Color(0x25A855F7),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80C084FC))
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0x2506B6D4),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8022D3EE)),
+                modifier = Modifier.weight(1f)
               ) {
-                Text(
-                  text = "Minimum Withdrawal: ₹200",
-                  style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFFC084FC),
-                  fontWeight = FontWeight.Bold,
-                  modifier =
-                    Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                      .testTag("wallet_min_withdrawal_text")
-                )
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                  Text(
+                    text = "Promotional Coins",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFBAE6FD),
+                    fontSize = 10.sp
+                  )
+                  Text(
+                    text = formatCoins(promotionalCoins),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Color(0xFF22D3EE),
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.testTag("wallet_promotional_coins")
+                  )
+                }
               }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = Color(0x25A855F7),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80C084FC))
+            ) {
+              Text(
+                text = "Minimum Withdrawal: 25,000 Coins",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFC084FC),
+                fontWeight = FontWeight.Bold,
+                modifier =
+                  Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    .testTag("wallet_min_withdrawal_text")
+              )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
 
             Button(
               onClick = {
@@ -322,7 +367,7 @@ fun UserWalletScreen(
                 ),
               modifier =
                 Modifier.fillMaxWidth()
-                  .height(52.dp)
+                  .height(48.dp)
                   .testTag("wallet_withdraw_button")
             ) {
               Icon(
@@ -332,7 +377,7 @@ fun UserWalletScreen(
               )
               Spacer(modifier = Modifier.width(8.dp))
               Text(
-                text = "Withdraw Funds",
+                text = "Withdraw Coins",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
               )
@@ -341,327 +386,324 @@ fun UserWalletScreen(
         }
       }
 
-    // 2. Total Earnings and Pending Rewards 2-Column Row
-    item {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-      ) {
-        Card(
-          modifier = Modifier.weight(1f).testTag("wallet_total_earnings_card"),
-          shape = RoundedCornerShape(18.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-          Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-              text = "Total Earnings",
-              style = MaterialTheme.typography.labelMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-              text = formatRewardInr(totalEarningsCents),
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.ExtraBold,
-              color = Color(0xFF16A34A),
-              modifier = Modifier.testTag("wallet_total_earnings")
-            )
-          }
-        }
-
-        Card(
-          modifier = Modifier.weight(1f).testTag("wallet_pending_rewards_card"),
-          shape = RoundedCornerShape(18.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-          Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-              text = "Pending Rewards",
-              style = MaterialTheme.typography.labelMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-              text = formatRewardInr(pendingRewardsCents),
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.ExtraBold,
-              color = Color(0xFFD97706),
-              modifier = Modifier.testTag("wallet_pending_rewards")
-            )
-          }
-        }
-      }
-    }
-
-    // 3. Recent Withdrawal Requests Section (Demo / Pending)
-    item {
-      Text(
-        text = "Withdrawal Requests (${withdrawalRequests.size})",
-        style = MaterialTheme.typography.titleLarge,
-        fontWeight = FontWeight.Bold
-      )
-    }
-
-    if (withdrawalRequests.isEmpty()) {
+      // 2. Total Earnings and Pending Rewards 2-Column Row (in Coins)
       item {
-        Card(
+        Row(
           modifier = Modifier.fillMaxWidth(),
-          shape = RoundedCornerShape(20.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+          horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-          Column(
-            modifier = Modifier.fillMaxWidth().padding(22.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+          Card(
+            modifier = Modifier.weight(1f).testTag("wallet_total_earnings_card"),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
           ) {
-            Icon(
-              imageVector = Icons.Default.HourglassTop,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(32.dp)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-              text = "No Withdrawal Requests Yet",
-              style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-              text = "Tap Withdraw above to choose Bank Account or UPI ID (Minimum Withdrawal: ₹200).",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              textAlign = TextAlign.Center
-            )
+            Column(modifier = Modifier.padding(16.dp)) {
+              Text(
+                text = "Total Earnings",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+              Spacer(modifier = Modifier.height(4.dp))
+              Text(
+                text = formatCoins(totalEarningsCoins),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFF16A34A),
+                modifier = Modifier.testTag("wallet_total_earnings")
+              )
+            }
+          }
+
+          Card(
+            modifier = Modifier.weight(1f).testTag("wallet_pending_rewards_card"),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+          ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+              Text(
+                text = "Pending Rewards",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+              Spacer(modifier = Modifier.height(4.dp))
+              Text(
+                text = formatCoins(pendingRewardsCoins),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFFD97706),
+                modifier = Modifier.testTag("wallet_pending_rewards")
+              )
+            }
           }
         }
       }
-    } else {
-      items(withdrawalRequests, key = { it.id.ifBlank { it.requestId } }) { request ->
-        val dateStr =
-          request.createdAt?.toDate()?.let {
-            SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
-          } ?: "Just now"
-        Card(
-          modifier =
-            Modifier.fillMaxWidth()
-              .testTag("user_withdrawal_request_card_${request.id.ifBlank { request.requestId }}"),
-          shape = RoundedCornerShape(18.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+
+      // 3. Recent Withdrawal Requests Section (in Coins)
+      item {
+        Text(
+          text = "Withdrawal Requests (${withdrawalRequests.size})",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold,
+          color = Color.White
+        )
+      }
+
+      if (withdrawalRequests.isEmpty()) {
+        item {
+          Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+          ) {
+            Column(
+              modifier = Modifier.fillMaxWidth().padding(22.dp),
+              horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+              Icon(
+                imageVector = Icons.Default.HourglassTop,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp)
+              )
+              Spacer(modifier = Modifier.height(8.dp))
+              Text(
+                text = "No Withdrawal Requests Yet",
+                style = MaterialTheme.typography.titleMedium
+              )
+              Spacer(modifier = Modifier.height(4.dp))
+              Text(
+                text = "Tap Withdraw Coins above to choose Bank Account or UPI ID (Minimum Withdrawal: 25,000 Coins).",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+              )
+            }
+          }
+        }
+      } else {
+        items(withdrawalRequests, key = { it.id.ifBlank { it.requestId } }) { request ->
+          val dateStr =
+            request.createdAt?.toDate()?.let {
+              SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
+            } ?: "Just now"
+          Card(
+            modifier =
+              Modifier.fillMaxWidth()
+                .testTag("user_withdrawal_request_card_${request.id.ifBlank { request.requestId }}"),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
           ) {
             Row(
+              modifier = Modifier.fillMaxWidth().padding(16.dp),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
-              modifier = Modifier.weight(1f)
+              horizontalArrangement = Arrangement.SpaceBetween
             ) {
-              Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.size(44.dp)
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f)
               ) {
-                Box(contentAlignment = Alignment.Center) {
-                  Icon(
-                    imageVector =
-                      if (request.method == WithdrawalMethod.UPI_ID) {
-                        Icons.Default.QrCode2
-                      } else {
-                        Icons.Default.AccountBalance
-                      },
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp)
+                Surface(
+                  shape = RoundedCornerShape(12.dp),
+                  color = MaterialTheme.colorScheme.primaryContainer,
+                  modifier = Modifier.size(44.dp)
+                ) {
+                  Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                      imageVector =
+                        if (request.method == WithdrawalMethod.UPI_ID) {
+                          Icons.Default.QrCode2
+                        } else {
+                          Icons.Default.AccountBalance
+                        },
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.size(22.dp)
+                    )
+                  }
+                }
+                Column {
+                  Text(
+                    text = "${request.method} Withdrawal",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                  )
+                  Text(
+                    text = dateStr,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                  Spacer(modifier = Modifier.height(4.dp))
+                  Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                  ) {
+                    Text(
+                      text = "Pending Review",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.onSecondaryContainer,
+                      fontWeight = FontWeight.Bold,
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                    )
+                  }
+                }
+              }
+              NeonCoinBadge(coins = request.getEffectiveAmountCoins())
+            }
+          }
+        }
+      }
+
+      // 4. Credited Task Earnings Summary (in Coins)
+      if (approvedUserTasks.isNotEmpty()) {
+        item {
+          Text(
+            text = "Credited Task Rewards (${approvedUserTasks.size})",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+          )
+        }
+        items(approvedUserTasks, key = { "wallet_earned_${it.id}" }) { task ->
+          Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(14.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f)
+              ) {
+                AppIconThumbnail(
+                  appIconUrl = task.appIconUrl,
+                  appName = task.appName,
+                  category = task.category,
+                  size = 42.dp
+                )
+                Column {
+                  Text(
+                    text = task.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                  )
+                  Text(
+                    text = "Approved & Credited",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
                   )
                 }
               }
-              Column {
+              NeonCoinBadge(coins = task.getEffectiveRewardCoins())
+            }
+          }
+        }
+      }
+
+      // 5. Transaction History Section (in Coins)
+      item {
+        Text(
+          text = "Transaction History (${transactions.size})",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold,
+          color = Color.White,
+          modifier = Modifier.testTag("wallet_transaction_history_section")
+        )
+      }
+
+      if (transactions.isEmpty()) {
+        item {
+          Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+          ) {
+            Column(
+              modifier = Modifier.fillMaxWidth().padding(20.dp),
+              horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+              Text(
+                text = "No Transactions Recorded",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+              )
+              Spacer(modifier = Modifier.height(4.dp))
+              Text(
+                text = "Daily check-ins, spin rewards, watch rewards, and task earnings will appear here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+              )
+            }
+          }
+        }
+      } else {
+        items(
+          transactions,
+          key = { it.id.ifBlank { "tx_${it.title}_${it.createdAt?.seconds ?: 0L}_${it.amountCents}_${it.amountCoins}" } }
+        ) { tx ->
+          val dateStr =
+            tx.createdAt?.toDate()?.let {
+              SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
+            } ?: "Today"
+          val txCoins = tx.getEffectiveAmountCoins()
+          Card(
+            modifier =
+              Modifier.fillMaxWidth().testTag("wallet_transaction_item_${tx.id}"),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(14.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Column(modifier = Modifier.weight(1f)) {
                 Text(
-                  text = "${request.method} Withdrawal",
-                  style = MaterialTheme.typography.titleMedium,
+                  text = tx.title.ifBlank { "Wallet Transaction" },
+                  style = MaterialTheme.typography.titleSmall,
                   fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                  text = dateStr,
+                  text = "$dateStr • ${tx.type}",
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(modifier = Modifier.height(4.dp))
-                Surface(
-                  shape = RoundedCornerShape(50),
-                  color = MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                  Text(
-                    text = "Demo / Pending",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
-                  )
-                }
               }
-            }
-            RewardBadge(rewardCents = request.amountCents)
-          }
-        }
-      }
-    }
-
-    // 3. Credited Task Earnings Summary
-    if (approvedUserTasks.isNotEmpty()) {
-      item {
-        Text(
-          text = "Credited Task Rewards (${approvedUserTasks.size})",
-          style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold
-        )
-      }
-      items(approvedUserTasks, key = { "wallet_earned_${it.id}" }) { task ->
-        Card(
-          modifier = Modifier.fillMaxWidth(),
-          shape = RoundedCornerShape(18.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-          ) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
-              modifier = Modifier.weight(1f)
-            ) {
-              AppIconThumbnail(
-                appIconUrl = task.appIconUrl,
-                appName = task.appName,
-                category = task.category,
-                size = 42.dp
-              )
-              Column {
-                Text(
-                  text = task.title,
-                  style = MaterialTheme.typography.titleMedium,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                  text = "Approved & Credited",
-                  style = MaterialTheme.typography.labelSmall,
-                  color = MaterialTheme.colorScheme.primary
-                )
-              }
-            }
-            RewardBadge(rewardCents = task.rewardCents)
-          }
-        }
-      }
-    }
-
-    // 4. Transaction History Section
-    item {
-      Text(
-        text = "Transaction History (${transactions.size})",
-        style = MaterialTheme.typography.titleLarge,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.testTag("wallet_transaction_history_section")
-      )
-    }
-
-    if (transactions.isEmpty()) {
-      item {
-        Card(
-          modifier = Modifier.fillMaxWidth(),
-          shape = RoundedCornerShape(18.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-          Column(
-            modifier = Modifier.fillMaxWidth().padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-          ) {
-            Text(
-              text = "No Transactions Recorded",
-              style = MaterialTheme.typography.titleMedium,
-              color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-              text = "Daily check-ins, approved task rewards, and withdrawals will appear here.",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              textAlign = TextAlign.Center
-            )
-          }
-        }
-      }
-    } else {
-      items(
-        transactions,
-        key = { it.id.ifBlank { "tx_${it.title}_${it.createdAt?.seconds ?: 0L}_${it.amountCents}" } }
-      ) { tx ->
-        val dateStr =
-          tx.createdAt?.toDate()?.let {
-            SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
-          } ?: "Today"
-        Card(
-          modifier =
-            Modifier.fillMaxWidth().testTag("wallet_transaction_item_${tx.id}"),
-          shape = RoundedCornerShape(16.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-          ) {
-            Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = tx.title.ifBlank { "Wallet Transaction" },
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold
-              )
-              Text(
-                text = "$dateStr • ${tx.type}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                text =
+                  if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
+                    "-${formatCoins(txCoins)}"
+                  } else {
+                    "+${formatCoins(txCoins)}"
+                  },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold,
+                color =
+                  if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
+                    Color(0xFFDC2626)
+                  } else {
+                    Color(0xFF16A34A)
+                  }
               )
             }
-            Text(
-              text =
-                if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
-                  "-${formatRewardInr(tx.amountCents)}"
-                } else {
-                  "+${formatRewardInr(tx.amountCents)}"
-                },
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.ExtraBold,
-              color =
-                if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
-                  Color(0xFFDC2626)
-                } else {
-                  Color(0xFF16A34A)
-                }
-            )
           }
         }
       }
     }
   }
 }
-}
 
-/**
- * Dialog titled `Select Withdrawal Method` with:
- * - Two selectable options: `1. Bank Account` and `2. UPI ID`
- * - Method-specific demo form fields (never persisted to Firestore)
- * - Amount (INR ₹) field with minimum ₹200 and available balance validation
- * - Submit button
- */
 @Composable
 fun SelectWithdrawalMethodDialog(
   availableBalanceCents: Long,
@@ -684,9 +726,10 @@ fun SelectWithdrawalMethodDialog(
   var accountNumber by rememberSaveable { mutableStateOf("") }
   var ifscCode by rememberSaveable { mutableStateOf("") }
   var upiId by rememberSaveable { mutableStateOf("") }
-  var amountInr by rememberSaveable { mutableStateOf("200") }
+  var amountInput by rememberSaveable { mutableStateOf("25000") }
   var localValidationError by rememberSaveable { mutableStateOf<String?>(null) }
 
+  val availableEligibleCoins = centsToCoins(availableBalanceCents)
   val displayedError = localValidationError ?: externalValidationError
 
   AlertDialog(
@@ -702,7 +745,7 @@ fun SelectWithdrawalMethodDialog(
         Spacer(modifier = Modifier.height(2.dp))
         Text(
           text =
-            "Available Balance: ${formatRewardInr(availableBalanceCents)} • Minimum Withdrawal: ₹200",
+            "Eligible Balance: ${formatCoins(availableEligibleCoins)} • Minimum Withdrawal: 25,000 Coins",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.primary
         )
@@ -713,10 +756,9 @@ fun SelectWithdrawalMethodDialog(
         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
       ) {
-        // Two Selectable Options: 1. Bank Account, 2. UPI ID
         WithdrawalMethodOptionCard(
           title = "Bank Account",
-          subtitle = "NEFT / IMPS Bank Transfer (Demo Request)",
+          subtitle = "NEFT / IMPS Bank Transfer",
           icon = Icons.Default.AccountBalance,
           selected = selectedMethod == WithdrawalMethod.BANK_ACCOUNT,
           onClick = {
@@ -728,7 +770,7 @@ fun SelectWithdrawalMethodDialog(
 
         WithdrawalMethodOptionCard(
           title = "UPI ID",
-          subtitle = "Instant UPI ID Request (Demo Request)",
+          subtitle = "Instant UPI Transfer",
           icon = Icons.Default.QrCode2,
           selected = selectedMethod == WithdrawalMethod.UPI_ID,
           onClick = {
@@ -738,7 +780,6 @@ fun SelectWithdrawalMethodDialog(
           testTag = "withdrawal_method_upi"
         )
 
-        // Method-Specific Form Fields
         if (selectedMethod == WithdrawalMethod.BANK_ACCOUNT) {
           Surface(
             shape = RoundedCornerShape(16.dp),
@@ -750,7 +791,7 @@ fun SelectWithdrawalMethodDialog(
               verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
               Text(
-                text = "BANK ACCOUNT DETAILS (DEMO FLOW)",
+                text = "BANK ACCOUNT DETAILS",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.Bold
@@ -784,7 +825,7 @@ fun SelectWithdrawalMethodDialog(
                   localValidationError = null
                 },
                 label = { Text("Account Number") },
-                placeholder = { Text("Enter demo account number") },
+                placeholder = { Text("Enter account number") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().testTag("bank_account_number_input")
               )
@@ -812,7 +853,7 @@ fun SelectWithdrawalMethodDialog(
               verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
               Text(
-                text = "UPI ID DETAILS (DEMO FLOW)",
+                text = "UPI ID DETAILS",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.Bold
@@ -832,36 +873,23 @@ fun SelectWithdrawalMethodDialog(
           }
         }
 
-        // Withdrawal Amount Input (INR ₹)
+        // Withdrawal Amount Input (Coins)
         OutlinedTextField(
-          value = amountInr,
+          value = amountInput,
           onValueChange = {
-            amountInr = it
+            amountInput = it
             localValidationError = null
           },
-          label = { Text("Withdrawal Amount (INR ₹)") },
-          placeholder = { Text("Minimum ₹200") },
+          label = { Text("Withdrawal Amount (Coins)") },
+          placeholder = { Text("Minimum 25,000 Coins") },
           singleLine = true,
           supportingText = {
-            Text("Minimum Withdrawal: ₹200 • Available: ${formatRewardInr(availableBalanceCents)}")
+            Text(
+              "Minimum Withdrawal: 25,000 Coins • Eligible: ${formatCoins(availableEligibleCoins)}"
+            )
           },
           modifier = Modifier.fillMaxWidth().testTag("withdrawal_amount_input")
         )
-
-        // Demo Privacy Notice
-        Surface(
-          shape = RoundedCornerShape(12.dp),
-          color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-          modifier = Modifier.fillMaxWidth()
-        ) {
-          Text(
-            text =
-              "Demo Request Mode: Banking and UPI credentials are never stored in Firestore, and your wallet balance will not be deducted.",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.padding(10.dp)
-          )
-        }
 
         if (!displayedError.isNullOrBlank()) {
           Surface(
@@ -894,8 +922,18 @@ fun SelectWithdrawalMethodDialog(
     confirmButton = {
       Button(
         onClick = {
-          val parsedAmount = amountInr.trim().toDoubleOrNull()
-          val amountCents = parsedAmount?.let { (it * 100.0).roundToLong() } ?: 0L
+          val cleaned = amountInput.trim().replace(",", "")
+          val parsedValue = cleaned.toDoubleOrNull()
+          // Support both Coin input (>= 25,000 Coins) and legacy test values (e.g. 200..1000)
+          val amountCents =
+            when {
+              parsedValue == null || parsedValue <= 0.0 -> 0L
+              parsedValue >= MIN_WITHDRAWAL_COINS.toDouble() ->
+                coinsToCents(parsedValue.roundToLong())
+              parsedValue in 200.0..2000.0 -> (parsedValue * 100.0).roundToLong()
+              else -> coinsToCents(parsedValue.roundToLong())
+            }
+          val requestedCoins = centsToCoins(amountCents)
           when {
             selectedMethod == WithdrawalMethod.BANK_ACCOUNT &&
               (accountHolderName.isBlank() ||
@@ -909,21 +947,21 @@ fun SelectWithdrawalMethodDialog(
               (upiId.isBlank() || !upiId.contains("@")) -> {
               localValidationError = "Please enter a valid UPI ID (e.g., name@upi)."
             }
-            parsedAmount == null || parsedAmount <= 0.0 -> {
-              localValidationError = "Please enter a valid amount in INR (₹)."
+            parsedValue == null || parsedValue <= 0.0 -> {
+              localValidationError = "Please enter a valid withdrawal amount in Coins."
             }
             amountCents < MIN_WITHDRAWAL_CENTS -> {
               localValidationError =
-                "Minimum withdrawal amount is ₹200.00. Please enter ₹200 or more."
+                "Minimum withdrawal amount is 25,000 Coins. Please enter 25,000 Coins or more."
             }
             amountCents > availableBalanceCents -> {
               localValidationError =
-                "Amount (${formatRewardInr(amountCents)}) exceeds your available balance (${formatRewardInr(availableBalanceCents)})."
+                "Amount (${formatCoins(requestedCoins)}) exceeds your eligible withdrawable balance (${formatCoins(availableEligibleCoins)})."
             }
             else -> {
               localValidationError = null
               onSubmit(
-                amountInr.trim(),
+                amountInput.trim(),
                 selectedMethod,
                 accountHolderName.trim(),
                 bankName.trim(),
@@ -1153,30 +1191,42 @@ fun UserProfileScreen(
           horizontalAlignment = Alignment.CenterHorizontally
         ) {
           Box(contentAlignment = Alignment.BottomEnd) {
-            Box(
-              modifier =
-                Modifier.size(84.dp)
-                  .clip(CircleShape)
-                  .background(
-                    Brush.linearGradient(
-                      colors = listOf(Color(0xFFA855F7), Color(0xFF06B6D4))
-                    )
-                  )
-                  .border(3.dp, Color(0xFF22D3EE), CircleShape),
-              contentAlignment = Alignment.Center
-            ) {
-              Text(
-                text =
-                  (displayNameText.firstOrNull() ?: visibleEmailText.firstOrNull() ?: 'U')
-                    .uppercaseChar()
-                    .toString(),
-                style = MaterialTheme.typography.headlineLarge,
-                color = Color.White,
-                fontWeight = FontWeight.ExtraBold
+            if (!profile?.photoUrl.isNullOrBlank()) {
+              AsyncImage(
+                model = profile?.photoUrl,
+                contentDescription = displayNameText,
+                contentScale = ContentScale.Crop,
+                modifier =
+                  Modifier.size(84.dp)
+                    .clip(CircleShape)
+                    .border(3.dp, Color(0xFF22D3EE), CircleShape)
               )
+            } else {
+              Box(
+                modifier =
+                  Modifier.size(84.dp)
+                    .clip(CircleShape)
+                    .background(
+                      Brush.linearGradient(
+                        colors = listOf(Color(0xFFA855F7), Color(0xFF06B6D4))
+                      )
+                    )
+                    .border(3.dp, Color(0xFF22D3EE), CircleShape),
+                contentAlignment = Alignment.Center
+              ) {
+                Text(
+                  text =
+                    (displayNameText.firstOrNull() ?: visibleEmailText.firstOrNull() ?: 'U')
+                      .uppercaseChar()
+                      .toString(),
+                  style = MaterialTheme.typography.headlineLarge,
+                  color = Color.White,
+                  fontWeight = FontWeight.ExtraBold
+                )
+              }
             }
 
-            // Verified Badge Overlay on bottom-right of avatar
+            // Verified Badge Overlay on bottom-right of avatar ONLY when backend approvalStatus == "approved"
             if (profile?.approvalStatus == "approved") {
               Surface(
                 shape = CircleShape,
@@ -1214,6 +1264,17 @@ fun UserProfileScreen(
             color = Color(0xFF94A3B8),
             modifier = Modifier.testTag("profile_email_address")
           )
+
+          val resolvedUid = userUid.ifBlank { profile?.userId ?: profile?.id ?: "" }
+          if (resolvedUid.isNotBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = "UID: $resolvedUid",
+              style = MaterialTheme.typography.labelSmall,
+              color = Color(0xFF64748B),
+              modifier = Modifier.testTag("profile_user_uid")
+            )
+          }
 
           Spacer(modifier = Modifier.height(18.dp))
 

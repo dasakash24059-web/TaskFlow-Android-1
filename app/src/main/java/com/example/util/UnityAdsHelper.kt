@@ -148,6 +148,7 @@ object UnityAdsHelper {
 
   // Verified Unity Dashboard Android Project Game ID
   const val GAME_ID = "800430673"
+  private const val FALLBACK_AUCTION_GAME_ID = "6091982"
   const val REWARDED_PLACEMENT_ID = "BP_Rewarded_Android"
   const val BANNER_PLACEMENT_ID = "BP_Banner_Android"
   const val INTERSTITIAL_PLACEMENT_ID = "BP_Interstitial_Android"
@@ -164,9 +165,14 @@ object UnityAdsHelper {
   @Volatile private var isInitialized = false
   @Volatile private var isInitializing = false
   private val isAdOperationInProgress = AtomicBoolean(false)
+  @Volatile private var adOperationStartedAtMs: Long = 0L
 
   // Stores the objectId of the currently loaded rewarded ad for UnityAdsShowOptions.setObjectId()
   @Volatile private var loadedRewardedObjectId: String? = null
+
+  // Stores the objectId of the currently loaded interstitial ad (BP_Interstitial_Android)
+  @Volatile private var loadedInterstitialObjectId: String? = null
+  @Volatile private var isInterstitialLoading: Boolean = false
 
   // Cached publisher configuration JSON from publisher-config.unityads.unity3d.com
   @Volatile private var cachedPublisherConfig: JSONObject? = null
@@ -188,6 +194,12 @@ object UnityAdsHelper {
       return _adLoadState.value == AdLoadState.READY && !loadedRewardedObjectId.isNullOrBlank()
     }
 
+  val isInterstitialReady: Boolean
+    get() {
+      if (isRobolectric()) return true
+      return !loadedInterstitialObjectId.isNullOrBlank()
+    }
+
   // Controlled exponential backoff configuration: 5s, 15s, 30s
   private val retryDelaysMs = listOf(5_000L, 15_000L, 30_000L)
   @Volatile private var currentRetryAttempt = 0
@@ -196,6 +208,8 @@ object UnityAdsHelper {
   @Volatile var hasBannerTestFallback = false
 
   private val pendingInitCallbacks = CopyOnWriteArrayList<Pair<() -> Unit, (String) -> Unit>>()
+  private val pendingRewardedLoadCallbacks =
+    CopyOnWriteArrayList<Pair<(() -> Unit)?, ((String) -> Unit)?>>()
 
   private val _diagnosticState = MutableStateFlow(UnityAdsDiagnosticSnapshot())
   val diagnosticState: StateFlow<UnityAdsDiagnosticSnapshot> = _diagnosticState.asStateFlow()
@@ -257,6 +271,22 @@ object UnityAdsHelper {
     }
   }
 
+  private fun notifyRewardedLoadSuccess() {
+    val callbacks = pendingRewardedLoadCallbacks.toList()
+    pendingRewardedLoadCallbacks.clear()
+    callbacks.forEach { (onLoaded, _) ->
+      onLoaded?.let { cb -> runOnMainThread(cb) }
+    }
+  }
+
+  private fun notifyRewardedLoadError(errorMsg: String) {
+    val callbacks = pendingRewardedLoadCallbacks.toList()
+    pendingRewardedLoadCallbacks.clear()
+    callbacks.forEach { (_, onError) ->
+      onError?.let { cb -> runOnMainThread { cb(errorMsg) } }
+    }
+  }
+
   fun isNetworkAvailable(context: Context): Boolean {
     if (isRobolectric()) return true
     return try {
@@ -284,13 +314,15 @@ object UnityAdsHelper {
   }
 
   /**
-   * Initializes Unity Ads exactly once per application process lifetime.
+   * Initializes Unity Ads with GAME_ID (800430673) and automatic fallback if needed.
+   * Preloads both BP_Rewarded_Android and BP_Interstitial_Android upon completion.
    */
-  fun initialize(context: Context) {
+  fun initialize(context: Context, gameIdToUse: String = GAME_ID, isFallbackAttempt: Boolean = false) {
     if (isRobolectric()) {
       isInitialized = true
       isInitializing = false
       loadedRewardedObjectId = "robolectric_object_id"
+      loadedInterstitialObjectId = "robolectric_interstitial_id"
       _adLoadState.value = AdLoadState.READY
       updateDiagnostics {
         it.copy(
@@ -309,13 +341,13 @@ object UnityAdsHelper {
       callbacks.forEach { (onReady, _) -> onReady() }
       return
     }
-    if (isInitializing) {
+    if (isInitializing && !isFallbackAttempt) {
       Log.d(TAG, "[Init] Initialization already in progress; queuing callback.")
       return
     }
 
     runOnMainThread {
-      if (isSdkInitialized() || isInitializing) return@runOnMainThread
+      if (isSdkInitialized() || (isInitializing && !isFallbackAttempt)) return@runOnMainThread
       try {
         isInitializing = true
         val activity = context.findActivity()
@@ -327,15 +359,15 @@ object UnityAdsHelper {
         val sdkVer = readSdkVersionSafe()
         Log.i(
           TAG,
-          "[Init] Calling UnityAds.initialize(gameId=$GAME_ID, testMode=$TEST_MODE, sdkVersion=$sdkVer)"
+          "[Init] Calling UnityAds.initialize(gameId=$gameIdToUse, testMode=$TEST_MODE, sdkVersion=$sdkVer)"
         )
         updateDiagnostics {
-          it.copy(initCallbackResult = "INITIALIZING (gameId=$GAME_ID, testMode=$TEST_MODE)")
+          it.copy(initCallbackResult = "INITIALIZING (gameId=$gameIdToUse, testMode=$TEST_MODE)")
         }
 
         UnityAds.initialize(
           initContext,
-          GAME_ID,
+          gameIdToUse,
           TEST_MODE,
           object : IUnityAdsInitializationListener {
             override fun onInitializationComplete() {
@@ -353,19 +385,28 @@ object UnityAdsHelper {
               callbacks.forEach { (onReady, _) ->
                 runOnMainThread { onReady() }
               }
-              // Immediately start preloading the first rewarded ad once initialized
+              // Immediately start preloading both BP_Rewarded_Android and BP_Interstitial_Android
               preloadRewardedAd(context = initContext, force = false)
+              preloadInterstitialAd(context = initContext, force = false)
             }
 
             override fun onInitializationFailed(
               error: UnityAds.UnityAdsInitializationError?,
               message: String?
             ) {
-              isInitialized = false
-              isInitializing = false
               val errCode = error?.name ?: "UNKNOWN_INIT_ERROR"
               val errMsg = message ?: "No message"
-              Log.e(TAG, "[Init] onInitializationFailed: error=$errCode, message=$errMsg")
+              Log.e(TAG, "[Init] onInitializationFailed (gameId=$gameIdToUse): error=$errCode, message=$errMsg")
+
+              if (!isFallbackAttempt && gameIdToUse != FALLBACK_AUCTION_GAME_ID) {
+                Log.w(TAG, "[Init] Retrying UnityAds.initialize with fallback project configuration...")
+                isInitializing = false
+                initialize(initContext, gameIdToUse = FALLBACK_AUCTION_GAME_ID, isFallbackAttempt = true)
+                return
+              }
+
+              isInitialized = false
+              isInitializing = false
               val friendlyErr = "Unable to connect to video service ($errCode). Please check your internet connection."
               _lastLoadError.value = friendlyErr
               _adLoadState.value = AdLoadState.FAILED
@@ -456,8 +497,9 @@ object UnityAdsHelper {
   }
 
   /**
-   * Fetches and caches the Unity Publisher Configuration for GAME_ID (6091982) so we have
-   * valid `token`, `properties`, `projectId`, and placement metadata for V6 auction requests.
+   * Fetches and caches the Unity Publisher Configuration for GAME_ID (800430673) with automatic
+   * fallback to FALLBACK_AUCTION_GAME_ID (6091982) so V6 auction requests always have valid
+   * `token`, `properties`, `projectId`, and placement metadata.
    */
   private fun getOrFetchPublisherConfig(context: Context): JSONObject {
     val now = System.currentTimeMillis()
@@ -466,28 +508,51 @@ object UnityAdsHelper {
       return cached
     }
     val bundleId = runCatching { context.packageName }.getOrDefault("com.aistudio.taskflow.kxmpzq")
-    val configUrl =
-      "https://publisher-config.unityads.unity3d.com/games/$GAME_ID/configuration?bundleId=$bundleId&encrypted=false&platform=android&sdkVersion=41200"
-    val conn = (URL(configUrl).openConnection() as HttpURLConnection).apply {
-      requestMethod = "GET"
-      connectTimeout = 8_000
-      readTimeout = 8_000
-      setRequestProperty("Accept", "application/json")
-    }
-    try {
-      val status = conn.responseCode
-      val stream = if (status in 200..299) conn.inputStream else conn.errorStream
-      val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
-      if (status !in 200..299) {
-        throw IllegalStateException("Publisher config HTTP $status: $text")
+
+    fun fetchConfigForGameId(targetGameId: String): JSONObject? {
+      val configUrl =
+        "https://publisher-config.unityads.unity3d.com/games/$targetGameId/configuration?bundleId=$bundleId&encrypted=false&platform=android&sdkVersion=41200"
+      val conn = (URL(configUrl).openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = 6_000
+        readTimeout = 6_000
+        setRequestProperty("Accept", "application/json")
       }
-      val json = JSONObject(text)
-      cachedPublisherConfig = json
-      cachedPublisherConfigTimeMs = now
-      return json
-    } finally {
-      conn.disconnect()
+      return try {
+        val status = conn.responseCode
+        val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+        val text =
+          if (stream != null) {
+            BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+          } else {
+            ""
+          }
+        if (status in 200..299 && text.isNotBlank()) {
+          val parsed = JSONObject(text)
+          if (parsed.optString("token").isNotBlank() || parsed.length() > 0) {
+            parsed
+          } else {
+            null
+          }
+        } else {
+          Log.w(TAG, "[PublisherConfig] HTTP $status for gameId=$targetGameId")
+          null
+        }
+      } catch (e: Throwable) {
+        Log.w(TAG, "[PublisherConfig] Failed for gameId=$targetGameId: ${e.message}")
+        null
+      } finally {
+        conn.disconnect()
+      }
     }
+
+    val json =
+      fetchConfigForGameId(GAME_ID)
+        ?: fetchConfigForGameId(FALLBACK_AUCTION_GAME_ID)
+        ?: JSONObject()
+    cachedPublisherConfig = json
+    cachedPublisherConfigTimeMs = now
+    return json
   }
 
   /**
@@ -495,7 +560,10 @@ object UnityAdsHelper {
    * and a matching entry in the top-level `media` map.
    */
   private fun hasValidMediaFill(auctionJson: JSONObject, placementId: String): Boolean {
-    val placementsObj = auctionJson.optJSONObject("placementsV2") ?: auctionJson.optJSONObject("placements") ?: return false
+    val placementsObj =
+      auctionJson.optJSONObject("placementsV2")
+        ?: auctionJson.optJSONObject("placements")
+        ?: return false
     val plcEntry = placementsObj.optJSONObject(placementId) ?: return false
     val mediaIds = plcEntry.optJSONArray("mediaId") ?: return false
     if (mediaIds.length() == 0) return false
@@ -508,86 +576,89 @@ object UnityAdsHelper {
   /**
    * Executes a V6 auction request against Unity's auction endpoint and returns the Base64-encoded
    * `adMarkup` required by UnityAdsLoadOptions.setAdMarkup() for Header Bidding placements
-   * (`BP_Rewarded_Android` and `BP_Banner_Android`).
+   * (`BP_Rewarded_Android`, `BP_Interstitial_Android`, and `BP_Banner_Android`).
    *
-   * Queries production (`auction-load.unityads.unity3d.com`) first; if production returns no campaign
-   * fill (`mediaId: null`), falls back to Unity's V6 test auction endpoint so ads reliably load.
+   * Tries GAME_ID (`800430673`) first (prod -> test), and if no media fill is returned,
+   * automatically tries `FALLBACK_AUCTION_GAME_ID` (`6091982`) (prod -> test) so ads reliably load.
    */
   private fun fetchBiddingAdMarkupForPlacement(
     context: Context,
     placementId: String,
     isBanner: Boolean,
+    isInterstitial: Boolean = false,
     preferTestEndpoint: Boolean = false
   ): String {
     val cfg = getOrFetchPublisherConfig(context)
     val bundleId = runCatching { context.packageName }.getOrDefault("com.aistudio.taskflow.kxmpzq")
 
-    // Build placement entry matching Unity WebView Op() schema
-    val placementObj = JSONObject().apply {
-      if (isBanner) {
-        put("adTypes", JSONArray().put("BANNER"))
-        put("allowSkip", true)
-        put("auctionType", "cpm")
-        put("adFormat", "banner")
-        put("placementType", "bidding")
-        put("adUnitId", placementId)
-        put("dimensions", JSONObject().apply {
-          put("width", 320)
-          put("height", 50)
-        })
-      } else {
-        put("adTypes", JSONArray().put("MRAID").put("VIDEO").put("DISPLAY"))
-        put("allowSkip", false)
-        put("auctionType", "cpm")
-        put("adFormat", "rewarded")
-        put("placementType", "bidding")
-        put("adUnitId", placementId)
+    fun buildRequestBytes(adFormatStr: String, allowSkipFlag: Boolean): ByteArray {
+      val placementObj = JSONObject().apply {
+        if (isBanner) {
+          put("adTypes", JSONArray().put("BANNER"))
+          put("allowSkip", true)
+          put("auctionType", "cpm")
+          put("adFormat", "banner")
+          put("placementType", "bidding")
+          put("adUnitId", placementId)
+          put("dimensions", JSONObject().apply {
+            put("width", 320)
+            put("height", 50)
+          })
+        } else {
+          put("adTypes", JSONArray().put("MRAID").put("VIDEO").put("DISPLAY"))
+          put("allowSkip", allowSkipFlag)
+          put("auctionType", "cpm")
+          put("adFormat", adFormatStr)
+          put("placementType", "bidding")
+          put("adUnitId", placementId)
+        }
       }
-    }
 
-    val placementsMap = JSONObject().apply {
-      put(placementId, placementObj)
-    }
+      val placementsMap = JSONObject().apply {
+        put(placementId, placementObj)
+      }
 
-    val requestBody = JSONObject().apply {
-      put("bundleVersion", "4.3")
-      put("bundleId", bundleId)
-      put("coppa", cfg.optBoolean("coppaCompliant", false))
-      put("language", Locale.getDefault().language.ifBlank { "en" })
-      put("gameSessionId", sessionNumericId)
-      put("timeZone", TimeZone.getDefault().id.ifBlank { "Asia/Kolkata" })
-      put("token", cfg.optString("token", ""))
-      put("legalFramework", cfg.optString("legalFramework", "none"))
-      put("appStartTime", appStartTimeSec)
-      put("totalSpace", 64_000_000L)
-      put("clientTs", System.currentTimeMillis())
-      put("deviceFreeSpace", 32_000_000L)
-      put("wiredHeadset", false)
-      put("volume", 10)
-      put("batteryStatus", 2)
-      put("batteryLevel", 0.8)
-      put("freeMemory", 2_000_000L)
-      put("appVersion", "4.3")
-      put("versionCode", 23)
-      put("placements", placementsMap)
-      put("properties", cfg.optString("properties", ""))
-      put("sessionDepth", 1)
-      put("projectId", cfg.optString("projectId", ""))
-      put("gdprEnabled", cfg.optBoolean("gdprEnabled", false))
-      put("optOutEnabled", cfg.optBoolean("optOutEnabled", false))
-      put("optOutRecorded", cfg.optBoolean("optOutRecorded", false))
-      put("isLoadEnabled", true)
-      put("omidPartnerName", "Unity3d")
-      put("omidJSVersion", "1.3.0")
-      put("srcPayoutType", cfg.optString("srcPayoutType", "publisher"))
-      val orgId = cfg.optString("organizationId", "")
-      if (orgId.isNotBlank()) put("organizationId", orgId)
-      val devId = cfg.optString("developerId", "")
-      if (devId.isNotBlank()) put("developerId", devId)
-      put("loadV5Support", true)
-      put("load", true)
-      put("preload", false)
-      put("preloadData", JSONObject())
+      val requestBody = JSONObject().apply {
+        put("bundleVersion", "4.4")
+        put("bundleId", bundleId)
+        put("coppa", cfg.optBoolean("coppaCompliant", false))
+        put("language", Locale.getDefault().language.ifBlank { "en" })
+        put("gameSessionId", sessionNumericId)
+        put("timeZone", TimeZone.getDefault().id.ifBlank { "Asia/Kolkata" })
+        put("token", cfg.optString("token", ""))
+        put("legalFramework", cfg.optString("legalFramework", "none"))
+        put("appStartTime", appStartTimeSec)
+        put("totalSpace", 64_000_000L)
+        put("clientTs", System.currentTimeMillis())
+        put("deviceFreeSpace", 32_000_000L)
+        put("wiredHeadset", false)
+        put("volume", 10)
+        put("batteryStatus", 2)
+        put("batteryLevel", 0.8)
+        put("freeMemory", 2_000_000L)
+        put("appVersion", "4.4")
+        put("versionCode", 24)
+        put("placements", placementsMap)
+        put("properties", cfg.optString("properties", ""))
+        put("sessionDepth", 1)
+        put("projectId", cfg.optString("projectId", ""))
+        put("gdprEnabled", cfg.optBoolean("gdprEnabled", false))
+        put("optOutEnabled", cfg.optBoolean("optOutEnabled", false))
+        put("optOutRecorded", cfg.optBoolean("optOutRecorded", false))
+        put("isLoadEnabled", true)
+        put("omidPartnerName", "Unity3d")
+        put("omidJSVersion", "1.3.0")
+        put("srcPayoutType", cfg.optString("srcPayoutType", "publisher"))
+        val orgId = cfg.optString("organizationId", "")
+        if (orgId.isNotBlank()) put("organizationId", orgId)
+        val devId = cfg.optString("developerId", "")
+        if (devId.isNotBlank()) put("developerId", devId)
+        put("loadV5Support", true)
+        put("load", true)
+        put("preload", false)
+        put("preloadData", JSONObject())
+      }
+      return requestBody.toString().toByteArray(Charsets.UTF_8)
     }
 
     val deviceModel = java.net.URLEncoder.encode(Build.MODEL.ifBlank { "Android" }, "UTF-8")
@@ -597,17 +668,12 @@ object UnityAdsHelper {
     val commonQuery =
       "deviceModel=$deviceModel&platform=android&sdkVersion=41200&stores=google&deviceMake=$deviceMake&screenSize=2&screenDensity=420&apiLevel=$apiLevel&osVersion=$osVersion&screenWidth=1080&screenHeight=2400&connectionType=wifi&networkType=13"
 
-    val prodUrl = "https://auction-load.unityads.unity3d.com/v6/games/$GAME_ID/requests?$commonQuery"
-    val testUrl = "https://auction.unityads.unity3d.com/v6/test/games/$GAME_ID/requests?$commonQuery&test=true"
-
-    val bodyBytes = requestBody.toString().toByteArray(Charsets.UTF_8)
-
-    fun postAuction(urlStr: String): JSONObject? {
+    fun postAuction(urlStr: String, bodyBytes: ByteArray): JSONObject? {
       val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
         requestMethod = "POST"
         doOutput = true
-        connectTimeout = 8_000
-        readTimeout = 8_000
+        connectTimeout = 6_000
+        readTimeout = 6_000
         setRequestProperty("Content-Type", "application/json")
         setRequestProperty("Accept", "application/json")
       }
@@ -615,11 +681,16 @@ object UnityAdsHelper {
         conn.outputStream.use { it.write(bodyBytes) }
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-        val respText = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+        val respText =
+          if (stream != null) {
+            BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+          } else {
+            ""
+          }
         if (code in 200..299 && respText.isNotBlank()) {
           JSONObject(respText)
         } else {
-          Log.w(TAG, "[Auction] HTTP $code from $urlStr: $respText")
+          Log.w(TAG, "[Auction] HTTP $code from $urlStr")
           null
         }
       } catch (e: Throwable) {
@@ -630,17 +701,38 @@ object UnityAdsHelper {
       }
     }
 
-    val selectedResponse: JSONObject? = if (!preferTestEndpoint) {
-      val prodResp = postAuction(prodUrl)
-      if (prodResp != null && hasValidMediaFill(prodResp, placementId)) {
-        Log.i(TAG, "[Auction] Production V6 auction returned live fill for $placementId (auctionId=${prodResp.optString("auctionId")})")
-        prodResp
+    val primaryBytes =
+      if (isInterstitial) {
+        buildRequestBytes(adFormatStr = "interstitial", allowSkipFlag = true)
       } else {
-        Log.i(TAG, "[Auction] Production V6 auction had no fill for $placementId; requesting Unity V6 test fill...")
-        postAuction(testUrl)
+        buildRequestBytes(adFormatStr = "rewarded", allowSkipFlag = false)
       }
-    } else {
-      postAuction(testUrl)
+
+    fun tryAuctionForGameId(targetGameId: String, payloadBytes: ByteArray): JSONObject? {
+      val prodUrl = "https://auction-load.unityads.unity3d.com/v6/games/$targetGameId/requests?$commonQuery"
+      val testUrl = "https://auction.unityads.unity3d.com/v6/test/games/$targetGameId/requests?$commonQuery&test=true"
+      if (!preferTestEndpoint) {
+        val prodResp = postAuction(prodUrl, payloadBytes)
+        if (prodResp != null && hasValidMediaFill(prodResp, placementId)) {
+          return prodResp
+        }
+      }
+      val testResp = postAuction(testUrl, payloadBytes)
+      if (testResp != null && hasValidMediaFill(testResp, placementId)) {
+        return testResp
+      }
+      return null
+    }
+
+    var selectedResponse: JSONObject? =
+      tryAuctionForGameId(GAME_ID, primaryBytes)
+        ?: tryAuctionForGameId(FALLBACK_AUCTION_GAME_ID, primaryBytes)
+
+    if (selectedResponse == null && isInterstitial) {
+      val videoBytes = buildRequestBytes(adFormatStr = "rewarded", allowSkipFlag = true)
+      selectedResponse =
+        tryAuctionForGameId(GAME_ID, videoBytes)
+          ?: tryAuctionForGameId(FALLBACK_AUCTION_GAME_ID, videoBytes)
     }
 
     if (selectedResponse == null || !hasValidMediaFill(selectedResponse, placementId)) {
@@ -703,8 +795,8 @@ object UnityAdsHelper {
 
   /**
    * Background preloading of the rewarded video ad (`BP_Rewarded_Android`).
-   * Because `BP_Rewarded_Android` is configured with `placementType: "bidding"` in the Unity Dashboard,
-   * UnityAdsLoadOptions MUST include both `objectId` and `adMarkup`.
+   * Queues callbacks if a load is already in progress so user clicks on Watch Video or Claim
+   * never get dropped or time out.
    */
   fun preloadRewardedAd(
     context: Context,
@@ -731,8 +823,12 @@ object UnityAdsHelper {
       return
     }
 
+    if (onLoaded != null || onError != null) {
+      pendingRewardedLoadCallbacks.add(onLoaded to onError)
+    }
+
     if (_adLoadState.value == AdLoadState.LOADING) {
-      Log.d(TAG, "[Preload] Ad load request already in progress; skipping duplicate.")
+      Log.d(TAG, "[Preload] Ad load request already in progress; callback registered.")
       return
     }
 
@@ -747,7 +843,7 @@ object UnityAdsHelper {
           lastErrorCategory = AdErrorCategory.NETWORK_OFFLINE.name
         )
       }
-      onError?.let { runOnMainThread { it(offlineMsg) } }
+      notifyRewardedLoadError(offlineMsg)
       return
     }
 
@@ -756,27 +852,25 @@ object UnityAdsHelper {
       onReady = {
         executeRewardedAdLoad(
           context = context,
-          preferTestEndpoint = hasAttemptedTestFallback,
-          onLoaded = onLoaded,
-          onError = onError
+          preferTestEndpoint = hasAttemptedTestFallback
         )
       },
       onFailed = { initErr ->
         _adLoadState.value = AdLoadState.FAILED
         _lastLoadError.value = initErr
-        onError?.let { runOnMainThread { it(initErr) } }
+        notifyRewardedLoadError(initErr)
       }
     )
   }
 
   /**
-   * Fetches V6 `adMarkup` + generates `objectId`, then calls `UnityAds.load(REWARDED_PLACEMENT_ID, loadOptions, listener)`.
+   * Loads `BP_Rewarded_Android` using V6 `adMarkup` + `objectId`, with automatic fallback to
+   * test V6 auction and standard `UnityAds.load(REWARDED_PLACEMENT_ID, loadOptionsWithoutMarkup)`
+   * so `BP_Rewarded_Android` loads reliably under all dashboard configurations.
    */
   private fun executeRewardedAdLoad(
     context: Context,
-    preferTestEndpoint: Boolean = false,
-    onLoaded: (() -> Unit)?,
-    onError: ((String) -> Unit)?
+    preferTestEndpoint: Boolean = false
   ) {
     _adLoadState.value = AdLoadState.LOADING
     val objectId = UUID.randomUUID().toString()
@@ -790,12 +884,82 @@ object UnityAdsHelper {
       )
     }
 
+    fun tryStandardSdkLoadWithoutMarkup(fallbackReason: String) {
+      runOnMainThread {
+        try {
+          val fallbackObjectId = UUID.randomUUID().toString()
+          val standardOptions = UnityAdsLoadOptions().apply {
+            setObjectId(fallbackObjectId)
+          }
+          Log.i(
+            TAG,
+            "[Load] Attempting standard UnityAds.load($REWARDED_PLACEMENT_ID, objectId=$fallbackObjectId) after: $fallbackReason"
+          )
+          UnityAds.load(
+            REWARDED_PLACEMENT_ID,
+            standardOptions,
+            object : IUnityAdsLoadListener {
+              override fun onUnityAdsAdLoaded(placementId: String?) {
+                val actualPlacement = placementId ?: REWARDED_PLACEMENT_ID
+                loadedRewardedObjectId = fallbackObjectId
+                _adLoadState.value = AdLoadState.READY
+                _lastLoadError.value = null
+                currentRetryAttempt = 0
+                retryRunnable?.let { mainHandler.removeCallbacks(it) }
+                Log.i(TAG, "[Load] Standard onUnityAdsAdLoaded: placementId=$actualPlacement, objectId=$fallbackObjectId")
+                updateDiagnostics {
+                  it.copy(
+                    placementId = actualPlacement,
+                    adLoadState = "READY",
+                    adLoadCallbackResult = "SUCCESS: standard onUnityAdsAdLoaded (objectId=$fallbackObjectId)",
+                    lastErrorCategory = "NONE",
+                    lastErrorCode = "NONE",
+                    lastErrorMessage = "NONE"
+                  )
+                }
+                notifyRewardedLoadSuccess()
+              }
+
+              override fun onUnityAdsFailedToLoad(
+                placementId: String?,
+                error: UnityAds.UnityAdsLoadError?,
+                message: String?
+              ) {
+                val errorInfo = mapLoadError(error, message)
+                _adLoadState.value = AdLoadState.FAILED
+                _lastLoadError.value = errorInfo.userFriendlyMessage
+                updateDiagnostics {
+                  it.copy(
+                    placementId = placementId ?: REWARDED_PLACEMENT_ID,
+                    adLoadState = "FAILED",
+                    adLoadCallbackResult = "FAILED: error=${error?.name}, message=$message",
+                    lastErrorCategory = errorInfo.category.name,
+                    lastErrorCode = errorInfo.rawCode,
+                    lastErrorMessage = errorInfo.rawMessage
+                  )
+                }
+                scheduleAutoRetry(context)
+                notifyRewardedLoadError(errorInfo.userFriendlyMessage)
+              }
+            }
+          )
+        } catch (e: Throwable) {
+          val errorMsg = UNAVAILABLE_MESSAGE
+          _adLoadState.value = AdLoadState.FAILED
+          _lastLoadError.value = errorMsg
+          scheduleAutoRetry(context)
+          notifyRewardedLoadError(errorMsg)
+        }
+      }
+    }
+
     adAuctionExecutor.execute {
       try {
         val adMarkup = fetchBiddingAdMarkupForPlacement(
           context = appContext,
           placementId = REWARDED_PLACEMENT_ID,
           isBanner = false,
+          isInterstitial = false,
           preferTestEndpoint = preferTestEndpoint
         )
 
@@ -841,7 +1005,7 @@ object UnityAdsHelper {
                       lastErrorMessage = "NONE"
                     )
                   }
-                  onLoaded?.let { runOnMainThread(it) }
+                  notifyRewardedLoadSuccess()
                 }
 
                 override fun onUnityAdsFailedToLoad(
@@ -864,75 +1028,31 @@ object UnityAdsHelper {
                     updateDiagnostics { it.copy(testMode = true) }
                     executeRewardedAdLoad(
                       context = context,
-                      preferTestEndpoint = true,
-                      onLoaded = onLoaded,
-                      onError = onError
+                      preferTestEndpoint = true
                     )
                     return
                   }
 
-                  val errorInfo = mapLoadError(error, message)
-                  _adLoadState.value = AdLoadState.FAILED
-                  _lastLoadError.value = errorInfo.userFriendlyMessage
-
-                  updateDiagnostics {
-                    it.copy(
-                      placementId = actualPlacement,
-                      adLoadState = "FAILED",
-                      adLoadCallbackResult = "FAILED: error=$rawErr, message=$rawMsg",
-                      lastErrorCategory = errorInfo.category.name,
-                      lastErrorCode = errorInfo.rawCode,
-                      lastErrorMessage = errorInfo.rawMessage
-                    )
-                  }
-
-                  scheduleAutoRetry(context)
-                  onError?.let { runOnMainThread { it(errorInfo.userFriendlyMessage) } }
+                  // Fallback to standard SDK load without custom adMarkup
+                  tryStandardSdkLoadWithoutMarkup("Bidding load failed ($rawErr: $rawMsg)")
                 }
               }
             )
           } catch (e: Throwable) {
             Log.e(TAG, "[Load] Exception calling UnityAds.load($REWARDED_PLACEMENT_ID): ${e.message}", e)
-            val errorMsg = UNAVAILABLE_MESSAGE
-            _adLoadState.value = AdLoadState.FAILED
-            _lastLoadError.value = errorMsg
-            updateDiagnostics {
-              it.copy(
-                adLoadState = "FAILED",
-                adLoadCallbackResult = "EXCEPTION: ${e.javaClass.simpleName}: ${e.message}",
-                lastErrorCategory = AdErrorCategory.UNKNOWN.name,
-                lastErrorCode = e.javaClass.simpleName,
-                lastErrorMessage = e.message ?: "Exception"
-              )
-            }
-            onError?.let { runOnMainThread { it(errorMsg) } }
+            tryStandardSdkLoadWithoutMarkup("Exception in bidding load: ${e.message}")
           }
         }
       } catch (e: Throwable) {
-        Log.e(TAG, "[Load] Failed to fetch bidding adMarkup for $REWARDED_PLACEMENT_ID: ${e.message}", e)
-        runOnMainThread {
-          val errorMsg = "Unable to load video ad right now. Please check your connection and tap Try Again."
-          _adLoadState.value = AdLoadState.FAILED
-          _lastLoadError.value = errorMsg
-          updateDiagnostics {
-            it.copy(
-              adLoadState = "FAILED",
-              adLoadCallbackResult = "MARKUP_ERROR: ${e.message}",
-              lastErrorCategory = AdErrorCategory.NO_FILL.name,
-              lastErrorCode = "MARKUP_FETCH_FAILED",
-              lastErrorMessage = e.message ?: "Failed to fetch adMarkup"
-            )
-          }
-          scheduleAutoRetry(context)
-          onError?.let { it(errorMsg) }
-        }
+        Log.w(TAG, "[Load] Markup fetch fallback for $REWARDED_PLACEMENT_ID: ${e.message}")
+        tryStandardSdkLoadWithoutMarkup("Markup fetch exception: ${e.message}")
       }
     }
   }
 
   /**
    * Loads a `BannerView` (`BP_Banner_Android`) with `UnityAdsLoadOptions` containing
-   * both `objectId` and `adMarkup`.
+   * both `objectId` and `adMarkup`, falling back to standard `bannerView.load()` if needed.
    */
   fun loadBannerWithBiddingMarkup(
     context: Context,
@@ -949,6 +1069,7 @@ object UnityAdsHelper {
           context = appContext,
           placementId = BANNER_PLACEMENT_ID,
           isBanner = true,
+          isInterstitial = false,
           preferTestEndpoint = preferTestEndpoint
         )
         runOnMainThread {
@@ -970,6 +1091,13 @@ object UnityAdsHelper {
         Log.w(BANNER_TAG, "Failed to fetch banner adMarkup (${t.message}); attempting fallback load.")
         if (!preferTestEndpoint) {
           loadBannerWithBiddingMarkup(context, bannerView, preferTestEndpoint = true)
+        } else {
+          runOnMainThread {
+            runCatching {
+              val fallbackOptions = UnityAdsLoadOptions().apply { setObjectId(bannerObjectId) }
+              bannerView.load(fallbackOptions)
+            }
+          }
         }
       }
     }
@@ -1010,58 +1138,214 @@ object UnityAdsHelper {
       Log.d(TAG, "[Lifecycle] App returned to foreground; checking rewarded ad availability.")
       preloadRewardedAd(activity, force = false)
     }
+    if (!isInterstitialReady && !isInterstitialLoading) {
+      preloadInterstitialAd(activity, force = false)
+    }
   }
 
   /**
-   * Loads and shows a V6 interstitial ad for placement INTERSTITIAL_PLACEMENT_ID.
+   * Preloads `BP_Interstitial_Android` in the background so interstitial ads display promptly.
+   */
+  fun preloadInterstitialAd(
+    context: Context,
+    force: Boolean = false,
+    onLoaded: ((String) -> Unit)? = null,
+    onFailed: ((String) -> Unit)? = null
+  ) {
+    if (isRobolectric()) {
+      loadedInterstitialObjectId = "robolectric_interstitial_id"
+      onLoaded?.invoke("robolectric_interstitial_id")
+      return
+    }
+    val existingId = loadedInterstitialObjectId
+    if (!force && !existingId.isNullOrBlank()) {
+      onLoaded?.let { runOnMainThread { it(existingId) } }
+      return
+    }
+    if (isInterstitialLoading && onLoaded == null) {
+      return
+    }
+    if (!isNetworkAvailable(context)) {
+      onFailed?.let { runOnMainThread { it("No internet connection.") } }
+      return
+    }
+
+    ensureInitialized(
+      context = context,
+      onReady = {
+        isInterstitialLoading = true
+        val appContext = context.applicationContext ?: context
+        val objectId = UUID.randomUUID().toString()
+
+        fun loadInterstitialStandardFallback() {
+          runOnMainThread {
+            try {
+              val stdObjectId = UUID.randomUUID().toString()
+              val stdOptions = UnityAdsLoadOptions().apply { setObjectId(stdObjectId) }
+              UnityAds.load(
+                INTERSTITIAL_PLACEMENT_ID,
+                stdOptions,
+                object : IUnityAdsLoadListener {
+                  override fun onUnityAdsAdLoaded(placementId: String?) {
+                    isInterstitialLoading = false
+                    loadedInterstitialObjectId = stdObjectId
+                    Log.i(TAG, "[Interstitial] Standard load ready: placement=$INTERSTITIAL_PLACEMENT_ID, objectId=$stdObjectId")
+                    onLoaded?.let { runOnMainThread { it(stdObjectId) } }
+                  }
+
+                  override fun onUnityAdsFailedToLoad(
+                    placementId: String?,
+                    error: UnityAds.UnityAdsLoadError?,
+                    message: String?
+                  ) {
+                    isInterstitialLoading = false
+                    Log.w(TAG, "[Interstitial] Standard load failed: ${error?.name} - $message")
+                    onFailed?.let { runOnMainThread { it(message ?: "Interstitial load failed") } }
+                  }
+                }
+              )
+            } catch (e: Throwable) {
+              isInterstitialLoading = false
+              onFailed?.let { runOnMainThread { it(e.message ?: "Interstitial error") } }
+            }
+          }
+        }
+
+        adAuctionExecutor.execute {
+          try {
+            val markup = fetchBiddingAdMarkupForPlacement(
+              context = appContext,
+              placementId = INTERSTITIAL_PLACEMENT_ID,
+              isBanner = false,
+              isInterstitial = true,
+              preferTestEndpoint = false
+            )
+            runOnMainThread {
+              try {
+                val options = UnityAdsLoadOptions().apply {
+                  setObjectId(objectId)
+                  setAdMarkup(markup)
+                }
+                UnityAds.load(
+                  INTERSTITIAL_PLACEMENT_ID,
+                  options,
+                  object : IUnityAdsLoadListener {
+                    override fun onUnityAdsAdLoaded(placementId: String?) {
+                      isInterstitialLoading = false
+                      loadedInterstitialObjectId = objectId
+                      Log.i(TAG, "[Interstitial] Loaded with markup: placement=$INTERSTITIAL_PLACEMENT_ID, objectId=$objectId")
+                      onLoaded?.let { runOnMainThread { it(objectId) } }
+                    }
+
+                    override fun onUnityAdsFailedToLoad(
+                      placementId: String?,
+                      error: UnityAds.UnityAdsLoadError?,
+                      message: String?
+                    ) {
+                      Log.w(TAG, "[Interstitial] Markup load failed (${error?.name}: $message); trying standard load...")
+                      loadInterstitialStandardFallback()
+                    }
+                  }
+                )
+              } catch (e: Throwable) {
+                loadInterstitialStandardFallback()
+              }
+            }
+          } catch (t: Throwable) {
+            Log.w(TAG, "[Interstitial] Markup fetch failed (${t.message}); trying standard load...")
+            loadInterstitialStandardFallback()
+          }
+        }
+      },
+      onFailed = { err ->
+        isInterstitialLoading = false
+        onFailed?.let { runOnMainThread { it(err) } }
+      }
+    )
+  }
+
+  /**
+   * Loads and shows an interstitial ad for placement `BP_Interstitial_Android`.
+   * Uses the preloaded interstitial if ready, or loads and shows immediately.
    */
   fun loadAndShowInterstitialAd(
     activity: Activity,
     onClosed: () -> Unit = {},
     onFailed: (String) -> Unit = {}
   ) {
+    if (isRobolectric()) {
+      onClosed()
+      return
+    }
     if (!isNetworkAvailable(activity)) {
       onFailed("No internet connection.")
       return
     }
 
-    ensureInitialized(
-      context = activity,
-      onReady = {
-        adAuctionExecutor.execute {
-          try {
-            val markup = fetchBiddingAdMarkupForPlacement(
-              context = activity,
-              placementId = INTERSTITIAL_PLACEMENT_ID,
-              isBanner = false
-            )
-            val objectId = UUID.randomUUID().toString()
-            runOnMainThread {
-              val options = UnityAdsLoadOptions().apply {
-                setObjectId(objectId)
-                setAdMarkup(markup)
-              }
-              UnityAds.load(INTERSTITIAL_PLACEMENT_ID, options, object : IUnityAdsLoadListener {
-                override fun onUnityAdsAdLoaded(placementId: String?) {
-                  val showOptions = UnityAdsShowOptions().apply { setObjectId(objectId) }
-                  UnityAds.show(activity, INTERSTITIAL_PLACEMENT_ID, showOptions, object : IUnityAdsShowListener {
-                    override fun onUnityAdsShowClick(p0: String?) {}
-                    override fun onUnityAdsShowComplete(p0: String?, p1: UnityAds.UnityAdsShowCompletionState?) { onClosed() }
-                    override fun onUnityAdsShowFailure(p0: String?, p1: UnityAds.UnityAdsShowError?, p2: String?) { onFailed("Show failed: $p2") }
-                    override fun onUnityAdsShowStart(p0: String?) {}
-                  })
-                }
-                override fun onUnityAdsFailedToLoad(p0: String?, p1: UnityAds.UnityAdsLoadError?, p2: String?) {
-                  onFailed("Load failed: $p2")
-                }
-              })
-            }
-          } catch (t: Throwable) {
-            onFailed("Markup fetch failed: ${t.message}")
-          }
+    fun showLoadedInterstitial(objectId: String) {
+      runOnMainThread {
+        if (activity.isFinishing || activity.isDestroyed) {
+          onClosed()
+          return@runOnMainThread
         }
+        try {
+          loadedInterstitialObjectId = null
+          val showOptions = UnityAdsShowOptions().apply {
+            if (objectId.isNotBlank()) setObjectId(objectId)
+          }
+          Log.i(TAG, "[Interstitial] Showing $INTERSTITIAL_PLACEMENT_ID (objectId=$objectId)")
+          UnityAds.show(
+            activity,
+            INTERSTITIAL_PLACEMENT_ID,
+            showOptions,
+            object : IUnityAdsShowListener {
+              override fun onUnityAdsShowStart(placementId: String?) {
+                Log.i(TAG, "[Interstitial] onUnityAdsShowStart: $placementId")
+              }
+
+              override fun onUnityAdsShowClick(placementId: String?) {}
+
+              override fun onUnityAdsShowComplete(
+                placementId: String?,
+                state: UnityAds.UnityAdsShowCompletionState?
+              ) {
+                Log.i(TAG, "[Interstitial] onUnityAdsShowComplete: $placementId ($state)")
+                runOnMainThread { onClosed() }
+                preloadInterstitialAd(activity, force = true)
+              }
+
+              override fun onUnityAdsShowFailure(
+                placementId: String?,
+                error: UnityAds.UnityAdsShowError?,
+                message: String?
+              ) {
+                Log.w(TAG, "[Interstitial] onUnityAdsShowFailure: ${error?.name} - $message")
+                runOnMainThread { onFailed("Show failed: $message") }
+                preloadInterstitialAd(activity, force = true)
+              }
+            }
+          )
+        } catch (t: Throwable) {
+          onFailed("Interstitial show error: ${t.message}")
+        }
+      }
+    }
+
+    val preloadedId = loadedInterstitialObjectId
+    if (!preloadedId.isNullOrBlank() && isSdkInitialized()) {
+      showLoadedInterstitial(preloadedId)
+      return
+    }
+
+    preloadInterstitialAd(
+      context = activity,
+      force = true,
+      onLoaded = { objId ->
+        showLoadedInterstitial(objId)
       },
-      onFailed = { onFailed(it) }
+      onFailed = { err ->
+        onFailed(err)
+      }
     )
   }
 
@@ -1082,7 +1366,8 @@ object UnityAdsHelper {
   }
 
   /**
-   * Displays the loaded rewarded ad via UnityAds.show() with matching `objectId` in `UnityAdsShowOptions`.
+   * Displays the loaded rewarded ad (`BP_Rewarded_Android`) via UnityAds.show() with matching
+   * `objectId` in `UnityAdsShowOptions`. If not yet preloaded, automatically preloads first.
    */
   fun showRewardedAd(
     activity: Activity,
@@ -1100,6 +1385,34 @@ object UnityAdsHelper {
       onComplete()
       return
     }
+
+    val resolvedTargetId =
+      adObjectId?.takeIf { it.isNotBlank() && it != "waterfall_ad" } ?: loadedRewardedObjectId
+    if (resolvedTargetId.isNullOrBlank()) {
+      Log.i(TAG, "[Show] showRewardedAd called before ad ready; preloading $REWARDED_PLACEMENT_ID now...")
+      preloadRewardedAd(
+        context = activity,
+        force = true,
+        onLoaded = {
+          val newlyLoadedId = loadedRewardedObjectId
+          if (!newlyLoadedId.isNullOrBlank()) {
+            showRewardedAd(
+              activity = activity,
+              adObjectId = newlyLoadedId,
+              onStart = onStart,
+              onComplete = onComplete,
+              onSkipped = onSkipped,
+              onFailed = onFailed
+            )
+          } else {
+            onFailed(UNAVAILABLE_MESSAGE)
+          }
+        },
+        onError = { err -> onFailed(err) }
+      )
+      return
+    }
+
     runOnMainThread {
       try {
         if (activity.isFinishing || activity.isDestroyed) {
@@ -1119,23 +1432,19 @@ object UnityAdsHelper {
 
         runCatching { ClientProperties.setActivity(activity) }
 
-        val targetObjectId =
-          adObjectId?.takeIf { it.isNotBlank() && it != "waterfall_ad" } ?: loadedRewardedObjectId
         val showOptions = UnityAdsShowOptions().apply {
-          if (!targetObjectId.isNullOrBlank()) {
-            setObjectId(targetObjectId)
-          }
+          setObjectId(resolvedTargetId)
         }
 
         Log.i(
           TAG,
-          "[Show] Calling UnityAds.show(placementId=$REWARDED_PLACEMENT_ID, objectId=${targetObjectId ?: "NONE"})"
+          "[Show] Calling UnityAds.show(placementId=$REWARDED_PLACEMENT_ID, objectId=$resolvedTargetId)"
         )
         _adLoadState.value = AdLoadState.SHOWING
         updateDiagnostics {
           it.copy(
             adLoadState = "SHOWING",
-            adShowCallbackResult = "STARTING_SHOW (placement=$REWARDED_PLACEMENT_ID, objectId=${targetObjectId ?: "NONE"})..."
+            adShowCallbackResult = "STARTING_SHOW (placement=$REWARDED_PLACEMENT_ID, objectId=$resolvedTargetId)..."
           )
         }
 
@@ -1248,8 +1557,8 @@ object UnityAdsHelper {
   }
 
   /**
-   * Executes the complete rewarded video lifecycle for a verified server session:
-   * - Guards against concurrent duplicate requests
+   * Executes the complete rewarded video lifecycle (`BP_Rewarded_Android`) for a verified session:
+   * - Auto-recovers if a previous operation lock is stale
    * - Enforces operation timeout
    * - Ensures SDK initialization
    * - Binds sessionId to PlayerMetaData for server S2S callback
@@ -1262,10 +1571,21 @@ object UnityAdsHelper {
     onVideoCompleted: () -> Unit,
     onFailed: (String) -> Unit
   ) {
+    val now = System.currentTimeMillis()
+    if (
+      isAdOperationInProgress.get() &&
+        _adLoadState.value != AdLoadState.SHOWING &&
+        (now - adOperationStartedAtMs) > 10_000L
+    ) {
+      Log.w(TAG, "[WatchFlow] Resetting stale ad operation lock.")
+      isAdOperationInProgress.set(false)
+    }
+
     if (!isAdOperationInProgress.compareAndSet(false, true)) {
       Log.w(TAG, "[WatchFlow] Ignoring concurrent Watch request while operation is in progress.")
       return
     }
+    adOperationStartedAtMs = now
 
     val callbackDelivered = AtomicBoolean(false)
     val timeoutRunnable = Runnable {
@@ -1332,7 +1652,7 @@ object UnityAdsHelper {
           Log.i(TAG, "[WatchFlow] Ad not yet ready; loading now before show.")
           preloadRewardedAd(
             context = activity,
-            force = true,
+            force = false,
             onLoaded = {
               showRewardedAd(
                 activity = activity,

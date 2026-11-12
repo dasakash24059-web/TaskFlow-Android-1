@@ -107,10 +107,11 @@ import com.example.data.model.TaskStatus
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
+import com.example.data.model.WatchStats
 import com.example.data.model.calculateDailyCheckInState
+import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
 import com.example.data.model.mergeTasksWithPreservedSubmissions
-import com.example.data.model.WatchStats
 import com.example.util.UnityAdsDiagnosticSnapshot
 import com.example.util.UnityBannerAdView
 import com.example.util.findActivity
@@ -256,36 +257,48 @@ fun UserHomeScreen(
               horizontalArrangement = Arrangement.spacedBy(12.dp),
               modifier = Modifier.weight(1f)
             ) {
-              TaskFlowBrandLogo(size = 40.dp)
+              if (!profile?.photoUrl.isNullOrBlank()) {
+                AsyncImage(
+                  model = profile?.photoUrl,
+                  contentDescription = displayName,
+                  contentScale = ContentScale.Crop,
+                  modifier =
+                    Modifier.size(44.dp)
+                      .clip(CircleShape)
+                      .border(2.dp, Color(0xFF22D3EE), CircleShape)
+                )
+              } else {
+                TaskFlowBrandLogo(size = 42.dp)
+              }
               Column {
+                Text(
+                  text = "Welcome back,",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFF94A3B8),
+                  fontWeight = FontWeight.Medium
+                )
                 Row(
                   verticalAlignment = Alignment.CenterVertically,
                   horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                   Text(
-                    text = "Welcome back,",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF94A3B8),
-                    fontWeight = FontWeight.Medium
+                    text = displayName,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false).testTag("home_welcome_message")
                   )
                   if (profile?.approvalStatus == "approved") {
                     Icon(
                       imageVector = Icons.Default.CheckCircle,
                       contentDescription = "Verified Account",
                       tint = Color(0xFF22D3EE),
-                      modifier = Modifier.size(15.dp)
+                      modifier = Modifier.size(16.dp)
                     )
                   }
                 }
-                Text(
-                  text = displayName,
-                  style = MaterialTheme.typography.titleLarge,
-                  color = Color.White,
-                  fontWeight = FontWeight.Bold,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                  modifier = Modifier.testTag("home_welcome_message")
-                )
               }
             }
 
@@ -545,46 +558,66 @@ private fun DailyCheckInCard(
   onOpenCalendar: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
-  Card(
+  val nextDay = dailyCheckInState.nextClaimDay.coerceIn(1, 30)
+  val nextCoins = DailyCheckInConstants.getRewardCoinsForDay(nextDay)
+  Box(
     modifier =
       modifier
         .testTag("home_daily_checkin_card")
-        .clip(RoundedCornerShape(26.dp))
+        .clip(RoundedCornerShape(24.dp))
+        .background(
+          Brush.verticalGradient(
+            colors = listOf(Color(0xFF1D4ED8), Color(0xFF0284C7), Color(0xFF0F172A))
+          )
+        )
+        .border(1.5.dp, Color(0x8038BDF8), RoundedCornerShape(24.dp))
         .clickable {
           onClaimDailyCheckIn()
           onOpenCalendar()
-        },
-    shape = RoundedCornerShape(26.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+        }
   ) {
     Column(
-      modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 14.dp),
+      modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp),
       verticalArrangement = Arrangement.Center,
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       Surface(
-        shape = CircleShape,
-        color = Color(0xFFFEF3C7),
-        modifier = Modifier.size(58.dp)
+        shape = RoundedCornerShape(16.dp),
+        color = Color.White.copy(alpha = 0.18f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x807DD3FC)),
+        modifier = Modifier.size(50.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.LocalFireDepartment,
             contentDescription = "Daily Check-in",
-            tint = Color(0xFFEA580C),
-            modifier = Modifier.size(30.dp)
+            tint = Color(0xFFFDE047),
+            modifier = Modifier.size(28.dp)
           )
         }
       }
-      Spacer(modifier = Modifier.height(10.dp))
+      Spacer(modifier = Modifier.height(8.dp))
       Text(
         text = "Daily Check-in",
         style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.ExtraBold,
         textAlign = TextAlign.Center,
         lineHeight = 18.sp,
-        color = MaterialTheme.colorScheme.onSurface
+        color = Color.White
+      )
+      Spacer(modifier = Modifier.height(2.dp))
+      Text(
+        text =
+          if (dailyCheckInState.canCheckInToday) {
+            "Day $nextDay: +$nextCoins Coins"
+          } else {
+            "Up to 1,000 Coins"
+          },
+        style = MaterialTheme.typography.labelSmall,
+        fontSize = 10.sp,
+        color = Color(0xFFBAE6FD),
+        fontWeight = FontWeight.SemiBold,
+        textAlign = TextAlign.Center
       )
     }
   }
@@ -596,11 +629,17 @@ private fun WatchAndEarnCard(
   onShowInterstitialClicked: () -> Unit,
   modifier: Modifier = Modifier
 ) {
-  Card(
-    modifier = modifier.testTag("home_watch_earn_card").clip(RoundedCornerShape(26.dp)),
-    shape = RoundedCornerShape(26.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+  Box(
+    modifier =
+      modifier
+        .testTag("home_watch_earn_card")
+        .clip(RoundedCornerShape(24.dp))
+        .background(
+          Brush.verticalGradient(
+            colors = listOf(Color(0xFF7C3AED), Color(0xFF4F46E5), Color(0xFF1E1B4B))
+          )
+        )
+        .border(1.5.dp, Color(0x80C084FC), RoundedCornerShape(24.dp))
   ) {
     Column(
       modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp),
@@ -608,31 +647,39 @@ private fun WatchAndEarnCard(
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().clickable { onWatchAdClicked() },
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        Icon(
-          imageVector = Icons.Default.PlayArrow,
-          contentDescription = null,
-          tint = Color(0xFF5B21B6),
-          modifier = Modifier.size(20.dp)
-        )
-        Spacer(modifier = Modifier.width(4.dp))
+        Surface(
+          shape = CircleShape,
+          color = Color.White.copy(alpha = 0.2f),
+          modifier = Modifier.size(26.dp)
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.Default.PlayArrow,
+              contentDescription = null,
+              tint = Color.White,
+              modifier = Modifier.size(18.dp)
+            )
+          }
+        }
+        Spacer(modifier = Modifier.width(6.dp))
         Text(
           text = "Watch & Earn",
           style = MaterialTheme.typography.titleSmall,
           fontWeight = FontWeight.ExtraBold,
-          color = Color(0xFF5B21B6),
+          color = Color.White,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
       }
 
       Text(
-        text = "Up to 300 Coins",
+        text = "1–200 Coins / Cycle",
         style = MaterialTheme.typography.labelSmall,
-        color = Color(0xFF6B21A8),
+        color = Color(0xFFFDE047),
         fontWeight = FontWeight.Bold,
         modifier = Modifier.testTag("watch_earn_badge")
       )
@@ -640,14 +687,18 @@ private fun WatchAndEarnCard(
       Button(
         onClick = onWatchAdClicked,
         shape = RoundedCornerShape(50),
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5B21B6)),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = Color.White.copy(alpha = 0.22f),
+            contentColor = Color.White
+          ),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-        modifier = Modifier.fillMaxWidth().height(36.dp).testTag("watch_ad_button")
+        modifier = Modifier.fillMaxWidth().height(34.dp).testTag("watch_ad_button")
       ) {
         Text(
           text = "Watch Now",
           style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.ExtraBold,
           color = Color.White
         )
       }
@@ -670,12 +721,18 @@ private fun WatchAdInfoDialog(
   val isClaiming = watchEarnUiState.isClaiming
   val isClaimed = watchEarnUiState.isClaimed
   val hasError = watchEarnUiState.hasError
+  val videosInCycle =
+    when {
+      isClaimed -> 2
+      isReadyToClaim -> 1
+      else -> watchEarnUiState.videosCompletedInCycle.coerceIn(0, 2)
+    }
 
   AlertDialog(
     onDismissRequest = onDismiss,
     modifier = Modifier.testTag("watch_earn_dialog"),
     shape = RoundedCornerShape(26.dp),
-    containerColor = Color(0xFFFAFAFE),
+    containerColor = Color(0xFF0F172A),
     title = {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -684,7 +741,8 @@ private fun WatchAdInfoDialog(
       ) {
         Surface(
           shape = CircleShape,
-          color = Color(0xFFEDE9FE),
+          color = Color(0x357C3AED),
+          border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80A855F7)),
           modifier = Modifier.size(44.dp)
         ) {
           Box(contentAlignment = Alignment.Center) {
@@ -693,28 +751,29 @@ private fun WatchAdInfoDialog(
                 if (isReadyToClaim || isClaimed) Icons.Default.CheckCircle
                 else Icons.Default.PlayArrow,
               contentDescription = null,
-              tint = if (isReadyToClaim || isClaimed) Color(0xFF059669) else Color(0xFF6D28D9),
+              tint = if (isReadyToClaim || isClaimed) Color(0xFF34D399) else Color(0xFFC084FC),
               modifier = Modifier.size(26.dp)
             )
           }
         }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
           Text(
-            text = "Watch & Earn",
+            text = "Watch & Earn Coins",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFF1E1B4B)
+            color = Color.White
           )
           Surface(
             shape = RoundedCornerShape(50),
-            color = Color(0xFFEDE9FE)
+            color = Color(0x30F59E0B),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FBBF24))
           ) {
             Text(
-              text = "Earn Rewards",
-              style = MaterialTheme.typography.labelMedium,
+              text = "Earn 1–200 Coins (2 Videos = 1 Reward)",
+              style = MaterialTheme.typography.labelSmall,
               fontWeight = FontWeight.Bold,
-              color = Color(0xFF6D28D9),
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp)
+              color = Color(0xFFFDE047),
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
             )
           }
         }
@@ -725,27 +784,40 @@ private fun WatchAdInfoDialog(
         modifier = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp)
       ) {
-        // Progress Card
+        // Daily & 2-Video Cycle Progress Card
         Surface(
           shape = RoundedCornerShape(14.dp),
-          color = Color(0xFFF3E8FF).copy(alpha = 0.6f),
+          color = Color(0x451E293B),
+          border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x50A855F7)),
           modifier = Modifier.fillMaxWidth()
         ) {
           Column(
             modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
           ) {
-            Text(
-              text = "Today's Progress",
-              style = MaterialTheme.typography.labelLarge,
-              fontWeight = FontWeight.Bold,
-              color = Color(0xFF4C1D95)
-            )
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Text(
+                text = "Today's Progress",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFC084FC)
+              )
+              Text(
+                text = "Cycle: $videosInCycle / 2 Videos",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFFFDE047)
+              )
+            }
             Text(
               text = "Videos Watched: ${watchStats.videosWatched} / 25",
               style = MaterialTheme.typography.bodyMedium,
               fontWeight = FontWeight.SemiBold,
-              color = Color(0xFF1E1B4B)
+              color = Color.White
             )
           }
         }
@@ -754,7 +826,8 @@ private fun WatchAdInfoDialog(
         if (isLoadingAd || isClaiming) {
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color(0xFFEFF6FF),
+            color = Color(0x300284C7),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8038BDF8)),
             modifier = Modifier.fillMaxWidth().testTag("watch_earn_loading_banner")
           ) {
             Row(
@@ -765,7 +838,7 @@ private fun WatchAdInfoDialog(
               CircularProgressIndicator(
                 modifier = Modifier.size(20.dp),
                 strokeWidth = 2.5.dp,
-                color = Color(0xFF6D28D9)
+                color = Color(0xFF38BDF8)
               )
               Text(
                 text =
@@ -774,18 +847,18 @@ private fun WatchAdInfoDialog(
                   },
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF1E3A8A)
+                color = Color(0xFFBAE6FD)
               )
             }
           }
         }
 
-        // Ready-to-Claim Verified State Banner & Claim Button
+        // Ready-to-Claim State Banner (Video 1 of 2 Completed -> Tap Claim to play Video 2 & auto-credit)
         if (isReadyToClaim) {
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color(0xFFECFDF5),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA7F3D0)),
+            color = Color(0x2510B981),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8034D399)),
             modifier = Modifier.fillMaxWidth().testTag("watch_earn_ready_to_claim_banner")
           ) {
             Column(
@@ -796,28 +869,28 @@ private fun WatchAdInfoDialog(
               Text(
                 text =
                   watchEarnUiState.statusMessage.ifBlank {
-                    "Video completed! Tap Claim to receive your reward."
+                    "Video 1 of 2 completed! Tap Claim to watch the 2nd video and receive 1–200 Coins."
                   },
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFF065F46),
+                color = Color(0xFFA7F3D0),
                 textAlign = TextAlign.Center
               )
               Button(
                 onClick = onClaimVerifiedReward,
-                enabled = !isClaiming,
+                enabled = !isClaiming && !isLoadingAd,
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
                 modifier =
                   Modifier.fillMaxWidth()
                     .height(48.dp)
                     .testTag("claim_watch_reward_button")
               ) {
-                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.White)
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                  text = "Claim",
-                  fontWeight = FontWeight.Bold,
+                  text = "Claim (Watch Video 2 of 2)",
+                  fontWeight = FontWeight.ExtraBold,
                   color = Color.White
                 )
               }
@@ -829,7 +902,8 @@ private fun WatchAdInfoDialog(
         if (isClaimed) {
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color(0xFFECFDF5),
+            color = Color(0x2510B981),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8034D399)),
             modifier = Modifier.fillMaxWidth().testTag("watch_earn_claimed_banner")
           ) {
             Text(
@@ -839,17 +913,18 @@ private fun WatchAdInfoDialog(
                 },
               style = MaterialTheme.typography.bodySmall,
               fontWeight = FontWeight.Bold,
-              color = Color(0xFF047857),
+              color = Color(0xFF6EE7B7),
               modifier = Modifier.padding(14.dp)
             )
           }
         }
 
-        // Error State Banner with Retry Option
+        // Error State Banner with Retry Option (Never exposes raw "NOT_FOUND")
         if (hasError && !watchEarnUiState.errorMessage.isNullOrBlank()) {
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color(0xFFFEF2F2),
+            color = Color(0x30EF4444),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80F87171)),
             modifier = Modifier.fillMaxWidth().testTag("watch_earn_error_banner")
           ) {
             Column(
@@ -857,16 +932,20 @@ private fun WatchAdInfoDialog(
               verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
               val rawErr = watchEarnUiState.errorMessage.orEmpty()
-              val formattedErr = if (rawErr.isBlank() || rawErr == "NOT_FOUND" || rawErr.contains("NOT_FOUND", ignoreCase = true)) {
-                "Video is currently unavailable. Please tap Try Again to reload."
-              } else {
-                rawErr
-              }
+              val formattedErr =
+                if (rawErr.isBlank() ||
+                  rawErr.equals("NOT_FOUND", ignoreCase = true) ||
+                  rawErr.contains("NOT_FOUND", ignoreCase = true)
+                ) {
+                  "Video is currently unavailable. Please tap Try Again to reload."
+                } else {
+                  rawErr
+                }
               Text(
                 text = formattedErr,
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
-                color = Color(0xFFB91C1C)
+                color = Color(0xFFFCA5A5)
               )
               if (!isLimitReached && !isLoadingAd && !isClaiming) {
                 OutlinedButton(
@@ -877,7 +956,7 @@ private fun WatchAdInfoDialog(
                   Icon(
                     Icons.Default.Refresh,
                     contentDescription = "Retry loading video",
-                    tint = Color(0xFFB91C1C),
+                    tint = Color(0xFFFCA5A5),
                     modifier = Modifier.size(16.dp)
                   )
                   Spacer(modifier = Modifier.width(6.dp))
@@ -885,7 +964,7 @@ private fun WatchAdInfoDialog(
                     text = "Try Again",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFB91C1C)
+                    color = Color(0xFFFCA5A5)
                   )
                 }
               }
@@ -893,7 +972,7 @@ private fun WatchAdInfoDialog(
           }
         }
 
-        // Watch Now Button (hidden while Claim button is active for current completed video)
+        // Watch Video 1 Button (hidden while Claim button is active for Video 2)
         if (!isReadyToClaim) {
           Button(
             onClick = onStartWatchVideo,
@@ -909,7 +988,7 @@ private fun WatchAdInfoDialog(
                 when {
                   isLimitReached -> "Daily Limit Reached (25/25)"
                   isLoadingAd -> "Loading Video..."
-                  else -> "Watch Now"
+                  else -> "Watch Video (1 / 2)"
                 },
               fontWeight = FontWeight.Bold,
               color = Color.White
@@ -918,27 +997,27 @@ private fun WatchAdInfoDialog(
         }
 
         // Instructions
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
           Text(
-            text = "How it works:",
+            text = "How Watch & Earn works:",
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFF1E1B4B)
+            color = Color.White
           )
           Text(
-            text = "• Tap Watch Now and watch the complete video until the end.",
+            text = "1. Tap Watch Video (1/2) and watch the 1st video until the end.",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = Color(0xFFCBD5E1)
           )
           Text(
-            text = "• Once the video is completed and verified, tap Claim to credit your wallet.",
+            text = "2. Tap Claim to watch the 2nd video (2/2).",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = Color(0xFFCBD5E1)
           )
           Text(
-            text = "• Up to 25 videos can be completed per day.",
+            text = "3. After the 2nd video finishes, 1–200 Coins are credited automatically!",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = Color(0xFFFDE047)
           )
         }
       }
@@ -948,12 +1027,12 @@ private fun WatchAdInfoDialog(
         onClick = onDismiss,
         enabled = !isLoadingAd && !isClaiming,
         shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6D28D9)),
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
         modifier =
           Modifier.fillMaxWidth()
             .testTag("close_watch_dialog_button")
       ) {
-        Text("Close", fontWeight = FontWeight.Bold)
+        Text("Close", fontWeight = FontWeight.Bold, color = Color.White)
       }
     }
   )
@@ -964,11 +1043,18 @@ private fun SpinAndEarnCard(
   onClick: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
-  NeonGlassCard(
-    modifier = modifier.testTag("home_spin_earn_card"),
-    borderColor = Color(0x60EC4899),
-    backgroundColor = Color(0x3B1F174B),
-    onClick = onClick
+  Box(
+    modifier =
+      modifier
+        .testTag("home_spin_earn_card")
+        .clip(RoundedCornerShape(24.dp))
+        .background(
+          Brush.verticalGradient(
+            colors = listOf(Color(0xFFD97706), Color(0xFFB45309), Color(0xFF1E1B4B))
+          )
+        )
+        .border(1.5.dp, Color(0x90FBBF24), RoundedCornerShape(24.dp))
+        .clickable(onClick = onClick)
   ) {
     Column(
       modifier = Modifier.fillMaxSize().padding(14.dp),
@@ -977,15 +1063,15 @@ private fun SpinAndEarnCard(
     ) {
       Surface(
         shape = CircleShape,
-        color = Color(0x35EC4899),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80F472B6)),
-        modifier = Modifier.size(52.dp)
+        color = Color.White.copy(alpha = 0.2f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x90FDE047)),
+        modifier = Modifier.size(50.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.Refresh,
             contentDescription = "Spin & Earn",
-            tint = Color(0xFFF472B6),
+            tint = Color(0xFFFDE047),
             modifier = Modifier.size(28.dp)
           )
         }
@@ -994,18 +1080,18 @@ private fun SpinAndEarnCard(
       Text(
         text = "Spin &\nEarn",
         style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.ExtraBold,
         textAlign = TextAlign.Center,
         lineHeight = 18.sp,
         color = Color.White
       )
       Spacer(modifier = Modifier.height(2.dp))
       Text(
-        text = "Win Up to 500 Coins",
+        text = "Win 10–150 Coins",
         style = MaterialTheme.typography.labelSmall,
-        fontSize = 9.sp,
-        color = Color(0xFFF472B6),
-        fontWeight = FontWeight.SemiBold
+        fontSize = 10.sp,
+        color = Color(0xFFFDE047),
+        fontWeight = FontWeight.Bold
       )
     }
   }
@@ -1016,11 +1102,18 @@ private fun OfferWallCard(
   onClick: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
-  NeonGlassCard(
-    modifier = modifier.testTag("home_offer_wall_card"),
-    borderColor = Color(0x6010B981),
-    backgroundColor = Color(0x3B1F174B),
-    onClick = onClick
+  Box(
+    modifier =
+      modifier
+        .testTag("home_offer_wall_card")
+        .clip(RoundedCornerShape(24.dp))
+        .background(
+          Brush.verticalGradient(
+            colors = listOf(Color(0xFF059669), Color(0xFF047857), Color(0xFF0F172A))
+          )
+        )
+        .border(1.5.dp, Color(0x8034D399), RoundedCornerShape(24.dp))
+        .clickable(onClick = onClick)
   ) {
     Column(
       modifier = Modifier.fillMaxSize().padding(14.dp),
@@ -1028,16 +1121,16 @@ private fun OfferWallCard(
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       Surface(
-        shape = CircleShape,
-        color = Color(0x3510B981),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8034D399)),
-        modifier = Modifier.size(52.dp)
+        shape = RoundedCornerShape(16.dp),
+        color = Color.White.copy(alpha = 0.18f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x806EE7B7)),
+        modifier = Modifier.size(50.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.Campaign,
             contentDescription = "Offer Wall",
-            tint = Color(0xFF34D399),
+            tint = Color(0xFFA7F3D0),
             modifier = Modifier.size(28.dp)
           )
         }
@@ -1046,7 +1139,7 @@ private fun OfferWallCard(
       Text(
         text = "Offer\nWall",
         style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.ExtraBold,
         textAlign = TextAlign.Center,
         lineHeight = 18.sp,
         color = Color.White
@@ -1055,9 +1148,9 @@ private fun OfferWallCard(
       Text(
         text = "High Paying Tasks",
         style = MaterialTheme.typography.labelSmall,
-        fontSize = 9.sp,
-        color = Color(0xFF34D399),
-        fontWeight = FontWeight.SemiBold
+        fontSize = 10.sp,
+        color = Color(0xFFA7F3D0),
+        fontWeight = FontWeight.Bold
       )
     }
   }
@@ -1199,7 +1292,7 @@ private fun LeaderboardPreviewCard(
               }
 
               Text(
-                text = formatRewardInr(user.balanceCents),
+                text = formatCoins(user.getEffectiveBalanceCoins()),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color(0xFF16A34A)
@@ -1283,7 +1376,7 @@ private fun LeaderboardDialog(
                   )
                 }
                 Text(
-                  text = formatRewardInr(user.balanceCents),
+                  text = formatCoins(user.getEffectiveBalanceCoins()),
                   style = MaterialTheme.typography.titleMedium,
                   fontWeight = FontWeight.Bold,
                   color = Color(0xFF16A34A)

@@ -353,7 +353,32 @@ private fun AuthenticatedWorkspace(
   val trackingFilter by viewModel.trackingStatusFilter.collectAsStateWithLifecycle()
   val submissionFilter by viewModel.adminSubmissionFilter.collectAsStateWithLifecycle()
   val isAdminAuthorized by viewModel.isAdminAuthorized.collectAsStateWithLifecycle()
-  val userProfileState by viewModel.userProfileState.collectAsStateWithLifecycle()
+  val rawUserProfileState by viewModel.userProfileState.collectAsStateWithLifecycle()
+  val googlePhotoUrl = remember(user) { user.photoUrl?.toString().orEmpty() }
+  val userProfileState =
+    remember(rawUserProfileState, googlePhotoUrl) {
+      when (val s = rawUserProfileState) {
+        is UiState.Success -> {
+          if (s.data != null && s.data.photoUrl.isBlank() && googlePhotoUrl.isNotBlank()) {
+            UiState.Success(s.data.copy(photoUrl = googlePhotoUrl))
+          } else {
+            s
+          }
+        }
+        else -> s
+      }
+    }
+  val currentActivity =
+    remember(context) {
+      (context as? android.app.Activity)
+        ?: run {
+          var cur = context
+          while (cur is android.content.ContextWrapper && cur !is android.app.Activity) {
+            cur = cur.baseContext
+          }
+          cur as? android.app.Activity
+        }
+    }
   val userTasksState by viewModel.userTasksState.collectAsStateWithLifecycle()
   val userSubmissionsState by viewModel.userSubmissionsState.collectAsStateWithLifecycle()
   val userWithdrawalRequestsState by viewModel.userWithdrawalRequestsState.collectAsStateWithLifecycle()
@@ -366,6 +391,7 @@ private fun AuthenticatedWorkspace(
   val dailyCheckInState by viewModel.dailyCheckInState.collectAsStateWithLifecycle()
   val watchStats by viewModel.watchStats.collectAsStateWithLifecycle()
   val watchEarnUiState by viewModel.watchEarnUiState.collectAsStateWithLifecycle()
+  val spinEarnUiState by viewModel.spinEarnUiState.collectAsStateWithLifecycle()
   val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
   val submissionError by viewModel.submissionError.collectAsStateWithLifecycle()
   val withdrawalValidationError by viewModel.withdrawalValidationError.collectAsStateWithLifecycle()
@@ -739,21 +765,28 @@ private fun AuthenticatedWorkspace(
                 } else if (isSpinScreenVisible) {
                   SpinAndEarnScreen(
                     onBack = { viewModel.setSpinScreenVisible(false) },
+                    spinState = spinEarnUiState,
+                    onStartSpin = { onOutcomeReady ->
+                      viewModel.startSpinWithBackendOutcome(onOutcomeReady)
+                    },
+                    onWheelAnimationFinished = {
+                      viewModel.onSpinWheelAnimationFinished()
+                    },
+                    onWatchExtraSpinVideo = {
+                      if (currentActivity != null) {
+                        viewModel.watchAdForExtraSpin(currentActivity)
+                      }
+                    },
+                    onClaimSpinRewardWithAd = {
+                      viewModel.claimSpinRewardWithAd(currentActivity)
+                    },
                     onClaimReward = { coins ->
                       viewModel.claimSpinReward(coins)
                     },
                     onShowRewardedAd = { onAdCompleted ->
-                      val activity = (context as? android.app.Activity)
-                        ?: run {
-                          var cur = context
-                          while (cur is android.content.ContextWrapper && cur !is android.app.Activity) {
-                            cur = cur.baseContext
-                          }
-                          cur as? android.app.Activity
-                        }
-                      if (activity != null) {
+                      if (currentActivity != null) {
                         com.example.util.UnityAdsHelper.showRewardedAd(
-                          activity = activity,
+                          activity = currentActivity,
                           onComplete = { onAdCompleted() },
                           onFailed = { onAdCompleted() }
                         )
@@ -762,17 +795,9 @@ private fun AuthenticatedWorkspace(
                       }
                     },
                     onShowInterstitialAd = { onAdCompleted ->
-                      val activity = (context as? android.app.Activity)
-                        ?: run {
-                          var cur = context
-                          while (cur is android.content.ContextWrapper && cur !is android.app.Activity) {
-                            cur = cur.baseContext
-                          }
-                          cur as? android.app.Activity
-                        }
-                      if (activity != null) {
+                      if (currentActivity != null) {
                         com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(
-                          activity = activity,
+                          activity = currentActivity,
                           onClosed = { onAdCompleted() },
                           onFailed = { onAdCompleted() }
                         )
@@ -807,8 +832,18 @@ private fun AuthenticatedWorkspace(
                     dailyCheckInState = dailyCheckInState,
                     onClaimDailyCheckIn = {
                       viewModel.setDailyCheckInScreenVisible(true)
+                      com.example.util.UnityAdsHelper.preloadRewardedAd(context, force = false)
+                      if (currentActivity != null) {
+                        com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(currentActivity)
+                      }
                     },
-                    onNavigateToDailyCheckIn = { viewModel.setDailyCheckInScreenVisible(true) },
+                    onNavigateToDailyCheckIn = {
+                      viewModel.setDailyCheckInScreenVisible(true)
+                      com.example.util.UnityAdsHelper.preloadRewardedAd(context, force = false)
+                      if (currentActivity != null) {
+                        com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(currentActivity)
+                      }
+                    },
                     transactionsState = userTransactionsState,
                     leaderboardState = leaderboardUsersState,
                     onNavigateToWallet = { openWithdraw ->
@@ -823,40 +858,31 @@ private fun AuthenticatedWorkspace(
                     },
                     watchEarnUiState = watchEarnUiState,
                     onStartWatchVideo = {
-                      val activity =
-                        (context as? android.app.Activity)
-                          ?: run {
-                            var cur = context
-                            while (cur is android.content.ContextWrapper && cur !is android.app.Activity) {
-                              cur = cur.baseContext
-                            }
-                            cur as? android.app.Activity
-                          }
-                      if (activity != null) {
-                        viewModel.startWatchEarnVideo(activity)
+                      if (currentActivity != null) {
+                        viewModel.startWatchEarnVideo(currentActivity)
                       }
                     },
                     onClaimVerifiedWatchReward = {
-                      viewModel.claimVerifiedWatchEarnReward()
+                      viewModel.claimVerifiedWatchEarnReward(activity = currentActivity)
                     },
                     onOpenWatchDialog = {
                       viewModel.prepareWatchEarnDialog(context)
                     },
                     onShowInterstitial = {
-                      val activity = (context as? android.app.Activity)
-                        ?: run {
-                            var cur = context
-                            while (cur is android.content.ContextWrapper && cur !is android.app.Activity) {
-                              cur = cur.baseContext
-                            }
-                            cur as? android.app.Activity
-                          }
-                      if (activity != null) {
-                         com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(activity)
+                      if (currentActivity != null) {
+                        com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(currentActivity)
                       }
                     },
-                    onNavigateToSpin = { viewModel.setSpinScreenVisible(true) },
-                    onNavigateToOfferWall = { viewModel.setOfferWallScreenVisible(true) }
+                    onNavigateToSpin = {
+                      viewModel.setSpinScreenVisible(true)
+                      com.example.util.UnityAdsHelper.preloadRewardedAd(context, force = false)
+                    },
+                    onNavigateToOfferWall = {
+                      viewModel.setOfferWallScreenVisible(true)
+                      if (currentActivity != null) {
+                        com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(currentActivity)
+                      }
+                    }
                   )
                 }
               }

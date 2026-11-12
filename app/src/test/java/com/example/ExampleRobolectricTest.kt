@@ -954,10 +954,10 @@ class ExampleRobolectricTest {
     }
     composeTestRule.waitForIdle()
 
-    // 1. Verify Available Balance in INR (₹350.00), Minimum Withdrawal: ₹200, Withdraw button, and NO Add Money option
-    composeTestRule.onNodeWithTag("wallet_available_balance").assertIsDisplayed().assertTextEquals("₹350.00")
+    // 1. Verify Available Balance in Coins (43,750 Coins for ₹350.00), Minimum Withdrawal: 25,000 Coins, Withdraw button, and NO Add Money option
+    composeTestRule.onNodeWithTag("wallet_available_balance").assertIsDisplayed().assertTextEquals("43,750 Coins")
     composeTestRule.onNodeWithTag("wallet_min_withdrawal_text").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Minimum Withdrawal: ₹200").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Minimum Withdrawal: 25,000 Coins").assertIsDisplayed()
     composeTestRule.onNodeWithTag("wallet_withdraw_button").assertIsDisplayed()
     composeTestRule.onNodeWithText("Add Money", substring = true).assertDoesNotExist()
 
@@ -1461,7 +1461,7 @@ class ExampleRobolectricTest {
 
     composeTestRule.onNodeWithTag("wallet_available_balance").assertIsDisplayed()
     composeTestRule.onNodeWithTag("wallet_total_earnings").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("wallet_pending_rewards").assertIsDisplayed().assertTextEquals("₹35.00")
+    composeTestRule.onNodeWithTag("wallet_pending_rewards").assertIsDisplayed().assertTextEquals("4,375 Coins")
     composeTestRule
       .onNodeWithTag("user_wallet_screen")
       .performScrollToNode(hasTestTag("wallet_transaction_history_section"))
