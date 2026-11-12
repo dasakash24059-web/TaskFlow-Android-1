@@ -769,7 +769,7 @@ private fun WatchAdInfoDialog(
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FBBF24))
           ) {
             Text(
-              text = "Earn 1–200 Coins (2 Videos = 1 Reward)",
+              text = "Earn 1–200 Coins Instantly",
               style = MaterialTheme.typography.labelSmall,
               fontWeight = FontWeight.Bold,
               color = Color(0xFFFDE047),
@@ -784,7 +784,7 @@ private fun WatchAdInfoDialog(
         modifier = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp)
       ) {
-        // Daily & 2-Video Cycle Progress Card
+        // Daily Progress Card
         Surface(
           shape = RoundedCornerShape(14.dp),
           color = Color(0x451E293B),
@@ -807,18 +807,12 @@ private fun WatchAdInfoDialog(
                 color = Color(0xFFC084FC)
               )
               Text(
-                text = "Cycle: $videosInCycle / 2 Videos",
+                text = "${watchStats.videosWatched} / 25 Completed",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color(0xFFFDE047)
               )
             }
-            Text(
-              text = "Videos Watched: ${watchStats.videosWatched} / 25",
-              style = MaterialTheme.typography.bodyMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = Color.White
-            )
           }
         }
 
@@ -853,7 +847,7 @@ private fun WatchAdInfoDialog(
           }
         }
 
-        // Ready-to-Claim State Banner (Video 1 of 2 Completed -> Tap Claim to play Video 2 & auto-credit)
+        // Ready-to-Claim State Banner
         if (isReadyToClaim) {
           Surface(
             shape = RoundedCornerShape(14.dp),
@@ -869,7 +863,7 @@ private fun WatchAdInfoDialog(
               Text(
                 text =
                   watchEarnUiState.statusMessage.ifBlank {
-                    "Video 1 of 2 completed! Tap Claim to watch the 2nd video and receive 1–200 Coins."
+                    "Video completed! Tap Claim below to collect your reward."
                   },
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Bold,

@@ -1855,9 +1855,9 @@ private fun TaskEditorDialog(
   var category by rememberSaveable {
     mutableStateOf(existingTask?.category ?: TaskCategories.ALL.first())
   }
-  var rewardInr by rememberSaveable {
+  var rewardCoinsStr by rememberSaveable {
     mutableStateOf(
-      existingTask?.let { String.format(Locale.US, "%.2f", it.rewardCents / 100.0) } ?: "15.00"
+      existingTask?.let { "${it.rewardCents}" } ?: "500"
     )
   }
   var description by rememberSaveable { mutableStateOf(existingTask?.description ?: "") }
@@ -1890,7 +1890,7 @@ private fun TaskEditorDialog(
 
   val isLinkValid = taskLink.isBlank() || isValidTaskUrl(taskLink)
   val isIconValid = isValidImageUrlOrDataUri(appIconUrl)
-  val isRewardValid = (rewardInr.trim().toDoubleOrNull() ?: 0.0) > 0.0
+  val isRewardValid = (rewardCoinsStr.trim().toLongOrNull() ?: 0L) > 0L
   val canSave =
     title.isNotBlank() &&
       description.isNotBlank() &&
@@ -2013,13 +2013,14 @@ private fun TaskEditorDialog(
           }
         }
 
-        // 5. Reward Amount (INR ₹)
+        // 5. Reward Amount (Coins)
         OutlinedTextField(
-          value = rewardInr,
-          onValueChange = { rewardInr = it },
-          label = { Text("Reward Amount (INR ₹)") },
+          value = rewardCoinsStr,
+          onValueChange = { rewardCoinsStr = it.filter { ch -> ch.isDigit() } },
+          label = { Text("Reward Amount (Coins)") },
+          placeholder = { Text("e.g. 500") },
           singleLine = true,
-          isError = rewardInr.isNotBlank() && !isRewardValid,
+          isError = rewardCoinsStr.isNotBlank() && !isRewardValid,
           modifier = Modifier.fillMaxWidth().testTag("task_modal_reward_input")
         )
 
@@ -2141,7 +2142,7 @@ private fun TaskEditorDialog(
             title.trim(),
             description.trim(),
             category,
-            rewardInr.trim(),
+            rewardCoinsStr.trim(),
             selectedAssignee,
             instructions.trim().ifBlank { description.trim() },
             taskLink.trim(),
@@ -2476,9 +2477,9 @@ fun CampaignEditorDialog(
   var title by remember { mutableStateOf("") }
   var clientName by remember { mutableStateOf("") }
   var description by remember { mutableStateOf("") }
-  var budgetStr by remember { mutableStateOf("5000") } // ₹5,000
+  var budgetStr by remember { mutableStateOf("50000") } // 50,000 Coins
   var targetStr by remember { mutableStateOf("100") } // 100 submissions
-  var rewardStr by remember { mutableStateOf("25") } // ₹25 per task
+  var rewardStr by remember { mutableStateOf("500") } // 500 Coins per task
   var category by remember { mutableStateOf("App Install") }
 
   AlertDialog(
@@ -2518,13 +2519,13 @@ fun CampaignEditorDialog(
           OutlinedTextField(
             value = budgetStr,
             onValueChange = { budgetStr = it.filter { ch -> ch.isDigit() } },
-            label = { Text("Total Budget (₹)") },
+            label = { Text("Total Budget (Coins)") },
             modifier = Modifier.weight(1f)
           )
           OutlinedTextField(
             value = rewardStr,
             onValueChange = { rewardStr = it.filter { ch -> ch.isDigit() } },
-            label = { Text("Per Task (₹)") },
+            label = { Text("Per Task (Coins)") },
             modifier = Modifier.weight(1f)
           )
         }
@@ -2539,9 +2540,9 @@ fun CampaignEditorDialog(
     confirmButton = {
       Button(
         onClick = {
-          val budget = (budgetStr.toLongOrNull() ?: 5000L) * 100L
+          val budget = budgetStr.toLongOrNull() ?: 50000L
           val target = targetStr.toLongOrNull() ?: 100L
-          val reward = (rewardStr.toLongOrNull() ?: 25L) * 100L
+          val reward = rewardStr.toLongOrNull() ?: 500L
           onSave(title, clientName, description, budget, target, category, reward)
         },
         enabled = title.isNotBlank() && clientName.isNotBlank()

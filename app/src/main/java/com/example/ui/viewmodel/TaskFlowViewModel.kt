@@ -587,7 +587,7 @@ class TaskFlowViewModel(
     title: String,
     description: String,
     category: String,
-    rewardAmountInr: String,
+    rewardAmountCoins: String,
     assignedUser: UserProfile,
     instructions: String = "",
     taskLink: String = "",
@@ -595,9 +595,9 @@ class TaskFlowViewModel(
     appIconUrl: String = "",
     requiredProof: String = ""
   ) {
-    val parsedAmountInr = rewardAmountInr.trim().toDoubleOrNull()
-    if (parsedAmountInr == null || parsedAmountInr <= 0.0) {
-      _bannerMessage.value = "Enter a valid reward amount in INR (e.g., 15.00)."
+    val parsedCoins = rewardAmountCoins.trim().toLongOrNull()
+    if (parsedCoins == null || parsedCoins <= 0L) {
+      _bannerMessage.value = "Enter a valid reward amount in Coins (e.g., 500)."
       return
     }
     val cleanedLink = taskLink.trim()
@@ -611,7 +611,7 @@ class TaskFlowViewModel(
       _bannerMessage.value = "Please enter a valid HTTPS icon URL or pick an icon from Gallery."
       return
     }
-    val rewardCents = (parsedAmountInr * 100.0).roundToLong()
+    val rewardCents = parsedCoins
     viewModelScope.launch {
       _isBusy.value = true
       repository
@@ -631,7 +631,7 @@ class TaskFlowViewModel(
         )
         .onSuccess {
           _bannerMessage.value =
-            "Task '$title' created (${formatRewardInr(rewardCents)}) and published to TaskFlow."
+            "Task '$title' created (${formatCoins(rewardCents)}) and published to TaskFlow."
         }
         .onFailure {
           _bannerMessage.value = it.localizedMessage ?: "Failed to create task."
@@ -645,7 +645,7 @@ class TaskFlowViewModel(
     title: String,
     description: String,
     category: String,
-    rewardAmountInr: String,
+    rewardAmountCoins: String,
     assignedUser: UserProfile,
     instructions: String = "",
     taskLink: String = "",
@@ -653,9 +653,9 @@ class TaskFlowViewModel(
     appIconUrl: String = "",
     requiredProof: String = ""
   ) {
-    val parsedAmountInr = rewardAmountInr.trim().toDoubleOrNull()
-    if (parsedAmountInr == null || parsedAmountInr <= 0.0) {
-      _bannerMessage.value = "Enter a valid reward amount in INR (e.g., 15.00)."
+    val parsedCoins = rewardAmountCoins.trim().toLongOrNull()
+    if (parsedCoins == null || parsedCoins <= 0L) {
+      _bannerMessage.value = "Enter a valid reward amount in Coins (e.g., 500)."
       return
     }
     val cleanedLink = taskLink.trim()
@@ -669,7 +669,7 @@ class TaskFlowViewModel(
       _bannerMessage.value = "Please enter a valid HTTPS icon URL or pick an icon from Gallery."
       return
     }
-    val rewardCents = (parsedAmountInr * 100.0).roundToLong()
+    val rewardCents = parsedCoins
     viewModelScope.launch {
       _isBusy.value = true
       repository
@@ -902,10 +902,9 @@ class TaskFlowViewModel(
    * - Only after 1st video completes does the Claim button appear (videosCompletedInCycle = 1).
    */
   fun startWatchEarnVideo(activity: android.app.Activity) {
-    android.util.Log.i("WatchEarnFlow", "[Step 1] startWatchEarnVideo invoked by user tap")
+    android.util.Log.i("WatchEarnFlow", "startWatchEarnVideo invoked by user tap")
     val uid = currentUserId
     if (uid.isBlank()) {
-      android.util.Log.w("WatchEarnFlow", "[Step 1] Blocked: user is not authenticated")
       _bannerMessage.value = "Please sign in to watch videos."
       return
     }
@@ -928,7 +927,7 @@ class TaskFlowViewModel(
       com.example.data.model.WatchEarnUiState(
         status = com.example.data.model.WatchEarnFlowStatus.LOADING_AD,
         videosCompletedInCycle = 0,
-        statusMessage = "Loading Video 1 of 2..."
+        statusMessage = "Loading video..."
       )
 
     viewModelScope.launch {
@@ -960,7 +959,7 @@ class TaskFlowViewModel(
               status = com.example.data.model.WatchEarnFlowStatus.SHOWING_AD,
               activeSessionId = sessionId,
               videosCompletedInCycle = 0,
-              statusMessage = "Watching Video 1 of 2... Please watch until the end."
+              statusMessage = "Watching video... Please watch until the end."
             )
         },
         onVideoCompleted = {
@@ -973,8 +972,7 @@ class TaskFlowViewModel(
                     status = com.example.data.model.WatchEarnFlowStatus.READY_TO_CLAIM,
                     activeSessionId = sessionId,
                     videosCompletedInCycle = 1,
-                    statusMessage =
-                      "Video 1 of 2 completed! Tap Claim to watch the 2nd video and receive 1–200 Coins."
+                    statusMessage = "Video completed! Tap Claim below to watch the final ad and collect your Coins."
                   )
               }
               .onFailure { err ->
@@ -982,12 +980,7 @@ class TaskFlowViewModel(
                 _watchEarnUiState.value =
                   com.example.data.model.WatchEarnUiState(
                     status = com.example.data.model.WatchEarnFlowStatus.ERROR,
-                    errorMessage =
-                      if (rawErr.contains("NOT_FOUND", ignoreCase = true)) {
-                        "Verification service busy. Please try again."
-                      } else {
-                        rawErr
-                      }
+                    errorMessage = rawErr
                   )
               }
           }
@@ -996,21 +989,13 @@ class TaskFlowViewModel(
           _watchEarnUiState.value =
             com.example.data.model.WatchEarnUiState(
               status = com.example.data.model.WatchEarnFlowStatus.ERROR,
-              errorMessage =
-                errorMsg.ifBlank { com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE }
+              errorMessage = errorMsg.ifBlank { com.example.util.UnityAdsHelper.UNAVAILABLE_MESSAGE }
             )
         }
       )
     }
   }
 
-  /**
-   * Watch & Earn 2-Video Cycle — Step 2 (Claim button -> Video 2 of 2 -> Automatic Random 1–200 Coin Credit):
-   * - When the user taps "Claim" after Video 1 completes:
-   *   - If [activity] is provided, plays the 2nd rewarded video first.
-   *   - Once the 2nd video completes, automatically credits the random 1–200 Coins (75% 1–50, 25% 51–200)
-   *     and updates wallet balance, watch_stats, and transaction history without a second Claim button.
-   */
   fun claimVerifiedWatchEarnReward(
     activity: android.app.Activity? = null,
     onSuccess: (Long) -> Unit = {}
@@ -1031,7 +1016,7 @@ class TaskFlowViewModel(
         currentFlow.copy(
           status = com.example.data.model.WatchEarnFlowStatus.CLAIMING,
           videosCompletedInCycle = 2,
-          statusMessage = "Crediting your random Coin reward (1–200 Coins)...",
+          statusMessage = "Crediting your 1–200 Coins...",
           errorMessage = null
         )
 
@@ -1051,27 +1036,19 @@ class TaskFlowViewModel(
                 activeSessionId = "",
                 videosCompletedInCycle = 2,
                 lastRewardCoins = earned,
-                statusMessage =
-                  "2 / 2 Videos Completed! +${formatCoins(earned)} added to your wallet."
+                statusMessage = "Success! +${formatCoins(earned)} added to your wallet."
               )
-            _bannerMessage.value =
-              "Watch & Earn reward claimed! +${formatCoins(earned)} credited to your wallet."
+            _bannerMessage.value = "Watch & Earn reward claimed! +${formatCoins(earned)} credited."
             onSuccess(earned)
           }
           .onFailure { err ->
             val rawMsg = err.localizedMessage ?: "Failed to claim reward."
-            val cleanMsg =
-              if (rawMsg.contains("NOT_FOUND", ignoreCase = true)) {
-                "Unable to complete reward claim right now. Please try again."
-              } else {
-                rawMsg
-              }
             _watchEarnUiState.value =
               currentFlow.copy(
                 status = com.example.data.model.WatchEarnFlowStatus.ERROR,
-                errorMessage = cleanMsg
+                errorMessage = rawMsg
               )
-            _bannerMessage.value = cleanMsg
+            _bannerMessage.value = rawMsg
           }
         _isBusy.value = false
       }
@@ -1082,7 +1059,7 @@ class TaskFlowViewModel(
         currentFlow.copy(
           status = com.example.data.model.WatchEarnFlowStatus.LOADING_AD,
           videosCompletedInCycle = 1,
-          statusMessage = "Loading Video 2 of 2 to claim your reward...",
+          statusMessage = "Loading final ad to collect coins...",
           errorMessage = null
         )
       val secondVideoSessionId = "${sessionId}_claim2"
@@ -1094,21 +1071,18 @@ class TaskFlowViewModel(
             currentFlow.copy(
               status = com.example.data.model.WatchEarnFlowStatus.SHOWING_AD,
               videosCompletedInCycle = 1,
-              statusMessage =
-                "Watching Video 2 of 2... Your Coin reward will be credited automatically!"
+              statusMessage = "Watching final ad... Coins will be credited automatically!"
             )
         },
         onVideoCompleted = {
           finalizeRewardCredit()
         },
         onFailed = { errorMsg ->
-          // Keep session in READY_TO_CLAIM so user can tap Claim again without losing Video 1 progress!
           _watchEarnUiState.value =
             currentFlow.copy(
               status = com.example.data.model.WatchEarnFlowStatus.READY_TO_CLAIM,
               videosCompletedInCycle = 1,
-              statusMessage =
-                "2nd video was not completed (${errorMsg.ifBlank { "Ad unavailable" }}). Tap Claim to try Video 2 again."
+              statusMessage = "Ad not completed (${errorMsg.ifBlank { "Ad unavailable" }}). Tap Claim to try again."
             )
         }
       )
@@ -1122,34 +1096,6 @@ class TaskFlowViewModel(
     if (currentFlow.isReadyToClaim && currentFlow.activeSessionId.isNotBlank()) {
       claimVerifiedWatchEarnReward(activity = null, onSuccess = onSuccess)
       return
-    }
-    val uid = currentUserId
-    val todayKey = getTodayDateKey()
-    val name = (userProfileState.value as? UiState.Success)?.data?.displayName ?: "TaskFlow Member"
-
-    if (uid.isBlank()) {
-      _bannerMessage.value = "Please sign in to earn rewards."
-      return
-    }
-
-    val stats = watchStats.value
-    if (stats.videosWatched >= 25L) {
-      _bannerMessage.value = "You have reached the maximum limit of 25 watched videos for today."
-      return
-    }
-
-    viewModelScope.launch {
-      _isBusy.value = true
-      repository
-        .claimWatchEarnReward(uid, name, todayKey)
-        .onSuccess { earned ->
-          _bannerMessage.value = "Watch & Earn reward claimed: +${formatCoins(earned)}"
-          onSuccess(earned)
-        }
-        .onFailure { err ->
-          _bannerMessage.value = err.localizedMessage ?: "Failed to claim reward."
-        }
-      _isBusy.value = false
     }
   }
 
