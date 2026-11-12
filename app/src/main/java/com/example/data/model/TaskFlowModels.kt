@@ -376,8 +376,21 @@ fun UserProfile.getEffectiveBalanceCoins(): Long {
   return maxOf(balanceCoins, combined)
 }
 
+data class TaskStep(
+  val stepNumber: Int = 1,
+  val title: String = "",
+  val instructions: String = "",
+  val destinationUrl: String = "",
+  val actionLabel: String = "Open Link",
+  val requiresProof: Boolean = false,
+  val requiresTracking: Boolean = false,
+  val referenceImageUrl: String = "",
+  val referenceImageCaption: String = ""
+)
+
 data class TaskItem(
   @DocumentId val id: String = "",
+  val appId: String = "",
   val title: String = "",
   val appName: String = "",
   val appIconUrl: String = "",
@@ -398,6 +411,8 @@ data class TaskItem(
   val proofStoragePath: String = "",
   val adminFeedback: String = "",
   val createdBy: String = "",
+  val steps: List<TaskStep> = emptyList(),
+  val referenceImages: List<String> = emptyList(),
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -631,6 +646,24 @@ data class SupportTicket(
   val status: String = "OPEN", // OPEN, RESOLVED, CLOSED
   val adminNotes: String = "",
   @ServerTimestamp val createdAt: Timestamp? = null,
+  @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+data class AppItem(
+  @DocumentId val id: String = "",
+  val name: String = "",
+  val logoUrl: String = "",
+  @get:PropertyName("isArchived") val isArchived: Boolean = false,
+  @ServerTimestamp val createdAt: Timestamp? = null
+)
+
+data class UserTaskProgress(
+  @DocumentId val id: String = "",
+  val taskId: String = "",
+  val userId: String = "",
+  val completedSteps: List<Int> = emptyList(),
+  val trackingEvents: Map<String, Boolean> = emptyMap(),
+  val status: String = "IN_PROGRESS",
   @ServerTimestamp val updatedAt: Timestamp? = null
 )
 

@@ -883,7 +883,7 @@ private fun WatchAdInfoDialog(
                 Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                  text = "Claim (Watch Video 2 of 2)",
+                  text = "Claim Reward",
                   fontWeight = FontWeight.ExtraBold,
                   color = Color.White
                 )
@@ -982,7 +982,7 @@ private fun WatchAdInfoDialog(
                 when {
                   isLimitReached -> "Daily Limit Reached (25/25)"
                   isLoadingAd -> "Loading Video..."
-                  else -> "Watch Video (1 / 2)"
+                  else -> "Watch Video"
                 },
               fontWeight = FontWeight.Bold,
               color = Color.White
@@ -999,17 +999,17 @@ private fun WatchAdInfoDialog(
             color = Color.White
           )
           Text(
-            text = "1. Tap Watch Video (1/2) and watch the 1st video until the end.",
+            text = "1. Tap Watch Video and watch the video until completion.",
             style = MaterialTheme.typography.bodySmall,
             color = Color(0xFFCBD5E1)
           )
           Text(
-            text = "2. Tap Claim to watch the 2nd video (2/2).",
+            text = "2. Tap Claim to watch the next video and collect your reward.",
             style = MaterialTheme.typography.bodySmall,
             color = Color(0xFFCBD5E1)
           )
           Text(
-            text = "3. After the 2nd video finishes, 1–200 Coins are credited automatically!",
+            text = "3. 1–200 Coins are credited automatically to your wallet!",
             style = MaterialTheme.typography.bodySmall,
             color = Color(0xFFFDE047)
           )

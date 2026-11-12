@@ -17,14 +17,17 @@ import com.example.data.model.NotificationItem
 import com.example.data.model.SpinEarnUiState
 import com.example.data.model.SpinSessionOutcome
 import com.example.data.model.SpinWheelConstants
+import com.example.data.model.AppItem
 import com.example.data.model.SubmissionItem
 import com.example.data.model.SupportTicket
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
+import com.example.data.model.TaskStep
 import com.example.data.model.TransactionRecord
+import com.example.data.model.UserProfile
+import com.example.data.model.UserTaskProgress
 import com.example.data.model.UpdateDownloadProgress
 import com.example.data.model.UpdateDownloadStatus
-import com.example.data.model.UserProfile
 import com.example.data.model.WatchStats
 import com.example.data.model.WithdrawalMethod
 import com.example.data.model.calculateDailyCheckInState
@@ -226,6 +229,42 @@ class TaskFlowViewModel(
       .map<List<TaskItem>, UiState<List<TaskItem>>> { UiState.Success(it) }
       .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load admin tasks")) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  val appsState: StateFlow<UiState<List<AppItem>>> =
+    repository.observeApps()
+      .map<List<AppItem>, UiState<List<AppItem>>> { UiState.Success(it) }
+      .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load apps")) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  fun createApp(name: String, logoUrl: String, onSuccess: () -> Unit = {}) {
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository.createApp(name, logoUrl)
+        .onSuccess {
+          _bannerMessage.value = "App '$name' created successfully!"
+          onSuccess()
+        }
+        .onFailure {
+          _bannerMessage.value = it.localizedMessage ?: "Failed to create app."
+        }
+      _isBusy.value = false
+    }
+  }
+
+  fun updateApp(appId: String, name: String, logoUrl: String, isArchived: Boolean, onSuccess: () -> Unit = {}) {
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository.updateApp(appId, name, logoUrl, isArchived)
+        .onSuccess {
+          _bannerMessage.value = "App updated successfully!"
+          onSuccess()
+        }
+        .onFailure {
+          _bannerMessage.value = it.localizedMessage ?: "Failed to update app."
+        }
+      _isBusy.value = false
+    }
+  }
 
   @OptIn(ExperimentalCoroutinesApi::class)
   val adminSubmissionsState: StateFlow<UiState<List<SubmissionItem>>> =
@@ -593,7 +632,10 @@ class TaskFlowViewModel(
     taskLink: String = "",
     appName: String = "",
     appIconUrl: String = "",
-    requiredProof: String = ""
+    requiredProof: String = "",
+    appId: String = "",
+    steps: List<TaskStep> = emptyList(),
+    referenceImages: List<String> = emptyList()
   ) {
     val parsedCoins = rewardAmountCoins.trim().toLongOrNull()
     if (parsedCoins == null || parsedCoins <= 0L) {
@@ -627,7 +669,10 @@ class TaskFlowViewModel(
           taskLink = cleanedLink,
           appName = appName,
           appIconUrl = cleanedIcon,
-          requiredProof = requiredProof
+          requiredProof = requiredProof,
+          appId = appId,
+          steps = steps,
+          referenceImages = referenceImages
         )
         .onSuccess {
           _bannerMessage.value =
@@ -651,7 +696,10 @@ class TaskFlowViewModel(
     taskLink: String = "",
     appName: String = "",
     appIconUrl: String = "",
-    requiredProof: String = ""
+    requiredProof: String = "",
+    appId: String = "",
+    steps: List<TaskStep> = emptyList(),
+    referenceImages: List<String> = emptyList()
   ) {
     val parsedCoins = rewardAmountCoins.trim().toLongOrNull()
     if (parsedCoins == null || parsedCoins <= 0L) {
@@ -686,7 +734,10 @@ class TaskFlowViewModel(
           taskLink = cleanedLink,
           appName = appName,
           appIconUrl = cleanedIcon,
-          requiredProof = requiredProof
+          requiredProof = requiredProof,
+          appId = appId,
+          steps = steps,
+          referenceImages = referenceImages
         )
         .onSuccess {
           _bannerMessage.value = "Task '$title' updated."

@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import android.util.Log
+import com.example.data.model.AppItem
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.CampaignItem
 import com.example.data.model.DailyCheckInConstants
@@ -18,9 +19,11 @@ import com.example.data.model.SubmissionItem
 import com.example.data.model.SupportTicket
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
+import com.example.data.model.TaskStep
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
+import com.example.data.model.UserTaskProgress
 import com.example.data.model.WithdrawalMethod
 import com.example.data.model.calculateDailyCheckInState
 import com.example.data.model.centsToCoins
@@ -37,6 +40,7 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.SetOptions
 import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.storage.FirebaseStorage
 import java.io.ByteArrayOutputStream
@@ -903,6 +907,7 @@ class TaskFlowRepository(
   private val transactionsCollection = firestore.collection("transactions")
   private val campaignsCollection = firestore.collection("campaigns")
   private val supportTicketsCollection = firestore.collection("support_tickets")
+  private val appsCollection = firestore.collection("apps")
 
   /**
    * Builds a privacy-safe public leaderboard document containing ONLY non-sensitive public fields
@@ -1350,7 +1355,7 @@ class TaskFlowRepository(
   /**
    * Creates a new task in `/tasks` and updates the assigned user's `assignedTaskId` atomically.
    */
-  suspend fun createTask(
+   suspend fun createTask(
     title: String,
     description: String,
     category: String,
@@ -1362,7 +1367,10 @@ class TaskFlowRepository(
     taskLink: String = "",
     appName: String = "",
     appIconUrl: String = "",
-    requiredProof: String = ""
+    requiredProof: String = "",
+    appId: String = "",
+    steps: List<TaskStep> = emptyList(),
+    referenceImages: List<String> = emptyList()
   ): Result<String> = runCatching {
     val adminUid =
       authProvider().currentUser?.uid ?: error("Must be signed in as Admin to create a task.")
@@ -1404,6 +1412,7 @@ class TaskFlowRepository(
     val docRef = tasksCollection.document()
     val payload =
       mapOf(
+        "appId" to appId.trim(),
         "title" to cleanedTitle,
         "appName" to cleanedAppName,
         "appIconUrl" to cleanedAppIconUrl,
@@ -1424,6 +1433,18 @@ class TaskFlowRepository(
         "proofStoragePath" to "",
         "adminFeedback" to "",
         "createdBy" to adminUid,
+        "steps" to steps.map { mapOf(
+          "stepNumber" to it.stepNumber,
+          "title" to it.title,
+          "instructions" to it.instructions,
+          "destinationUrl" to it.destinationUrl,
+          "actionLabel" to it.actionLabel,
+          "requiresProof" to it.requiresProof,
+          "requiresTracking" to it.requiresTracking,
+          "referenceImageUrl" to it.referenceImageUrl,
+          "referenceImageCaption" to it.referenceImageCaption
+        ) },
+        "referenceImages" to referenceImages,
         "createdAt" to FieldValue.serverTimestamp(),
         "updatedAt" to FieldValue.serverTimestamp()
       )
@@ -1457,7 +1478,10 @@ class TaskFlowRepository(
     taskLink: String = "",
     appName: String = "",
     appIconUrl: String = "",
-    requiredProof: String = ""
+    requiredProof: String = "",
+    appId: String = "",
+    steps: List<TaskStep> = emptyList(),
+    referenceImages: List<String> = emptyList()
   ): Result<Unit> = runCatching {
     require(taskId.isNotBlank()) { "taskId must not be blank" }
     val cleanedTitle = title.trim()
@@ -1504,6 +1528,7 @@ class TaskFlowRepository(
     batch.update(
       taskRef,
       mapOf(
+        "appId" to appId.trim(),
         "title" to cleanedTitle,
         "appName" to cleanedAppName,
         "appIconUrl" to cleanedAppIconUrl,
@@ -1513,9 +1538,22 @@ class TaskFlowRepository(
         "taskLink" to cleanedLink,
         "category" to cleanedCat,
         "rewardCents" to rewardCents,
+        "rewardCoins" to rewardCents,
         "assignedUserId" to assignedUserId,
         "assignedUserName" to assignedUserName.trim().ifEmpty { "Assigned User" },
         "assignedUserEmail" to assignedUserEmail.trim().ifEmpty { "user@taskflow.app" },
+        "steps" to steps.map { mapOf(
+          "stepNumber" to it.stepNumber,
+          "title" to it.title,
+          "instructions" to it.instructions,
+          "destinationUrl" to it.destinationUrl,
+          "actionLabel" to it.actionLabel,
+          "requiresProof" to it.requiresProof,
+          "requiresTracking" to it.requiresTracking,
+          "referenceImageUrl" to it.referenceImageUrl,
+          "referenceImageCaption" to it.referenceImageCaption
+        ) },
+        "referenceImages" to referenceImages,
         "updatedAt" to FieldValue.serverTimestamp()
       )
     )
@@ -2718,5 +2756,80 @@ class TaskFlowRepository(
         "updatedAt" to FieldValue.serverTimestamp()
       )
     ).await()
+  }
+
+  fun observeApps(): Flow<List<AppItem>> = callbackFlow {
+    val listener = appsCollection.addSnapshotListener { snapshot, error ->
+      if (error != null) {
+        trySend(emptyList())
+        return@addSnapshotListener
+      }
+      val apps = snapshot?.documents?.mapNotNull { it.toObject(AppItem::class.java) }
+        ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+      trySend(apps)
+    }
+    awaitClose { listener.remove() }
+  }
+
+  suspend fun createApp(name: String, logoUrl: String): Result<String> = runCatching {
+    require(name.isNotBlank()) { "App name cannot be blank" }
+    val docRef = appsCollection.document()
+    val data = mapOf(
+      "name" to name.trim(),
+      "logoUrl" to logoUrl.trim(),
+      "isArchived" to false,
+      "createdAt" to FieldValue.serverTimestamp()
+    )
+    docRef.set(data).await()
+    docRef.id
+  }
+
+  suspend fun updateApp(appId: String, name: String, logoUrl: String, isArchived: Boolean): Result<Unit> = runCatching {
+    require(appId.isNotBlank()) { "appId cannot be blank" }
+    appsCollection.document(appId).update(
+      mapOf(
+        "name" to name.trim(),
+        "logoUrl" to logoUrl.trim(),
+        "isArchived" to isArchived
+      )
+    ).await()
+  }
+
+  fun observeUserTaskProgress(userId: String, taskId: String): Flow<UserTaskProgress?> = callbackFlow {
+    if (userId.isBlank() || taskId.isBlank()) {
+      trySend(null)
+      close()
+      return@callbackFlow
+    }
+    val docRef = usersCollection.document(userId).collection("task_progress").document(taskId)
+    val listener = docRef.addSnapshotListener { snapshot, error ->
+      if (error != null || snapshot == null || !snapshot.exists()) {
+        trySend(null)
+        return@addSnapshotListener
+      }
+      trySend(snapshot.toObject(UserTaskProgress::class.java))
+    }
+    awaitClose { listener.remove() }
+  }
+
+  suspend fun saveUserTaskProgress(
+    userId: String,
+    taskId: String,
+    completedSteps: List<Int>,
+    trackingEvents: Map<String, Boolean>,
+    status: String
+  ): Result<Unit> = runCatching {
+    require(userId.isNotBlank()) { "userId must not be blank" }
+    require(taskId.isNotBlank()) { "taskId must not be blank" }
+    val docRef = usersCollection.document(userId).collection("task_progress").document(taskId)
+    val data = mapOf(
+      "taskId" to taskId,
+      "userId" to userId,
+      "completedSteps" to completedSteps,
+      "trackingEvents" to trackingEvents,
+      "status" to status,
+      "updatedAt" to FieldValue.serverTimestamp()
+    )
+    docRef.set(data, SetOptions.merge()).await()
   }
 }
