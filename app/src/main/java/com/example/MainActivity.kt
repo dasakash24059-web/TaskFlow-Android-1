@@ -636,51 +636,6 @@ private fun AuthenticatedWorkspace(
             modifier = Modifier.testTag("nav_user_profile")
           )
         }
-      } else {
-        NavigationBar {
-          NavigationBarItem(
-            selected = activeAdminTab == AdminTab.TASKS,
-            onClick = { viewModel.setAdminTab(AdminTab.TASKS) },
-            icon = { Icon(Icons.Default.Task, contentDescription = null) },
-            label = { Text(stringResource(R.string.nav_admin_tasks)) },
-            modifier = Modifier.testTag("nav_admin_tasks")
-          )
-          NavigationBarItem(
-            selected = activeAdminTab == AdminTab.SUBMISSIONS,
-            onClick = { viewModel.setAdminTab(AdminTab.SUBMISSIONS) },
-            icon = { Icon(Icons.Default.RateReview, contentDescription = null) },
-            label = { Text(stringResource(R.string.nav_admin_submissions)) },
-            modifier = Modifier.testTag("nav_admin_submissions")
-          )
-          NavigationBarItem(
-            selected = activeAdminTab == AdminTab.USERS,
-            onClick = { viewModel.setAdminTab(AdminTab.USERS) },
-            icon = { Icon(Icons.Default.People, contentDescription = null) },
-            label = { Text(stringResource(R.string.nav_admin_users)) },
-            modifier = Modifier.testTag("nav_admin_users")
-          )
-          NavigationBarItem(
-            selected = activeAdminTab == AdminTab.WITHDRAWALS,
-            onClick = { viewModel.setAdminTab(AdminTab.WITHDRAWALS) },
-            icon = { Icon(Icons.Default.Payment, contentDescription = null) },
-            label = { Text("Withdrawals") },
-            modifier = Modifier.testTag("nav_admin_withdrawals")
-          )
-          NavigationBarItem(
-            selected = activeAdminTab == AdminTab.APPS,
-            onClick = { viewModel.setAdminTab(AdminTab.APPS) },
-            icon = { Icon(Icons.Default.Task, contentDescription = null) },
-            label = { Text("Apps") },
-            modifier = Modifier.testTag("nav_admin_apps")
-          )
-          NavigationBarItem(
-            selected = activeAdminTab == AdminTab.CAMPAIGNS,
-            onClick = { viewModel.setAdminTab(AdminTab.CAMPAIGNS) },
-            icon = { Icon(Icons.Default.Campaign, contentDescription = null) },
-            label = { Text("Campaigns") },
-            modifier = Modifier.testTag("nav_admin_campaigns")
-          )
-        }
       }
     }
   ) { innerPadding ->

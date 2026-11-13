@@ -81,6 +81,7 @@ enum class ProfileSubScreen {
 }
 
 enum class AdminTab {
+  HOME,
   OVERVIEW,
   USERS,
   TASKS,
@@ -123,7 +124,7 @@ class TaskFlowViewModel(
   private val _profileSubScreen = MutableStateFlow(ProfileSubScreen.MAIN)
   val profileSubScreen: StateFlow<ProfileSubScreen> = _profileSubScreen.asStateFlow()
 
-  private val _activeAdminTab = MutableStateFlow(AdminTab.TASKS)
+  private val _activeAdminTab = MutableStateFlow(AdminTab.HOME)
   val activeAdminTab: StateFlow<AdminTab> = _activeAdminTab.asStateFlow()
 
   private val _selectedTaskId = MutableStateFlow<String?>(null)
@@ -474,6 +475,9 @@ class TaskFlowViewModel(
       return
     }
     _activePortal.value = portal
+    if (portal == PortalLoginTarget.ADMIN_DASHBOARD) {
+      _activeAdminTab.value = AdminTab.HOME
+    }
     _selectedTaskId.value = null
     _submissionError.value = null
     _withdrawalValidationError.value = null

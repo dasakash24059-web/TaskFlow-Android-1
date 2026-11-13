@@ -126,14 +126,29 @@ fun NeonGlassCard(
   onClick: (() -> Unit)? = null,
   content: @Composable () -> Unit
 ) {
+  val isLegacyTranslucentBg =
+    backgroundColor == Color.Unspecified ||
+      backgroundColor == Color(0x2E141938) ||
+      backgroundColor == Color(0x40141938) ||
+      backgroundColor == Color(0x3B1F174B) ||
+      backgroundColor == Color(0x350F172A) ||
+      backgroundColor == Color(0x30141938)
   val resolvedBg =
-    if (backgroundColor != Color.Unspecified && backgroundColor != Color(0x2E141938)) {
+    if (!isLegacyTranslucentBg) {
       backgroundColor
     } else {
       MaterialTheme.colorScheme.surface
     }
+
+  val isLegacyTranslucentBorder =
+    borderColor == Color.Unspecified ||
+      borderColor == Color(0x50A855F7) ||
+      borderColor == Color(0x70A855F7) ||
+      borderColor == Color(0x60A855F7) ||
+      borderColor == Color(0x40A855F7) ||
+      borderColor == Color(0x45A855F7)
   val resolvedBorder =
-    if (borderColor != Color.Unspecified && borderColor != Color(0x50A855F7)) {
+    if (!isLegacyTranslucentBorder) {
       borderColor
     } else {
       MaterialTheme.colorScheme.outlineVariant
@@ -172,8 +187,8 @@ fun VerifiedBadge(
 
   Surface(
     shape = RoundedCornerShape(50),
-    color = Color(0x2506B6D4),
-    border = BorderStroke(1.dp, Color(0x8022D3EE)),
+    color = Color(0xFFE0F2FE),
+    border = BorderStroke(1.dp, Color(0xFF38BDF8)),
     modifier = modifier
   ) {
     Row(
@@ -184,13 +199,13 @@ fun VerifiedBadge(
       Icon(
         imageVector = Icons.Default.Verified,
         contentDescription = "Verified Account",
-        tint = Color(0xFF22D3EE),
+        tint = Color(0xFF0284C7),
         modifier = Modifier.size(14.dp)
       )
       Text(
         text = label,
         style = MaterialTheme.typography.labelSmall,
-        color = Color(0xFF22D3EE),
+        color = Color(0xFF0369A1),
         fontWeight = FontWeight.Bold,
         fontSize = 11.sp
       )
@@ -199,7 +214,7 @@ fun VerifiedBadge(
 }
 
 /**
- * Neon Coin Badge component for displaying Coin rewards and balances.
+ * High-contrast Coin Badge component for displaying Coin rewards and balances clearly on light & dark cards.
  */
 @Composable
 fun NeonCoinBadge(
@@ -209,8 +224,8 @@ fun NeonCoinBadge(
 ) {
   Surface(
     shape = RoundedCornerShape(50),
-    color = Color(0x30F59E0B),
-    border = BorderStroke(1.dp, Color(0x80FBBF24)),
+    color = Color(0xFFFEF3C7),
+    border = BorderStroke(1.dp, Color(0xFFF59E0B)),
     modifier = modifier
   ) {
     Row(
@@ -221,13 +236,13 @@ fun NeonCoinBadge(
       Icon(
         imageVector = Icons.Default.MonetizationOn,
         contentDescription = "Coins",
-        tint = Color(0xFFFBBF24),
+        tint = Color(0xFFD97706),
         modifier = Modifier.size(16.dp)
       )
       Text(
         text = "$coins Coins",
         style = MaterialTheme.typography.labelMedium,
-        color = Color(0xFFFDE047),
+        color = Color(0xFF92400E),
         fontWeight = FontWeight.ExtraBold,
         fontSize = fontSize.sp
       )

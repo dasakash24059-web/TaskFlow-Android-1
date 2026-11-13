@@ -112,26 +112,26 @@ fun DedicatedDailyCheckInScreen(
             onClick = onBack,
             modifier =
               Modifier.clip(CircleShape)
-                .background(Color(0x30A855F7))
-                .border(1.dp, Color(0x60A855F7), CircleShape)
+                .background(MaterialTheme.colorScheme.surface)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
                 .testTag("daily_checkin_back_button")
           ) {
             Icon(
               imageVector = Icons.AutoMirrored.Filled.ArrowBack,
               contentDescription = "Back to Home",
-              tint = Color.White
+              tint = MaterialTheme.colorScheme.onSurface
             )
           }
           Text(
             text = "Daily Check-in",
             style = MaterialTheme.typography.titleLarge,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onBackground,
             fontWeight = FontWeight.Bold
           )
           Surface(
             shape = RoundedCornerShape(50),
-            color = Color(0x30F59E0B),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FBBF24))
+            color = Color(0xFFFEF3C7),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B))
           ) {
             Row(
               modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -141,14 +141,14 @@ fun DedicatedDailyCheckInScreen(
               Icon(
                 imageVector = Icons.Default.LocalFireDepartment,
                 contentDescription = null,
-                tint = Color(0xFFFBBF24),
+                tint = Color(0xFFD97706),
                 modifier = Modifier.size(16.dp)
               )
               Text(
                 text = "${dailyCheckInState.currentStreak}d Streak",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFFDE047)
+                color = Color(0xFF92400E)
               )
             }
           }
@@ -159,8 +159,8 @@ fun DedicatedDailyCheckInScreen(
       item {
         NeonGlassCard(
           shape = RoundedCornerShape(24.dp),
-          borderColor = Color(0x70A855F7),
-          backgroundColor = Color(0x40141938),
+          borderColor = Color(0xFFC7D2FE),
+          backgroundColor = MaterialTheme.colorScheme.surface,
           modifier = Modifier.fillMaxWidth().testTag("daily_checkin_hero_card")
         ) {
           Column(
@@ -176,7 +176,7 @@ fun DedicatedDailyCheckInScreen(
                 Text(
                   text = "30-DAY COIN REWARD CYCLE",
                   style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFF22D3EE),
+                  color = Color(0xFF4F46E5),
                   fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(2.dp))
@@ -188,19 +188,19 @@ fun DedicatedDailyCheckInScreen(
                       "Today's Check-in Claimed ✓"
                     },
                   style = MaterialTheme.typography.titleLarge,
-                  color = Color.White,
+                  color = MaterialTheme.colorScheme.onSurface,
                   fontWeight = FontWeight.ExtraBold
                 )
               }
               Surface(
                 shape = RoundedCornerShape(50),
-                color = Color(0x30FDE047),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FDE047))
+                color = Color(0xFFFEF3C7),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B))
               ) {
                 Text(
                   text = "Day $nextClaimDay / 30",
                   style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFFFDE047),
+                  color = Color(0xFF92400E),
                   fontWeight = FontWeight.ExtraBold,
                   modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                 )
@@ -210,7 +210,8 @@ fun DedicatedDailyCheckInScreen(
             // Status / Timer Notice
             Surface(
               shape = RoundedCornerShape(12.dp),
-              color = Color.White.copy(alpha = 0.08f),
+              color = Color(0xFFF1F5F9),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
               modifier = Modifier.fillMaxWidth()
             ) {
               Row(
@@ -221,7 +222,7 @@ fun DedicatedDailyCheckInScreen(
                 Icon(
                   imageVector = Icons.Default.Schedule,
                   contentDescription = null,
-                  tint = Color(0xFFFDE047),
+                  tint = Color(0xFFD97706),
                   modifier = Modifier.size(16.dp)
                 )
                 Text(
@@ -232,7 +233,7 @@ fun DedicatedDailyCheckInScreen(
                       "Next daily check-in unlocks in $timeRemainingToTomorrow"
                     },
                   style = MaterialTheme.typography.bodySmall,
-                  color = Color(0xFFE2E8F0),
+                  color = Color(0xFF334155),
                   fontWeight = FontWeight.Medium
                 )
               }
@@ -245,10 +246,10 @@ fun DedicatedDailyCheckInScreen(
               shape = RoundedCornerShape(14.dp),
               colors =
                 ButtonDefaults.buttonColors(
-                  containerColor = Color(0xFF10B981),
+                  containerColor = Color(0xFF059669),
                   contentColor = Color.White,
-                  disabledContainerColor = Color(0x351E293B),
-                  disabledContentColor = Color(0xFF94A3B8)
+                  disabledContainerColor = Color(0xFFE2E8F0),
+                  disabledContentColor = Color(0xFF64748B)
                 ),
               modifier =
                 Modifier.fillMaxWidth()
@@ -308,14 +309,14 @@ fun DedicatedDailyCheckInScreen(
             text = "30-Day Schedule (5 × 6 Grid)",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
-            color = Color.White
+            color = MaterialTheme.colorScheme.onBackground
           )
           Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
           ) {
-            GridLegendDot(color = Color(0xFF10B981), label = "Claimed")
-            GridLegendDot(color = Color(0xFF22D3EE), label = "Today")
+            GridLegendDot(color = Color(0xFF059669), label = "Claimed")
+            GridLegendDot(color = Color(0xFF0284C7), label = "Today")
             GridLegendDot(color = Color(0xFF64748B), label = "Locked")
           }
         }
@@ -368,8 +369,8 @@ fun DedicatedDailyCheckInScreen(
       item {
         NeonGlassCard(
           shape = RoundedCornerShape(20.dp),
-          borderColor = Color(0x45A855F7),
-          backgroundColor = Color(0x350F172A),
+          borderColor = MaterialTheme.colorScheme.outlineVariant,
+          backgroundColor = MaterialTheme.colorScheme.surface,
           modifier = Modifier.fillMaxWidth().testTag("daily_checkin_rules_card")
         ) {
           Column(
@@ -383,13 +384,13 @@ fun DedicatedDailyCheckInScreen(
               Icon(
                 imageVector = Icons.Default.Info,
                 contentDescription = null,
-                tint = Color(0xFF22D3EE),
+                tint = Color(0xFF4F46E5),
                 modifier = Modifier.size(18.dp)
               )
               Text(
                 text = "Daily Check-in Rules",
                 style = MaterialTheme.typography.titleSmall,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold
               )
             }
@@ -397,7 +398,7 @@ fun DedicatedDailyCheckInScreen(
               text =
                 "• 30-day repeating Coin schedule with milestone bonuses on Days 5, 10, 15, 20, 25, and 1,000 Coins on Day 30.\n• Tap Claim to watch a short rewarded video and receive today's Coins.\n• Missing a day resets your streak to Day 1.",
               style = MaterialTheme.typography.bodySmall,
-              color = Color(0xFFCBD5E1),
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
               lineHeight = 19.sp
             )
           }
@@ -419,7 +420,8 @@ private fun GridLegendDot(color: Color, label: String) {
     Text(
       text = label,
       style = MaterialTheme.typography.labelSmall,
-      color = Color(0xFFCBD5E1),
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      fontWeight = FontWeight.SemiBold,
       fontSize = 10.sp
     )
   }
@@ -438,29 +440,29 @@ private fun CompactDayGridSquareCard(
 ) {
   val borderColor =
     when {
-      isCurrent -> Color(0xFF22D3EE)
+      isCurrent -> Color(0xFF0284C7)
       isClaimed -> Color(0xFF10B981)
-      isMilestone -> Color(0x80F59E0B)
-      else -> Color(0x3594A3B8)
+      isMilestone -> Color(0xFFF59E0B)
+      else -> Color(0xFFCBD5E1)
     }
 
   val bgBrush =
     when {
       isCurrent ->
         Brush.verticalGradient(
-          colors = listOf(Color(0x5506B6D4), Color(0x653B0764))
+          colors = listOf(Color(0xFFE0F2FE), Color(0xFFBAE6FD))
         )
       isClaimed ->
         Brush.verticalGradient(
-          colors = listOf(Color(0x40059669), Color(0x35064E3B))
+          colors = listOf(Color(0xFFECFDF5), Color(0xFFD1FAE5))
         )
       isMilestone ->
         Brush.verticalGradient(
-          colors = listOf(Color(0x3578350F), Color(0x351E1B4B))
+          colors = listOf(Color(0xFFFFFBEB), Color(0xFFFEF3C7))
         )
       else ->
         Brush.verticalGradient(
-          colors = listOf(Color(0x351E293B), Color(0x350F172A))
+          colors = listOf(Color(0xFFFFFFFF), Color(0xFFF1F5F9))
         )
     }
 
@@ -471,7 +473,7 @@ private fun CompactDayGridSquareCard(
         .clip(RoundedCornerShape(14.dp))
         .background(bgBrush)
         .border(
-          width = if (isCurrent) 2.dp else 1.dp,
+          width = if (isCurrent) 2.dp else 1.2.dp,
           color = borderColor,
           shape = RoundedCornerShape(14.dp)
         )
@@ -493,9 +495,10 @@ private fun CompactDayGridSquareCard(
         fontWeight = FontWeight.Bold,
         color =
           when {
-            isCurrent -> Color(0xFF22D3EE)
-            isClaimed -> Color(0xFF6EE7B7)
-            else -> Color(0xFF94A3B8)
+            isCurrent -> Color(0xFF0369A1)
+            isClaimed -> Color(0xFF047857)
+            isMilestone -> Color(0xFFB45309)
+            else -> Color(0xFF475569)
           }
       )
 
@@ -524,7 +527,7 @@ private fun CompactDayGridSquareCard(
           isCurrent -> {
             Surface(
               shape = CircleShape,
-              color = Color(0xFF06B6D4),
+              color = Color(0xFF0284C7),
               modifier = Modifier.size(20.dp)
             ) {
               Box(contentAlignment = Alignment.Center) {
@@ -541,7 +544,7 @@ private fun CompactDayGridSquareCard(
             Icon(
               imageVector = Icons.Default.EmojiEvents,
               contentDescription = "Bonus Day",
-              tint = Color(0xFFFBBF24),
+              tint = Color(0xFFD97706),
               modifier = Modifier.size(16.dp)
             )
           }
@@ -564,10 +567,10 @@ private fun CompactDayGridSquareCard(
         fontWeight = FontWeight.ExtraBold,
         color =
           when {
-            isCurrent -> Color(0xFFFDE047)
-            isClaimed -> Color(0xFFA7F3D0)
-            isMilestone -> Color(0xFFFBBF24)
-            else -> Color(0xFFCBD5E1)
+            isCurrent -> Color(0xFF0C4A6E)
+            isClaimed -> Color(0xFF065F46)
+            isMilestone -> Color(0xFF92400E)
+            else -> Color(0xFF0F172A)
           },
         textAlign = TextAlign.Center
       )

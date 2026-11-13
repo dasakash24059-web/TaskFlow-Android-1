@@ -94,13 +94,13 @@ fun OfferWallScreen(
             onClick = onBack,
             modifier = Modifier
               .clip(CircleShape)
-              .background(Color(0x30A855F7))
-              .border(1.dp, Color(0x60A855F7), CircleShape)
+              .background(MaterialTheme.colorScheme.surface)
+              .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
           ) {
             Icon(
               imageVector = Icons.AutoMirrored.Filled.ArrowBack,
               contentDescription = "Back",
-              tint = Color.White
+              tint = MaterialTheme.colorScheme.onSurface
             )
           }
           Row(
@@ -110,13 +110,13 @@ fun OfferWallScreen(
             Icon(
               imageVector = Icons.Default.Campaign,
               contentDescription = null,
-              tint = Color(0xFF34D399),
+              tint = Color(0xFF059669),
               modifier = Modifier.size(24.dp)
             )
             Text(
               text = "TaskFlow Offer Wall",
               style = MaterialTheme.typography.titleLarge,
-              color = Color.White,
+              color = MaterialTheme.colorScheme.onBackground,
               fontWeight = FontWeight.Bold
             )
           }
@@ -128,21 +128,21 @@ fun OfferWallScreen(
       item {
         NeonGlassCard(
           modifier = Modifier.fillMaxWidth(),
-          borderColor = Color(0x7010B981),
-          backgroundColor = Color(0x40141938)
+          borderColor = Color(0xFFA7F3D0),
+          backgroundColor = MaterialTheme.colorScheme.surface
         ) {
           Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
             Text(
               text = "High-Paying Partner Offers",
               style = MaterialTheme.typography.titleLarge,
-              color = Color.White,
+              color = MaterialTheme.colorScheme.onSurface,
               fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
               text = "Complete verified mobile app installs, website registrations, and surveys to earn up to 5,000 Coins per offer.",
               style = MaterialTheme.typography.bodyMedium,
-              color = Color(0xFF94A3B8)
+              color = MaterialTheme.colorScheme.onSurfaceVariant
             )
           }
         }
@@ -160,14 +160,14 @@ fun OfferWallScreen(
               onClick = { selectedCategory = cat },
               label = { Text(cat, fontWeight = FontWeight.Bold) },
               colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = Color(0xFF10B981),
+                selectedContainerColor = Color(0xFF059669),
                 selectedLabelColor = Color.White,
-                containerColor = Color(0x30141938),
-                labelColor = Color(0xFF94A3B8)
+                containerColor = MaterialTheme.colorScheme.surface,
+                labelColor = MaterialTheme.colorScheme.onSurfaceVariant
               ),
               border = FilterChipDefaults.filterChipBorder(
-                borderColor = Color(0x5010B981),
-                selectedBorderColor = Color(0xFF34D399),
+                borderColor = MaterialTheme.colorScheme.outlineVariant,
+                selectedBorderColor = Color(0xFF059669),
                 enabled = true,
                 selected = selectedCategory == cat
               )
@@ -181,7 +181,7 @@ fun OfferWallScreen(
         Text(
           text = "Available Offers (${availableOffers.size})",
           style = MaterialTheme.typography.titleMedium,
-          color = Color.White,
+          color = MaterialTheme.colorScheme.onBackground,
           fontWeight = FontWeight.Bold
         )
       }
@@ -190,8 +190,8 @@ fun OfferWallScreen(
         item {
           NeonGlassCard(
             modifier = Modifier.fillMaxWidth(),
-            borderColor = Color(0x40A855F7),
-            backgroundColor = Color(0x3B1F174B)
+            borderColor = MaterialTheme.colorScheme.outlineVariant,
+            backgroundColor = MaterialTheme.colorScheme.surface
           ) {
             Column(
               modifier = Modifier.fillMaxWidth().padding(24.dp),
@@ -200,14 +200,14 @@ fun OfferWallScreen(
               Text(
                 text = "No offers found in this category",
                 style = MaterialTheme.typography.titleMedium,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold
               )
               Spacer(modifier = Modifier.height(6.dp))
               Text(
                 text = "Check back soon or select another category above to view high-reward tasks.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFF94A3B8)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
               )
             }
           }
@@ -219,8 +219,8 @@ fun OfferWallScreen(
 
           NeonGlassCard(
             modifier = Modifier.fillMaxWidth().testTag("offer_card_${offer.id}"),
-            borderColor = Color(0x5010B981),
-            backgroundColor = Color(0x3B1F174B),
+            borderColor = MaterialTheme.colorScheme.outlineVariant,
+            backgroundColor = MaterialTheme.colorScheme.surface,
             onClick = { onSelectOffer(offer.id) }
           ) {
             Column(
@@ -242,7 +242,7 @@ fun OfferWallScreen(
                   Text(
                     text = offer.title,
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -251,7 +251,7 @@ fun OfferWallScreen(
                   Text(
                     text = appOrSiteLabel,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF34D399),
+                    color = Color(0xFF059669),
                     fontWeight = FontWeight.SemiBold
                   )
                 }
@@ -262,7 +262,7 @@ fun OfferWallScreen(
               Text(
                 text = offer.description.ifBlank { "Complete requirements to receive instant coin rewards." },
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF94A3B8),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
               )
@@ -274,13 +274,13 @@ fun OfferWallScreen(
               ) {
                 Surface(
                   shape = RoundedCornerShape(50),
-                  color = Color(0x2510B981),
-                  border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8034D399))
+                  color = Color(0xFFECFDF5),
+                  border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF6EE7B7))
                 ) {
                   Text(
                     text = offer.category.ifBlank { "Verified Offer" },
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF34D399),
+                    color = Color(0xFF047857),
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                   )
@@ -290,7 +290,7 @@ fun OfferWallScreen(
                   onClick = { onSelectOffer(offer.id) },
                   shape = RoundedCornerShape(12.dp),
                   colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF10B981),
+                    containerColor = Color(0xFF059669),
                     contentColor = Color.White
                   )
                 ) {

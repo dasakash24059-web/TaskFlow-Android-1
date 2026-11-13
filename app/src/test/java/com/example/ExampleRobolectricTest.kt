@@ -1867,8 +1867,8 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `AdminDashboard renders all 10 sections and UserTaskDetail displays 5-stage flow and single instruction container`() {
-    var selectedSection = AdminTab.OVERVIEW
+  fun `AdminDashboard renders Control Center Home 10-card grid and navigates to dedicated pages`() {
+    val selectedSection = androidx.compose.runtime.mutableStateOf(AdminTab.HOME)
     composeTestRule.setContent {
       TaskFlowTheme {
         AdminDashboardScreen(
@@ -1876,7 +1876,8 @@ class ExampleRobolectricTest {
           currentUserId = "admin_1",
           currentUserEmail = BOOTSTRAPPED_ADMIN_EMAIL,
           currentUserDisplayName = "Primary Admin",
-          activeTab = selectedSection,
+          activeTab = selectedSection.value,
+          onSelectAdminTab = { selectedSection.value = it },
           adminTasksState = UiState.Success(emptyList()),
           registeredUsersState = UiState.Success(emptyList()),
           submissionFilter = TaskStatus.SUBMITTED,
@@ -1891,9 +1892,20 @@ class ExampleRobolectricTest {
     }
     composeTestRule.waitForIdle()
 
-    // Verify 10-section navigation bar is present and Overview section renders
+    // Verify Main Dashboard Home Screen and 2-column 10-section square card grid
+    composeTestRule.onNodeWithTag("admin_control_center_home").assertIsDisplayed()
     composeTestRule.onNodeWithTag("admin_10_sections_nav_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_control_center_home").performScrollToNode(hasTestTag("admin_section_overview"))
     composeTestRule.onNodeWithTag("admin_section_overview").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_section_users").assertIsDisplayed()
+
+    // Click Overview square card -> navigates to dedicated Overview page with back button
+    composeTestRule.onNodeWithTag("admin_section_overview").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("admin_overview_section").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_back_to_dashboard_btn").assertIsDisplayed().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("admin_control_center_home").assertIsDisplayed()
     assertEquals(5, TaskStatus.ALL_STAGES.size)
   }
 }

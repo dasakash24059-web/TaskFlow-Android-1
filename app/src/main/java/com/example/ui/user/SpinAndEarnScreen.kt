@@ -353,29 +353,29 @@ fun SpinAndEarnScreen(
           onClick = onBack,
           modifier =
             Modifier.clip(CircleShape)
-              .background(Color(0x30A855F7))
-              .border(1.dp, Color(0x60A855F7), CircleShape)
+              .background(MaterialTheme.colorScheme.surface)
+              .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
               .testTag("spin_back_button")
         ) {
           Icon(
             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
             contentDescription = "Back",
-            tint = Color.White
+            tint = MaterialTheme.colorScheme.onSurface
           )
         }
         Text(
           text = "Spin & Earn",
           style = MaterialTheme.typography.titleLarge,
-          color = Color.White,
+          color = MaterialTheme.colorScheme.onBackground,
           fontWeight = FontWeight.Bold
         )
         Surface(
           shape = RoundedCornerShape(50),
-          color = if (isFreeSpinReady) Color(0x3010B981) else Color(0x30F59E0B),
+          color = if (isFreeSpinReady) Color(0xFFECFDF5) else Color(0xFFFEF3C7),
           border =
             androidx.compose.foundation.BorderStroke(
               1.dp,
-              if (isFreeSpinReady) Color(0x8034D399) else Color(0x80FBBF24)
+              if (isFreeSpinReady) Color(0xFF10B981) else Color(0xFFF59E0B)
             )
         ) {
           Text(
@@ -386,7 +386,7 @@ fun SpinAndEarnScreen(
                 else -> "${spinState.extraSpinVideosWatched} / 2 Videos"
               },
             style = MaterialTheme.typography.labelMedium,
-            color = if (isFreeSpinReady) Color(0xFF34D399) else Color(0xFFFDE047),
+            color = if (isFreeSpinReady) Color(0xFF047857) else Color(0xFF92400E),
             fontWeight = FontWeight.Bold,
             modifier =
               Modifier.padding(horizontal = 10.dp, vertical = 5.dp).testTag("spin_status_badge")
@@ -455,7 +455,7 @@ fun SpinAndEarnScreen(
                 size = Size(canvasSize, canvasSize)
               )
               drawArc(
-                color = Color.White.copy(alpha = 0.22f),
+                color = Color.White.copy(alpha = 0.28f),
                 startAngle = startAngle,
                 sweepAngle = sweepAngle,
                 useCenter = true,
@@ -484,7 +484,7 @@ fun SpinAndEarnScreen(
         // Center Spin Button / Hub
         Surface(
           shape = CircleShape,
-          color = Color(0xFF070A17),
+          color = Color(0xFF0F172A),
           border = androidx.compose.foundation.BorderStroke(3.dp, Color(0xFF22D3EE)),
           modifier =
             Modifier.size(74.dp)
@@ -497,13 +497,13 @@ fun SpinAndEarnScreen(
               Icon(
                 imageVector = Icons.Default.Refresh,
                 contentDescription = "Spin Wheel",
-                tint = if (canSpinNow) Color(0xFF22D3EE) else Color(0xFF64748B),
+                tint = if (canSpinNow) Color(0xFF22D3EE) else Color(0xFF94A3B8),
                 modifier = Modifier.size(24.dp)
               )
               Text(
                 text = "SPIN",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (canSpinNow) Color.White else Color(0xFF64748B),
+                color = if (canSpinNow) Color.White else Color(0xFF94A3B8),
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 11.sp
               )
@@ -522,8 +522,8 @@ fun SpinAndEarnScreen(
               lineTo(size.width, 0f)
               close()
             }
-          drawPath(path = path, color = Color(0xFFFDE047))
-          drawPath(path = path, color = Color.White, style = Stroke(width = 2.dp.toPx()))
+          drawPath(path = path, color = Color(0xFFF59E0B))
+          drawPath(path = path, color = Color(0xFF0F172A), style = Stroke(width = 2.dp.toPx()))
         }
       }
 
@@ -532,8 +532,8 @@ fun SpinAndEarnScreen(
       // Spin Status & Extra Spin Card
       NeonGlassCard(
         modifier = Modifier.fillMaxWidth(),
-        borderColor = Color(0x60A855F7),
-        backgroundColor = Color(0x40141938)
+        borderColor = MaterialTheme.colorScheme.outlineVariant,
+        backgroundColor = MaterialTheme.colorScheme.surface
       ) {
         Column(
           modifier = Modifier.fillMaxWidth().padding(18.dp),
@@ -542,15 +542,15 @@ fun SpinAndEarnScreen(
           Text(
             text = "Spin Access & Rewards (10–150 Coins)",
             style = MaterialTheme.typography.titleMedium,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.Bold
           )
 
           if (isFreeSpinReady) {
             Surface(
               shape = RoundedCornerShape(14.dp),
-              color = Color(0x2510B981),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8034D399)),
+              color = Color(0xFFECFDF5),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981)),
               modifier = Modifier.fillMaxWidth().testTag("free_spin_ready_banner")
             ) {
               Row(
@@ -561,20 +561,20 @@ fun SpinAndEarnScreen(
                 Icon(
                   imageVector = Icons.Default.CheckCircle,
                   contentDescription = null,
-                  tint = Color(0xFF34D399),
+                  tint = Color(0xFF059669),
                   modifier = Modifier.size(22.dp)
                 )
                 Column {
                   Text(
                     text = "Daily Free Spin Available!",
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color(0xFF34D399),
+                    color = Color(0xFF065F46),
                     fontWeight = FontWeight.ExtraBold
                   )
                   Text(
                     text = "1 Free Spin every 24 hours. Tap SPIN NOW to spin the wheel.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFD1FAE5)
+                    color = Color(0xFF047857)
                   )
                 }
               }
@@ -583,8 +583,8 @@ fun SpinAndEarnScreen(
             // 24-Hour Free Spin Cooldown Banner
             Surface(
               shape = RoundedCornerShape(14.dp),
-              color = Color(0x250284C7),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8038BDF8)),
+              color = Color(0xFFE0F2FE),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8)),
               modifier = Modifier.fillMaxWidth().testTag("free_spin_cooldown_banner")
             ) {
               Row(
@@ -595,20 +595,20 @@ fun SpinAndEarnScreen(
                 Icon(
                   imageVector = Icons.Default.AccessTime,
                   contentDescription = null,
-                  tint = Color(0xFF38BDF8),
+                  tint = Color(0xFF0284C7),
                   modifier = Modifier.size(22.dp)
                 )
                 Column {
                   Text(
                     text = "Next Free Spin in ${formatCooldownDuration(remainingCooldownMs)}",
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color(0xFF38BDF8),
+                    color = Color(0xFF075985),
                     fontWeight = FontWeight.ExtraBold
                   )
                   Text(
                     text = "Want to spin right now? Watch 2 short videos below to unlock 1 Extra Spin!",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFBAE6FD)
+                    color = Color(0xFF0369A1)
                   )
                 }
               }
@@ -624,7 +624,7 @@ fun SpinAndEarnScreen(
                 Text(
                   text = "Extra Spin Progress",
                   style = MaterialTheme.typography.labelLarge,
-                  color = Color(0xFFE2E8F0),
+                  color = MaterialTheme.colorScheme.onSurface,
                   fontWeight = FontWeight.Bold
                 )
                 Text(
@@ -635,7 +635,7 @@ fun SpinAndEarnScreen(
                       "${spinState.extraSpinVideosWatched} / ${SpinWheelConstants.EXTRA_SPIN_REQUIRED_VIDEOS} Videos Completed"
                     },
                   style = MaterialTheme.typography.labelMedium,
-                  color = if (isExtraSpinReady) Color(0xFF34D399) else Color(0xFFFDE047),
+                  color = if (isExtraSpinReady) Color(0xFF059669) else Color(0xFFD97706),
                   fontWeight = FontWeight.Bold,
                   modifier = Modifier.testTag("extra_spin_progress_text")
                 )
@@ -648,8 +648,10 @@ fun SpinAndEarnScreen(
                   shape = RoundedCornerShape(12.dp),
                   colors =
                     ButtonDefaults.buttonColors(
-                      containerColor = Color(0xFF7C3AED),
-                      disabledContainerColor = Color(0x307C3AED)
+                      containerColor = Color(0xFF4F46E5),
+                      contentColor = Color.White,
+                      disabledContainerColor = Color(0xFFE2E8F0),
+                      disabledContentColor = Color(0xFF64748B)
                     ),
                   modifier =
                     Modifier.fillMaxWidth()
@@ -686,7 +688,7 @@ fun SpinAndEarnScreen(
             Text(
               text = spinState.statusMessage,
               style = MaterialTheme.typography.bodySmall,
-              color = Color(0xFF38BDF8),
+              color = Color(0xFF0284C7),
               fontWeight = FontWeight.SemiBold
             )
           }
@@ -695,7 +697,7 @@ fun SpinAndEarnScreen(
             Text(
               text = spinState.errorMessage,
               style = MaterialTheme.typography.bodySmall,
-              color = Color(0xFFFCA5A5),
+              color = Color(0xFFDC2626),
               fontWeight = FontWeight.SemiBold
             )
           }
@@ -706,8 +708,10 @@ fun SpinAndEarnScreen(
             shape = RoundedCornerShape(14.dp),
             colors =
               ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF10B981),
-                disabledContainerColor = Color(0x3010B981)
+                containerColor = Color(0xFF059669),
+                contentColor = Color.White,
+                disabledContainerColor = Color(0xFFE2E8F0),
+                disabledContentColor = Color(0xFF475569)
               ),
             modifier = Modifier.fillMaxWidth().height(50.dp).testTag("spin_now_main_button")
           ) {
@@ -721,7 +725,7 @@ fun SpinAndEarnScreen(
                 },
               fontWeight = FontWeight.ExtraBold,
               fontSize = 15.sp,
-              color = Color.White
+              color = if (canSpinNow) Color.White else Color(0xFF475569)
             )
           }
         }

@@ -1,7 +1,8 @@
 package com.example.ui.admin
 
+import android.content.Context
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -22,38 +23,47 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
+import androidx.compose.material.icons.automirrored.filled.FactCheck
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Analytics
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.MonetizationOn
-import androidx.compose.material.icons.filled.NotificationsActive
-import androidx.compose.material.icons.filled.Payment
-import androidx.compose.material.icons.filled.PendingActions
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.Task
 import androidx.compose.material.icons.filled.VerifiedUser
-import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -72,20 +82,23 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
 import com.example.data.model.AdminActivityLog
 import com.example.data.model.COINS_PER_RUPEE
 import com.example.data.model.CampaignItem
 import com.example.data.model.DemoWithdrawalRequest
-import com.example.data.model.TaskCategories
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TransactionRecord
+import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
 import com.example.data.model.centsToCoins
+import com.example.data.model.coinsToCents
 import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
 import com.example.data.model.formatVisibleUserEmail
+import com.example.data.model.getEffectiveBalanceCoins
 import com.example.ui.theme.AppThemeMode
 import com.example.ui.theme.ThemePreferences
 import com.example.ui.viewmodel.AdminTab
@@ -93,14 +106,696 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-data class AdminSectionNavItem(
+// Professional Blue & Clean White Admin Control Center Design Tokens
+internal val AdminWhiteBg = Color(0xFFFFFFFF)
+internal val AdminSoftGreyBg = Color(0xFFF8FAFC)
+internal val AdminSurfaceGrey = Color(0xFFF1F5F9)
+internal val AdminBorderColor = Color(0xFFE2E8F0)
+internal val AdminBluePrimary = Color(0xFF2563EB)
+internal val AdminBlueDark = Color(0xFF1D4ED8)
+internal val AdminBlueTint = Color(0xFFEFF6FF)
+internal val AdminTextDark = Color(0xFF0F172A)
+internal val AdminTextSecondary = Color(0xFF334155)
+internal val AdminTextMuted = Color(0xFF64748B)
+internal val AdminGreenSuccess = Color(0xFF10B981)
+internal val AdminGreenTint = Color(0xFFECFDF5)
+internal val AdminAmberWarning = Color(0xFFD97706)
+internal val AdminAmberTint = Color(0xFFFFFBEB)
+internal val AdminRedDanger = Color(0xFFEF4444)
+internal val AdminRedTint = Color(0xFFFEF2F2)
+
+internal fun formatInrAndCoins(cents: Long): String {
+  val coins = centsToCoins(cents)
+  return "${formatRewardInr(cents)} (${formatCoins(coins)})"
+}
+
+data class AdminNavSectionItem(
   val tab: AdminTab,
   val label: String,
   val icon: ImageVector,
-  val testTag: String,
-  val badgeCount: Int = 0
+  val tag: String,
+  val defaultSubtitle: String = ""
 )
 
+val ADMIN_10_MAIN_SECTIONS: List<AdminNavSectionItem> =
+  listOf(
+    AdminNavSectionItem(
+      tab = AdminTab.OVERVIEW,
+      label = "Overview",
+      icon = Icons.Default.Dashboard,
+      tag = "admin_section_overview",
+      defaultSubtitle = "System summary & live KPIs"
+    ),
+    AdminNavSectionItem(
+      tab = AdminTab.USERS,
+      label = "Users",
+      icon = Icons.Default.People,
+      tag = "admin_section_users",
+      defaultSubtitle = "Accounts & status controls"
+    ),
+    AdminNavSectionItem(
+      tab = AdminTab.TASKS,
+      label = "Tasks",
+      icon = Icons.Default.Checklist,
+      tag = "admin_section_tasks",
+      defaultSubtitle = "Create, publish & manage"
+    ),
+    AdminNavSectionItem(
+      tab = AdminTab.CAMPAIGNS,
+      label = "Campaigns",
+      icon = Icons.Default.Campaign,
+      tag = "admin_section_campaigns",
+      defaultSubtitle = "Budgets, quotas & status"
+    ),
+    AdminNavSectionItem(
+      tab = AdminTab.WITHDRAWALS,
+      label = "Withdrawals",
+      icon = Icons.Default.AccountBalanceWallet,
+      tag = "admin_section_withdrawals",
+      defaultSubtitle = "Payout requests & history"
+    ),
+    AdminNavSectionItem(
+      tab = AdminTab.COINS_REWARDS,
+      label = "Coins & Rewards",
+      icon = Icons.Default.MonetizationOn,
+      tag = "admin_section_coins_rewards",
+      defaultSubtitle = "125 Coins = ₹1 • Ledgers"
+    ),
+    AdminNavSectionItem(
+      tab = AdminTab.ANALYTICS,
+      label = "Analytics",
+      icon = Icons.Default.Analytics,
+      tag = "admin_section_analytics",
+      defaultSubtitle = "Trends, charts & reports"
+    ),
+    AdminNavSectionItem(
+      tab = AdminTab.VERIFICATION_FRAUD,
+      label = "Verification",
+      icon = Icons.Default.VerifiedUser,
+      tag = "admin_section_verification_fraud",
+      defaultSubtitle = "User & task proof checks"
+    ),
+    AdminNavSectionItem(
+      tab = AdminTab.APP_SETTINGS,
+      label = "App Settings",
+      icon = Icons.Default.Settings,
+      tag = "admin_section_app_settings",
+      defaultSubtitle = "Rules, limits & config"
+    ),
+    AdminNavSectionItem(
+      tab = AdminTab.ACTIVITY_LOGS,
+      label = "Activity Logs",
+      icon = Icons.Default.History,
+      tag = "admin_section_activity_logs",
+      defaultSubtitle = "Chronological audit trail"
+    )
+  )
+
+/**
+ * B. MAIN DASHBOARD HOME SCREEN
+ * First screen upon entering Admin Mode.
+ * Shows TaskFlow branding, Dashboard title, compact live overview statistics in a responsive 2x2 grid,
+ * and the 10 management sections in a clean 2-column square-card grid.
+ */
+@Composable
+fun AdminControlCenterHomeScreen(
+  users: List<UserProfile>,
+  tasks: List<TaskItem>,
+  campaigns: List<CampaignItem>,
+  reviewTasks: List<TaskItem>,
+  withdrawalRequests: List<DemoWithdrawalRequest>,
+  transactions: List<TransactionRecord>,
+  activityLogs: List<AdminActivityLog>,
+  onSelectSection: (AdminTab) -> Unit
+) {
+  val activeUsersCount =
+    users.count {
+      val s = it.approvalStatus.lowercase(Locale.US)
+      s == "approved" || s == "active"
+    }
+  val pendingUsersCount =
+    users.count { it.approvalStatus.equals("pending", ignoreCase = true) }
+  val activeTasksCount = tasks.count { it.isActive && !it.isQuotaExhausted }
+  val pendingSubmissionsCount =
+    reviewTasks.count { it.status == TaskStatus.SUBMITTED }
+  val approvedSubmissionsCount =
+    reviewTasks.count { it.status == TaskStatus.APPROVED }
+  val activeCampaignsCount =
+    campaigns.count { it.status.equals("ACTIVE", ignoreCase = true) && !it.isQuotaExhausted }
+  val pendingWithdrawalsCount =
+    withdrawalRequests.count { it.status.contains("pending", ignoreCase = true) }
+  val totalDistributedCoins =
+    remember(transactions, users, reviewTasks) {
+      val txCoins =
+        transactions
+          .filter { it.type != TransactionType.DEMO_WITHDRAWAL }
+          .sumOf { it.getEffectiveAmountCoins() }
+      val userWalletCoins = users.sumOf { it.getEffectiveBalanceCoins() }
+      val approvedTaskCoins =
+        reviewTasks.filter { it.status == TaskStatus.APPROVED }.sumOf { it.getEffectiveRewardCoins() }
+      maxOf(txCoins, userWalletCoins, approvedTaskCoins)
+    }
+
+  val dynamicSubtitles =
+    remember(
+      users.size,
+      tasks.size,
+      pendingUsersCount,
+      activeTasksCount,
+      activeCampaignsCount,
+      campaigns.size,
+      pendingWithdrawalsCount,
+      withdrawalRequests.size,
+      totalDistributedCoins,
+      pendingSubmissionsCount,
+      activityLogs.size,
+      reviewTasks.size
+    ) {
+      mapOf(
+        AdminTab.OVERVIEW to "${users.size} Users • ${tasks.size} Tasks",
+        AdminTab.USERS to "${users.size} Total • $pendingUsersCount Pending",
+        AdminTab.TASKS to "$activeTasksCount Active • ${tasks.size} Total",
+        AdminTab.CAMPAIGNS to "$activeCampaignsCount Active • ${campaigns.size} Total",
+        AdminTab.WITHDRAWALS to "$pendingWithdrawalsCount Pending • ${withdrawalRequests.size} Total",
+        AdminTab.COINS_REWARDS to "${formatCoins(totalDistributedCoins)} Paid",
+        AdminTab.ANALYTICS to "Daily, Weekly & Monthly",
+        AdminTab.VERIFICATION_FRAUD to "$pendingSubmissionsCount Proofs • $pendingUsersCount Users",
+        AdminTab.APP_SETTINGS to "v${BuildConfig.VERSION_NAME} • Rules & Limits",
+        AdminTab.ACTIVITY_LOGS to "${activityLogs.size + reviewTasks.size} Audit Events"
+      )
+    }
+  val badgeCounts =
+    remember(pendingUsersCount, pendingWithdrawalsCount, pendingSubmissionsCount) {
+      mapOf(
+        AdminTab.USERS to pendingUsersCount,
+        AdminTab.WITHDRAWALS to pendingWithdrawalsCount,
+        AdminTab.VERIFICATION_FRAUD to (pendingSubmissionsCount + pendingUsersCount)
+      )
+    }
+  val sectionPairs = remember { ADMIN_10_MAIN_SECTIONS.chunked(2) }
+
+  LazyColumn(
+    modifier =
+      Modifier.fillMaxSize()
+        .background(AdminWhiteBg)
+        .testTag("admin_control_center_home"),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
+    contentPadding = PaddingValues(bottom = 36.dp)
+  ) {
+    // 1. TaskFlow Branding & Dashboard Title Card
+    item {
+      Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = AdminSoftGreyBg),
+        border = BorderStroke(1.dp, AdminBorderColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(12.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = AdminBluePrimary,
+                modifier = Modifier.size(36.dp)
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  Icon(
+                    imageVector = Icons.Default.AdminPanelSettings,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                  )
+                }
+              }
+              Column {
+                Text(
+                  text = "TASKFLOW",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = AdminBluePrimary,
+                  fontWeight = FontWeight.ExtraBold,
+                  letterSpacing = 1.1.sp
+                )
+                Text(
+                  text = "Admin Control Center",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = AdminTextDark,
+                  fontWeight = FontWeight.ExtraBold
+                )
+              }
+            }
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = AdminBlueTint,
+              border = BorderStroke(1.dp, AdminBluePrimary.copy(alpha = 0.25f))
+            ) {
+              Text(
+                text = "Authorized Administrator",
+                style = MaterialTheme.typography.labelSmall,
+                color = AdminBlueDark,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+              )
+            }
+          }
+
+          // Compact Live Overview Statistics (Responsive 2x2 Grid so mobile screens never clip)
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              HomeStatMiniCard(
+                label = "TOTAL TASKS",
+                value = tasks.size.toString(),
+                subtitle = "$activeTasksCount Active",
+                icon = Icons.Default.Checklist,
+                testTag = "admin_metric_total_tasks",
+                modifier = Modifier.weight(1f)
+              )
+              HomeStatMiniCard(
+                label = "NEEDS REVIEW",
+                value = pendingSubmissionsCount.toString(),
+                subtitle = "Pending Proofs",
+                icon = Icons.Default.RateReview,
+                testTag = "admin_metric_needs_review",
+                accentColor = if (pendingSubmissionsCount > 0) AdminAmberWarning else AdminBluePrimary,
+                modifier = Modifier.weight(1f)
+              )
+            }
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              HomeStatMiniCard(
+                label = "APPROVED",
+                value = approvedSubmissionsCount.toString(),
+                subtitle = "Verified Tasks",
+                icon = Icons.Default.CheckCircle,
+                testTag = "admin_metric_approved",
+                accentColor = AdminGreenSuccess,
+                modifier = Modifier.weight(1f)
+              )
+              HomeStatMiniCard(
+                label = "USERS",
+                value = users.size.toString(),
+                subtitle = "$activeUsersCount Active • $pendingUsersCount Pending",
+                icon = Icons.Default.People,
+                testTag = "admin_metric_users",
+                modifier = Modifier.weight(1f)
+              )
+            }
+          }
+
+          // Secondary Live Summary Pills
+          Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            HomeQuickPill(
+              label = "Active Campaigns: $activeCampaignsCount/${campaigns.size}",
+              color = AdminBlueTint,
+              textColor = AdminBlueDark
+            )
+            HomeQuickPill(
+              label = "Pending Withdrawals: $pendingWithdrawalsCount",
+              color = if (pendingWithdrawalsCount > 0) AdminAmberTint else AdminSurfaceGrey,
+              textColor = if (pendingWithdrawalsCount > 0) AdminAmberWarning else AdminTextSecondary
+            )
+            HomeQuickPill(
+              label = "Distributed: ${formatCoins(totalDistributedCoins)}",
+              color = AdminGreenTint,
+              textColor = AdminGreenSuccess
+            )
+          }
+        }
+      }
+    }
+
+    // 2. Section Title for the 10-Card 2-Column Square Grid
+    item {
+      Row(
+        modifier =
+          Modifier.fillMaxWidth()
+            .padding(top = 2.dp)
+            .testTag("admin_10_sections_nav_bar"),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Column {
+          Text(
+            text = "Management Sections",
+            style = MaterialTheme.typography.titleMedium,
+            color = AdminTextDark,
+            fontWeight = FontWeight.ExtraBold
+          )
+          Text(
+            text = "Select a module to open its dedicated management page",
+            style = MaterialTheme.typography.bodySmall,
+            color = AdminTextMuted
+          )
+        }
+        Surface(
+          shape = RoundedCornerShape(8.dp),
+          color = AdminSurfaceGrey
+        ) {
+          Text(
+            text = "10 Modules",
+            style = MaterialTheme.typography.labelSmall,
+            color = AdminTextSecondary,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+          )
+        }
+      }
+    }
+
+    // 3. 10 Management Sections in a 2-Column Square-Card Grid (Each row is a LazyColumn item)
+    items(sectionPairs, key = { pair -> pair.first().tag }) { pair ->
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        pair.forEach { section ->
+          val badgeCount = badgeCounts[section.tab] ?: 0
+          val liveSubtitle = dynamicSubtitles[section.tab] ?: section.defaultSubtitle
+          AdminSquareManagementCard(
+            item = section,
+            subtitle = liveSubtitle,
+            badgeCount = badgeCount,
+            onClick = { onSelectSection(section.tab) },
+            modifier = Modifier.weight(1f)
+          )
+        }
+        if (pair.size == 1) {
+          Spacer(modifier = Modifier.weight(1f))
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun HomeStatMiniCard(
+  label: String,
+  value: String,
+  subtitle: String,
+  icon: ImageVector,
+  testTag: String,
+  accentColor: Color = AdminBluePrimary,
+  modifier: Modifier = Modifier
+) {
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = AdminWhiteBg,
+    border = BorderStroke(1.dp, AdminBorderColor),
+    modifier = modifier.testTag(testTag)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+      verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Text(
+          text = label,
+          style = MaterialTheme.typography.labelSmall,
+          color = AdminTextMuted,
+          fontWeight = FontWeight.Bold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
+        )
+        Icon(
+          imageVector = icon,
+          contentDescription = null,
+          tint = accentColor,
+          modifier = Modifier.size(14.dp)
+        )
+      }
+      Text(
+        text = value,
+        style = MaterialTheme.typography.titleMedium,
+        color = AdminTextDark,
+        fontWeight = FontWeight.ExtraBold
+      )
+      Text(
+        text = subtitle,
+        style = MaterialTheme.typography.labelSmall,
+        color = AdminTextSecondary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+      )
+    }
+  }
+}
+
+@Composable
+private fun HomeQuickPill(
+  label: String,
+  color: Color,
+  textColor: Color
+) {
+  Surface(
+    shape = RoundedCornerShape(50),
+    color = color
+  ) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelSmall,
+      color = textColor,
+      fontWeight = FontWeight.SemiBold,
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+    )
+  }
+}
+
+@Composable
+private fun AdminSquareManagementCard(
+  item: AdminNavSectionItem,
+  subtitle: String,
+  badgeCount: Int,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier
+) {
+  Card(
+    modifier =
+      modifier
+        .height(132.dp)
+        .clip(RoundedCornerShape(16.dp))
+        .clickable(onClick = onClick)
+        .testTag(item.tag),
+    shape = RoundedCornerShape(16.dp),
+    colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+    border = BorderStroke(1.dp, AdminBorderColor),
+    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(14.dp),
+      verticalArrangement = Arrangement.SpaceBetween
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top
+      ) {
+        Surface(
+          shape = RoundedCornerShape(12.dp),
+          color = AdminBlueTint,
+          border = BorderStroke(1.dp, AdminBluePrimary.copy(alpha = 0.15f)),
+          modifier = Modifier.size(44.dp)
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = item.icon,
+              contentDescription = item.label,
+              tint = AdminBluePrimary,
+              modifier = Modifier.size(22.dp)
+            )
+          }
+        }
+
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+          if (badgeCount > 0) {
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = AdminAmberTint,
+              border = BorderStroke(1.dp, AdminAmberWarning.copy(alpha = 0.4f))
+            ) {
+              Text(
+                text = badgeCount.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = AdminAmberWarning,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+              )
+            }
+          }
+          Surface(
+            shape = CircleShape,
+            color = AdminSoftGreyBg,
+            modifier = Modifier.size(26.dp)
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                contentDescription = "Open ${item.label}",
+                tint = AdminTextMuted,
+                modifier = Modifier.size(12.dp)
+              )
+            }
+          }
+        }
+      }
+
+      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+          text = item.label,
+          style = MaterialTheme.typography.titleMedium,
+          color = AdminTextDark,
+          fontWeight = FontWeight.Bold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
+        )
+        Text(
+          text = subtitle,
+          style = MaterialTheme.typography.bodySmall,
+          color = AdminTextMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Dedicated Management Page Header Bar with Back navigation to Main Dashboard Home Screen.
+ */
+@Composable
+fun AdminDedicatedPageHeader(
+  activeTab: AdminTab,
+  onBackToHome: () -> Unit
+) {
+  val sectionMeta =
+    ADMIN_10_MAIN_SECTIONS.find { it.tab == activeTab }
+      ?: AdminNavSectionItem(
+        tab = activeTab,
+        label =
+          when (activeTab) {
+            AdminTab.SUBMISSIONS -> "Submissions"
+            AdminTab.APPS -> "Apps Management"
+            else -> "Dashboard"
+          },
+        icon = Icons.Default.Dashboard,
+        tag = "admin_section_custom"
+      )
+
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = AdminSoftGreyBg,
+    border = BorderStroke(1.dp, AdminBorderColor),
+    modifier = Modifier.fillMaxWidth()
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+      ) {
+        IconButton(
+          onClick = onBackToHome,
+          modifier = Modifier.size(32.dp).testTag("admin_back_to_dashboard_btn")
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "Back to Dashboard Home",
+            tint = AdminBluePrimary,
+            modifier = Modifier.size(18.dp)
+          )
+        }
+        Surface(
+          shape = RoundedCornerShape(8.dp),
+          color = AdminBlueTint,
+          modifier = Modifier.size(28.dp)
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = sectionMeta.icon,
+              contentDescription = null,
+              tint = AdminBluePrimary,
+              modifier = Modifier.size(15.dp)
+            )
+          }
+        }
+        Column {
+          Text(
+            text = sectionMeta.label,
+            style = MaterialTheme.typography.titleSmall,
+            color = AdminTextDark,
+            fontWeight = FontWeight.ExtraBold
+          )
+          Text(
+            text = "TaskFlow • Authorized Administrator",
+            style = MaterialTheme.typography.labelSmall,
+            color = AdminTextMuted
+          )
+        }
+      }
+
+      Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = AdminBlueTint,
+        border = BorderStroke(1.dp, AdminBluePrimary.copy(alpha = 0.25f)),
+        modifier =
+          Modifier.clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onBackToHome)
+            .testTag("admin_home_grid_btn")
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+          Icon(
+            imageVector = Icons.Default.Dashboard,
+            contentDescription = null,
+            tint = AdminBluePrimary,
+            modifier = Modifier.size(13.dp)
+          )
+          Text(
+            text = "Dashboard",
+            style = MaterialTheme.typography.labelSmall,
+            color = AdminBlueDark,
+            fontWeight = FontWeight.Bold
+          )
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Compact 10-Section Navigation Bar retained for quick switching inside Overview or tests.
+ */
 @Composable
 fun AdminSectionNavigationBar(
   activeTab: AdminTab,
@@ -108,51 +803,28 @@ fun AdminSectionNavigationBar(
   pendingSubmissionsCount: Int,
   onSelectTab: (AdminTab) -> Unit
 ) {
-  val sections =
-    remember(pendingUsersCount, pendingSubmissionsCount) {
-      listOf(
-        AdminSectionNavItem(AdminTab.OVERVIEW, "1. Overview", Icons.Default.Dashboard, "admin_section_overview"),
-        AdminSectionNavItem(AdminTab.USERS, "2. Users", Icons.Default.People, "admin_section_users", pendingUsersCount),
-        AdminSectionNavItem(AdminTab.TASKS, "3. Tasks", Icons.Default.Task, "admin_section_tasks"),
-        AdminSectionNavItem(AdminTab.CAMPAIGNS, "4. Campaigns", Icons.Default.Campaign, "admin_section_campaigns"),
-        AdminSectionNavItem(AdminTab.WITHDRAWALS, "5. Withdrawals", Icons.Default.Payment, "admin_section_withdrawals"),
-        AdminSectionNavItem(AdminTab.COINS_REWARDS, "6. Coins & Rewards", Icons.Default.MonetizationOn, "admin_section_coins_rewards"),
-        AdminSectionNavItem(AdminTab.ANALYTICS, "7. Analytics & Reports", Icons.Default.Analytics, "admin_section_analytics"),
-        AdminSectionNavItem(
-          AdminTab.VERIFICATION_FRAUD,
-          "8. Verification & Fraud",
-          Icons.Default.VerifiedUser,
-          "admin_section_verification_fraud",
-          pendingSubmissionsCount
-        ),
-        AdminSectionNavItem(AdminTab.APP_SETTINGS, "9. App Settings", Icons.Default.Settings, "admin_section_app_settings"),
-        AdminSectionNavItem(AdminTab.ACTIVITY_LOGS, "10. Activity Logs", Icons.Default.History, "admin_section_activity_logs")
-      )
-    }
-
-  val normalizedActiveTab =
-    if (activeTab == AdminTab.SUBMISSIONS) AdminTab.VERIFICATION_FRAUD else activeTab
-
   Row(
     modifier =
       Modifier.fillMaxWidth()
         .horizontalScroll(rememberScrollState())
-        .padding(bottom = 8.dp)
+        .padding(bottom = 4.dp)
         .testTag("admin_10_sections_nav_bar"),
-    horizontalArrangement = Arrangement.spacedBy(8.dp)
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalAlignment = Alignment.CenterVertically
   ) {
-    sections.forEach { item ->
-      val isSelected = normalizedActiveTab == item.tab
+    ADMIN_10_MAIN_SECTIONS.forEach { item ->
+      val isSelected =
+        activeTab == item.tab ||
+          (activeTab == AdminTab.SUBMISSIONS && item.tab == AdminTab.VERIFICATION_FRAUD)
+      val badgeCount =
+        when (item.tab) {
+          AdminTab.USERS -> pendingUsersCount
+          AdminTab.VERIFICATION_FRAUD -> pendingSubmissionsCount
+          else -> 0
+        }
       FilterChip(
         selected = isSelected,
         onClick = { onSelectTab(item.tab) },
-        leadingIcon = {
-          Icon(
-            imageVector = item.icon,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp)
-          )
-        },
         label = {
           Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -162,19 +834,15 @@ fun AdminSectionNavigationBar(
               text = item.label,
               fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
             )
-            if (item.badgeCount > 0) {
+            if (badgeCount > 0) {
               Surface(
                 shape = CircleShape,
-                color =
-                  if (isSelected) MaterialTheme.colorScheme.primary
-                  else MaterialTheme.colorScheme.errorContainer
+                color = if (isSelected) Color.White else AdminAmberTint
               ) {
                 Text(
-                  text = item.badgeCount.toString(),
+                  text = badgeCount.toString(),
                   style = MaterialTheme.typography.labelSmall,
-                  color =
-                    if (isSelected) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onErrorContainer,
+                  color = if (isSelected) AdminBluePrimary else AdminAmberWarning,
                   fontWeight = FontWeight.Bold,
                   modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
                 )
@@ -182,24 +850,28 @@ fun AdminSectionNavigationBar(
             }
           }
         },
-        modifier = Modifier.testTag(item.testTag)
+        leadingIcon = {
+          Icon(
+            imageVector = item.icon,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp)
+          )
+        },
+        colors =
+          FilterChipDefaults.filterChipColors(
+            selectedContainerColor = AdminBluePrimary,
+            selectedLabelColor = Color.White,
+            selectedLeadingIconColor = Color.White
+          ),
+        modifier = Modifier.testTag(item.tag)
       )
     }
   }
 }
 
 /**
- * SECTION 1: OVERVIEW
- * Displays real Firebase-backed information:
- * - Total users
- * - Active users
- * - Pending user approvals
- * - Active campaigns
- * - Active tasks
- * - Pending submissions
- * - Completed tasks
- * - Total coins distributed
- * - Recent activity
+ * C. OVERVIEW PAGE & M. FINANCIAL OVERVIEW
+ * Dedicated full page showing all 13 live operational metrics, Financial Overview, and Recent Activities.
  */
 @Composable
 fun AdminOverviewSection(
@@ -209,157 +881,316 @@ fun AdminOverviewSection(
   reviewTasks: List<TaskItem>,
   transactions: List<TransactionRecord>,
   activityLogs: List<AdminActivityLog>,
+  withdrawalRequests: List<DemoWithdrawalRequest> = emptyList(),
   onNavigateTab: (AdminTab) -> Unit,
   onCreateTaskClick: () -> Unit
 ) {
   val totalUsers = users.size
-  val activeUsers = users.count { it.approvalStatus.equals("approved", ignoreCase = true) }
-  val pendingUserApprovals = users.count { it.approvalStatus.equals("pending", ignoreCase = true) }
+  val activeUsers =
+    users.count {
+      val s = it.approvalStatus.lowercase(Locale.US)
+      s == "approved" || s == "active"
+    }
+  val pendingUsers = users.count { it.approvalStatus.equals("pending", ignoreCase = true) }
+  val suspendedUsers =
+    users.count {
+      it.approvalStatus.equals("suspended", ignoreCase = true) ||
+        it.approvalStatus.equals("rejected", ignoreCase = true)
+    }
+
+  val totalTasks = tasks.size
+  val activeTasks = tasks.count { it.isActive && !it.isQuotaExhausted }
+  val completedTasks =
+    tasks.count { it.isQuotaExhausted } +
+      reviewTasks.count { it.status == TaskStatus.APPROVED }
+
+  val pendingSubmissions = reviewTasks.count { it.status == TaskStatus.SUBMITTED }
+  val totalCampaigns = campaigns.size
   val activeCampaigns =
     campaigns.count { it.status.equals("ACTIVE", ignoreCase = true) && !it.isQuotaExhausted }
-  val activeTasks = tasks.count { it.isActive && !it.isQuotaExhausted }
-  val pendingSubmissions = reviewTasks.count { it.status == TaskStatus.SUBMITTED }
-  val completedTasks = reviewTasks.count { it.status == TaskStatus.APPROVED }
+  val pendingWithdrawals =
+    withdrawalRequests.count { it.status.contains("pending", ignoreCase = true) }
 
-  val totalCoinsDistributed =
-    remember(users, transactions, reviewTasks) {
-      val fromTx =
+  val totalDistributedCoins =
+    remember(transactions, users, reviewTasks) {
+      val txCoins =
         transactions
-          .filter { it.status.equals("CREDITED", ignoreCase = true) || it.amountCents > 0L }
-          .sumOf { it.amountCents.coerceAtLeast(0L) }
-      val fromBalances = users.sumOf { it.balanceCents.coerceAtLeast(0L) }
-      val fromApprovedTasks =
-        reviewTasks
-          .filter { it.status == TaskStatus.APPROVED }
-          .sumOf { it.rewardCents.coerceAtLeast(0L) }
-      maxOf(fromTx, fromBalances, fromApprovedTasks)
+          .filter { it.type != TransactionType.DEMO_WITHDRAWAL }
+          .sumOf { it.getEffectiveAmountCoins() }
+      val userWalletCoins = users.sumOf { it.getEffectiveBalanceCoins() }
+      val approvedTaskCoins =
+        reviewTasks.filter { it.status == TaskStatus.APPROVED }.sumOf { it.getEffectiveRewardCoins() }
+      maxOf(txCoins, userWalletCoins, approvedTaskCoins)
+    }
+  val totalDistributedCents = coinsToCents(totalDistributedCoins)
+
+  // Financial Overview calculations
+  val totalCampaignBudgetCents = campaigns.sumOf { it.budgetCents }
+  val usedCampaignBudgetCents = campaigns.sumOf { it.spentCents }
+  val remainingCampaignBudgetCents =
+    (totalCampaignBudgetCents - usedCampaignBudgetCents).coerceAtLeast(0L)
+  val pendingLiabilityCoins =
+    reviewTasks.filter { it.status == TaskStatus.SUBMITTED }.sumOf { it.getEffectiveRewardCoins() }
+  val pendingLiabilityCents = coinsToCents(pendingLiabilityCoins)
+  val totalRequestedWithdrawalCents = withdrawalRequests.sumOf { it.amountCents }
+  val approvedWithdrawalCents =
+    withdrawalRequests.filter { it.status.equals("approved", ignoreCase = true) }.sumOf { it.amountCents }
+
+  val recentActivities =
+    remember(activityLogs, reviewTasks, tasks, campaigns, transactions, users, withdrawalRequests) {
+      buildCombinedActivityEntries(
+        activityLogs = activityLogs,
+        reviewTasks = reviewTasks,
+        tasks = tasks,
+        campaigns = campaigns,
+        transactions = transactions,
+        users = users,
+        withdrawalRequests = withdrawalRequests
+      ).take(8)
     }
 
   LazyColumn(
     modifier = Modifier.fillMaxSize().testTag("admin_overview_section"),
     verticalArrangement = Arrangement.spacedBy(12.dp),
-    contentPadding = PaddingValues(bottom = 84.dp)
+    contentPadding = PaddingValues(bottom = 80.dp)
   ) {
+    // Quick module switcher bar (also keeps admin_10_sections_nav_bar present on Overview page)
+    item {
+      AdminSectionNavigationBar(
+        activeTab = AdminTab.OVERVIEW,
+        pendingUsersCount = pendingUsers,
+        pendingSubmissionsCount = pendingSubmissions,
+        onSelectTab = onNavigateTab
+      )
+    }
+
+    // 1. Live Operational Metrics (12 Core Metrics in Clean 2-Column Grid)
     item {
       Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+        border = BorderStroke(1.dp, AdminBorderColor)
       ) {
-        Row(
+        Column(
           modifier = Modifier.fillMaxWidth().padding(16.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically
+          verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = "Admin Control Center",
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold
-            )
-            Text(
-              text = "Real-time Firebase metrics across users, tasks, campaigns & rewards.",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-          }
-          Button(
-            onClick = onCreateTaskClick,
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.testTag("overview_create_task_btn")
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
           ) {
-            Text("+ New Task / Campaign")
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Live Operational Metrics",
+                style = MaterialTheme.typography.titleMedium,
+                color = AdminTextDark,
+                fontWeight = FontWeight.ExtraBold
+              )
+              Text(
+                text = "Real-time counts synchronized with Firebase Firestore",
+                style = MaterialTheme.typography.bodySmall,
+                color = AdminTextMuted
+              )
+            }
+            Button(
+              onClick = onCreateTaskClick,
+              shape = RoundedCornerShape(10.dp),
+              colors = ButtonDefaults.buttonColors(containerColor = AdminBluePrimary),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+              Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("New Task", style = MaterialTheme.typography.labelMedium)
+            }
+          }
+
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OverviewMetricTile(
+              title = "Total Registered Users",
+              value = totalUsers.toString(),
+              subtitle = "All accounts",
+              icon = Icons.Default.People,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.USERS) }
+            )
+            OverviewMetricTile(
+              title = "Active Users",
+              value = activeUsers.toString(),
+              subtitle = "Approved & active",
+              icon = Icons.Default.CheckCircle,
+              accentColor = AdminGreenSuccess,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.USERS) }
+            )
+          }
+
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OverviewMetricTile(
+              title = "Pending Users",
+              value = pendingUsers.toString(),
+              subtitle = "Awaiting verification",
+              icon = Icons.Default.HourglassEmpty,
+              accentColor = AdminAmberWarning,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.USERS) }
+            )
+            OverviewMetricTile(
+              title = "Suspended Users",
+              value = suspendedUsers.toString(),
+              subtitle = "Restricted access",
+              icon = Icons.Default.Block,
+              accentColor = AdminRedDanger,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.USERS) }
+            )
+          }
+
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OverviewMetricTile(
+              title = "Total Tasks",
+              value = totalTasks.toString(),
+              subtitle = "All created tasks",
+              icon = Icons.Default.Checklist,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.TASKS) }
+            )
+            OverviewMetricTile(
+              title = "Active Tasks",
+              value = activeTasks.toString(),
+              subtitle = "Live for users",
+              icon = Icons.Default.PlayCircleFilled,
+              accentColor = AdminBluePrimary,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.TASKS) }
+            )
+          }
+
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OverviewMetricTile(
+              title = "Completed Tasks",
+              value = completedTasks.toString(),
+              subtitle = "Approved completions",
+              icon = Icons.AutoMirrored.Filled.FactCheck,
+              accentColor = AdminGreenSuccess,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.TASKS) }
+            )
+            OverviewMetricTile(
+              title = "Pending Submissions",
+              value = pendingSubmissions.toString(),
+              subtitle = "Proofs to review",
+              icon = Icons.Default.RateReview,
+              accentColor = AdminAmberWarning,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.VERIFICATION_FRAUD) }
+            )
+          }
+
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OverviewMetricTile(
+              title = "Total Campaigns",
+              value = totalCampaigns.toString(),
+              subtitle = "All campaigns",
+              icon = Icons.Default.Campaign,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.CAMPAIGNS) }
+            )
+            OverviewMetricTile(
+              title = "Active Campaigns",
+              value = activeCampaigns.toString(),
+              subtitle = "Running now",
+              icon = Icons.AutoMirrored.Filled.TrendingUp,
+              accentColor = AdminBluePrimary,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.CAMPAIGNS) }
+            )
+          }
+
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OverviewMetricTile(
+              title = "Pending Withdrawals",
+              value = pendingWithdrawals.toString(),
+              subtitle = "${withdrawalRequests.size} Total requests",
+              icon = Icons.Default.AccountBalanceWallet,
+              accentColor = if (pendingWithdrawals > 0) AdminAmberWarning else AdminBluePrimary,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.WITHDRAWALS) }
+            )
+            OverviewMetricTile(
+              title = "Total Coins Distributed",
+              value = formatCoins(totalDistributedCoins),
+              subtitle = formatRewardInr(totalDistributedCents),
+              icon = Icons.Default.MonetizationOn,
+              accentColor = AdminGreenSuccess,
+              modifier = Modifier.weight(1f),
+              onClick = { onNavigateTab(AdminTab.COINS_REWARDS) }
+            )
           }
         }
       }
     }
 
-    // 8 Core Metrics Grid (2 columns x 4 rows)
+    // 2. M. Financial Overview Card (Accurate Distinction of Budgets, Rewards, Liabilities & Withdrawals)
     item {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-          OverviewMetricTile(
-            title = "Total Users",
-            value = "$totalUsers",
-            subtitle = "$activeUsers active accounts",
-            icon = Icons.Default.People,
-            modifier = Modifier.weight(1f),
-            onClick = { onNavigateTab(AdminTab.USERS) }
+      Card(
+        modifier = Modifier.fillMaxWidth().testTag("admin_financial_overview_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = AdminSoftGreyBg),
+        border = BorderStroke(1.dp, AdminBorderColor)
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Text(
+            text = "Financial & Budget Overview",
+            style = MaterialTheme.typography.titleMedium,
+            color = AdminTextDark,
+            fontWeight = FontWeight.ExtraBold
           )
-          OverviewMetricTile(
-            title = "Active Users",
-            value = "$activeUsers",
-            subtitle = "Approved & verified",
-            icon = Icons.Default.CheckCircle,
-            modifier = Modifier.weight(1f),
-            onClick = { onNavigateTab(AdminTab.USERS) }
+          Text(
+            text = "Conversion Standard: $COINS_PER_RUPEE Coins = ₹1.00 INR (All figures derived from live Firestore data)",
+            style = MaterialTheme.typography.bodySmall,
+            color = AdminTextMuted
           )
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-          OverviewMetricTile(
-            title = "Pending Approvals",
-            value = "$pendingUserApprovals",
-            subtitle = "User accounts awaiting review",
-            icon = Icons.Default.PendingActions,
-            modifier = Modifier.weight(1f),
-            onClick = { onNavigateTab(AdminTab.USERS) }
+          HorizontalDivider(color = AdminBorderColor)
+          FinancialSummaryRow(
+            label = "Allocated Campaign Budgets",
+            value = formatInrAndCoins(totalCampaignBudgetCents)
           )
-          OverviewMetricTile(
-            title = "Active Campaigns",
-            value = "$activeCampaigns",
-            subtitle = "${campaigns.size} total campaigns",
-            icon = Icons.Default.Campaign,
-            modifier = Modifier.weight(1f),
-            onClick = { onNavigateTab(AdminTab.CAMPAIGNS) }
+          FinancialSummaryRow(
+            label = "Used Campaign Budget",
+            value = formatInrAndCoins(usedCampaignBudgetCents)
           )
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-          OverviewMetricTile(
-            title = "Active Tasks",
-            value = "$activeTasks",
-            subtitle = "${tasks.size} total tasks",
-            icon = Icons.Default.Task,
-            modifier = Modifier.weight(1f),
-            onClick = { onNavigateTab(AdminTab.TASKS) }
+          FinancialSummaryRow(
+            label = "Remaining Campaign Budget",
+            value = formatInrAndCoins(remainingCampaignBudgetCents)
           )
-          OverviewMetricTile(
-            title = "Pending Submissions",
-            value = "$pendingSubmissions",
-            subtitle = "Proofs awaiting review",
-            icon = Icons.Default.RateReview,
-            modifier = Modifier.weight(1f),
-            onClick = { onNavigateTab(AdminTab.VERIFICATION_FRAUD) }
+          FinancialSummaryRow(
+            label = "Total Rewards Distributed",
+            value = "${formatCoins(totalDistributedCoins)} (${formatRewardInr(totalDistributedCents)})"
           )
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-          OverviewMetricTile(
-            title = "Completed Tasks",
-            value = "$completedTasks",
-            subtitle = "Approved & rewarded",
-            icon = Icons.Default.VerifiedUser,
-            modifier = Modifier.weight(1f),
-            onClick = { onNavigateTab(AdminTab.VERIFICATION_FRAUD) }
+          FinancialSummaryRow(
+            label = "Pending Reward Liabilities ($pendingSubmissions Submissions)",
+            value = "${formatCoins(pendingLiabilityCoins)} (${formatRewardInr(pendingLiabilityCents)})"
           )
-          OverviewMetricTile(
-            title = "Coins Distributed",
-            value = formatCoins(centsToCoins(totalCoinsDistributed)),
-            subtitle = "≈ ${formatRewardInr(totalCoinsDistributed)}",
-            icon = Icons.Default.MonetizationOn,
-            modifier = Modifier.weight(1f),
-            onClick = { onNavigateTab(AdminTab.COINS_REWARDS) }
+          FinancialSummaryRow(
+            label = "Requested / Approved Withdrawals",
+            value = "${formatRewardInr(totalRequestedWithdrawalCents)} Req • ${formatRewardInr(approvedWithdrawalCents)} Appr"
           )
         }
       }
     }
 
-    // Recent Activity Feed
+    // 3. Recent Activities Feed (13th Overview Metric)
     item {
       Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+        border = BorderStroke(1.dp, AdminBorderColor)
       ) {
         Column(
           modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -371,36 +1202,27 @@ fun AdminOverviewSection(
             verticalAlignment = Alignment.CenterVertically
           ) {
             Text(
-              text = "Recent System & Admin Activity",
+              text = "Recent Activities (${recentActivities.size})",
               style = MaterialTheme.typography.titleMedium,
+              color = AdminTextDark,
               fontWeight = FontWeight.Bold
             )
-            Text(
-              text = "View All Logs →",
-              style = MaterialTheme.typography.labelMedium,
-              color = MaterialTheme.colorScheme.primary,
-              fontWeight = FontWeight.Bold,
-              modifier = Modifier.clickable { onNavigateTab(AdminTab.ACTIVITY_LOGS) }
-            )
-          }
-
-          val recentEntries =
-            remember(activityLogs, reviewTasks, tasks) {
-              buildCombinedActivityEntries(activityLogs, reviewTasks, tasks, campaigns, transactions)
-                .take(6)
+            OutlinedButton(
+              onClick = { onNavigateTab(AdminTab.ACTIVITY_LOGS) },
+              shape = RoundedCornerShape(8.dp),
+              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+              Text("View All Logs", style = MaterialTheme.typography.labelSmall)
             }
-
-          if (recentEntries.isEmpty()) {
+          }
+          if (recentActivities.isEmpty()) {
             Text(
-              text = "No recent activity recorded yet.",
+              text = "No administrative or task activities recorded yet.",
               style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant
+              color = AdminTextMuted
             )
           } else {
-            recentEntries.forEachIndexed { idx, entry ->
-              if (idx > 0) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
-              }
+            recentActivities.forEach { entry ->
               Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -410,13 +1232,16 @@ fun AdminOverviewSection(
                   Text(
                     text = entry.title,
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold
+                    color = AdminTextDark,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                   )
                   Text(
                     text = entry.subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    color = AdminTextMuted,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                   )
                 }
@@ -424,9 +1249,10 @@ fun AdminOverviewSection(
                 Text(
                   text = entry.dateLabel,
                   style = MaterialTheme.typography.labelSmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                  color = AdminTextMuted
                 )
               }
+              HorizontalDivider(color = AdminBorderColor.copy(alpha = 0.6f))
             }
           }
         }
@@ -436,22 +1262,48 @@ fun AdminOverviewSection(
 }
 
 @Composable
-private fun OverviewMetricTile(
+private fun FinancialSummaryRow(label: String, value: String) {
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically
+  ) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.bodySmall,
+      color = AdminTextSecondary,
+      modifier = Modifier.weight(1f)
+    )
+    Text(
+      text = value,
+      style = MaterialTheme.typography.bodySmall,
+      color = AdminTextDark,
+      fontWeight = FontWeight.Bold
+    )
+  }
+}
+
+@Composable
+internal fun OverviewMetricTile(
   title: String,
   value: String,
   subtitle: String,
   icon: ImageVector,
+  accentColor: Color = AdminBluePrimary,
   modifier: Modifier = Modifier,
-  onClick: () -> Unit
+  onClick: () -> Unit = {}
 ) {
-  Surface(
-    shape = RoundedCornerShape(14.dp),
-    color = MaterialTheme.colorScheme.surface,
-    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    modifier = modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick)
+  Card(
+    modifier =
+      modifier
+        .clip(RoundedCornerShape(12.dp))
+        .clickable { onClick() },
+    shape = RoundedCornerShape(12.dp),
+    colors = CardDefaults.cardColors(containerColor = AdminSoftGreyBg),
+    border = BorderStroke(1.dp, AdminBorderColor)
   ) {
     Column(
-      modifier = Modifier.padding(14.dp),
+      modifier = Modifier.fillMaxWidth().padding(12.dp),
       verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
       Row(
@@ -461,13 +1313,13 @@ private fun OverviewMetricTile(
         Icon(
           imageVector = icon,
           contentDescription = null,
-          tint = MaterialTheme.colorScheme.primary,
+          tint = accentColor,
           modifier = Modifier.size(16.dp)
         )
         Text(
           text = title,
-          style = MaterialTheme.typography.labelMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          style = MaterialTheme.typography.labelSmall,
+          color = AdminTextSecondary,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
@@ -475,13 +1327,15 @@ private fun OverviewMetricTile(
       Text(
         text = value,
         style = MaterialTheme.typography.titleLarge,
+        color = AdminTextDark,
         fontWeight = FontWeight.ExtraBold,
-        color = MaterialTheme.colorScheme.onSurface
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
       )
       Text(
         text = subtitle,
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = AdminTextMuted,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis
       )
@@ -490,12 +1344,9 @@ private fun OverviewMetricTile(
 }
 
 /**
- * SECTION 6: COINS & REWARDS
- * - Manage reward configurations (125 Coins = ₹1)
- * - View coin transactions and reward history
- * - Calculate user balances accurately
- * - Prevent duplicate reward credits
- * - Maintain an auditable reward ledger
+ * H. COINS & REWARDS MANAGEMENT PAGE
+ * Displays 125 Coins = ₹1 conversion standard, reward configurations, total coins distributed,
+ * duplicate reward prevention status, user coin balances, and reward transaction & approval history.
  */
 @Composable
 fun AdminCoinsRewardsSection(
@@ -503,177 +1354,250 @@ fun AdminCoinsRewardsSection(
   reviewTasks: List<TaskItem>,
   transactions: List<TransactionRecord>
 ) {
-  var searchQuery by rememberSaveable { mutableStateOf("") }
-  val totalUserBalancesCoins = remember(users) { users.sumOf { it.balanceCents.coerceAtLeast(0L) } }
-  val approvedTaskRewardsCoins =
-    remember(reviewTasks) {
-      reviewTasks
-        .filter { it.status == TaskStatus.APPROVED }
-        .sumOf { it.rewardCents.coerceAtLeast(0L) }
-    }
-  val filteredTransactions =
-    remember(transactions, searchQuery) {
-      if (searchQuery.isBlank()) {
-        transactions
-      } else {
-        val q = searchQuery.trim().lowercase(Locale.US)
-        transactions.filter { tx ->
-          tx.title.lowercase(Locale.US).contains(q) ||
-            tx.userId.lowercase(Locale.US).contains(q) ||
-            tx.referenceId.lowercase(Locale.US).contains(q)
-        }
-      }
-    }
+  val creditTransactions =
+    transactions.filter { it.type != TransactionType.DEMO_WITHDRAWAL }
+  val approvedSubmissions =
+    reviewTasks.filter { it.status == TaskStatus.APPROVED }
+  val pendingSubmissions =
+    reviewTasks.filter { it.status == TaskStatus.SUBMITTED }
+
+  val totalDistributedCoins =
+    maxOf(
+      creditTransactions.sumOf { it.getEffectiveAmountCoins() },
+      users.sumOf { it.getEffectiveBalanceCoins() },
+      approvedSubmissions.sumOf { it.getEffectiveRewardCoins() }
+    )
+  val totalDistributedCents = coinsToCents(totalDistributedCoins)
+
+  val pendingLiabilityCoins = pendingSubmissions.sumOf { it.getEffectiveRewardCoins() }
+  val pendingLiabilityCents = coinsToCents(pendingLiabilityCoins)
+
+  val totalCurrentWalletCoins = users.sumOf { it.getEffectiveBalanceCoins() }
+  val totalCurrentWalletCents = coinsToCents(totalCurrentWalletCoins)
+
+  val duplicateSafeCount =
+    creditTransactions.map { it.id }.distinct().size
 
   LazyColumn(
     modifier = Modifier.fillMaxSize().testTag("admin_coins_rewards_section"),
     verticalArrangement = Arrangement.spacedBy(12.dp),
     contentPadding = PaddingValues(bottom = 48.dp)
   ) {
-    // 1. Reward Configuration & Conversion Standard Card
+    // 1. Conversion Standard & Reward Rules Card
     item {
       Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        colors = CardDefaults.cardColors(containerColor = AdminBlueTint),
+        border = BorderStroke(1.dp, AdminBluePrimary.copy(alpha = 0.25f))
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Icon(
+              imageVector = Icons.Default.MonetizationOn,
+              contentDescription = null,
+              tint = AdminBluePrimary
+            )
+            Text(
+              text = "Coins & INR Conversion Standard",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.ExtraBold,
+              color = AdminTextDark
+            )
+          }
+          Text(
+            text = "125 Coins = ₹1.00 INR  •  1,250 Coins = ₹10.00 INR  •  12,500 Coins = ₹100.00 INR",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            color = AdminBlueDark
+          )
+          Text(
+            text = "Duplicate Reward Protection: Deterministic transaction IDs (tx_approval_{submissionId}) enforce idempotent single-credit execution.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AdminTextSecondary
+          )
+        }
+      }
+    }
+
+    // 2. Live Reward Ledger Summary
+    item {
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          OverviewMetricTile(
+            title = "Total Distributed",
+            value = formatCoins(totalDistributedCoins),
+            subtitle = formatRewardInr(totalDistributedCents),
+            icon = Icons.Default.CheckCircle,
+            accentColor = AdminGreenSuccess,
+            modifier = Modifier.weight(1f)
+          )
+          OverviewMetricTile(
+            title = "Active User Wallets",
+            value = formatCoins(totalCurrentWalletCoins),
+            subtitle = formatRewardInr(totalCurrentWalletCents),
+            icon = Icons.Default.AccountBalanceWallet,
+            accentColor = AdminBluePrimary,
+            modifier = Modifier.weight(1f)
+          )
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          OverviewMetricTile(
+            title = "Pending Approval Coins",
+            value = formatCoins(pendingLiabilityCoins),
+            subtitle = "${pendingSubmissions.size} Proofs in queue • ${formatRewardInr(pendingLiabilityCents)}",
+            icon = Icons.Default.HourglassEmpty,
+            accentColor = AdminAmberWarning,
+            modifier = Modifier.weight(1f)
+          )
+          OverviewMetricTile(
+            title = "Verified Reward Credits",
+            value = duplicateSafeCount.toString(),
+            subtitle = "Zero duplicate payouts",
+            icon = Icons.Default.Shield,
+            accentColor = AdminGreenSuccess,
+            modifier = Modifier.weight(1f)
+          )
+        }
+      }
+    }
+
+    // 3. User Coin Balances Leaderboard
+    item {
+      Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+        border = BorderStroke(1.dp, AdminBorderColor)
       ) {
         Column(
           modifier = Modifier.fillMaxWidth().padding(16.dp),
           verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Text(
-              text = "Coins & Reward Configuration",
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold
-            )
-            Surface(
-              shape = RoundedCornerShape(50),
-              color = MaterialTheme.colorScheme.primaryContainer
-            ) {
-              Text(
-                text = "$COINS_PER_RUPEE Coins = ₹1.00",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-              )
-            }
-          }
           Text(
-            text = "All task rewards, daily check-in streaks (Days 1–7: 10–50 Coins), Spin & Earn outcomes, and Watch & Earn video credits are atomically recorded in Firestore with idempotent transaction keys (`tx_approval_{submissionId}`) to prevent duplicate reward credits.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            text = "User Coin & Rupee Balances (${users.size})",
+            style = MaterialTheme.typography.titleMedium,
+            color = AdminTextDark,
+            fontWeight = FontWeight.Bold
           )
-          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-          ) {
-            Column {
-              Text("Total User Wallet Balances", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-              Text(formatRewardInr(totalUserBalancesCoins), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            }
-            Column(horizontalAlignment = Alignment.End) {
-              Text("Approved Task Rewards", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-              Text(formatRewardInr(approvedTaskRewardsCoins), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+          val sortedUsers =
+            remember(users) { users.sortedByDescending { it.getEffectiveBalanceCoins() } }
+          if (sortedUsers.isEmpty()) {
+            Text(
+              text = "No registered user accounts yet.",
+              style = MaterialTheme.typography.bodySmall,
+              color = AdminTextMuted
+            )
+          } else {
+            sortedUsers.take(15).forEach { u ->
+              val userCoins = u.getEffectiveBalanceCoins()
+              val userCents = coinsToCents(userCoins)
+              Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = u.displayName.ifBlank { "TaskFlow User" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AdminTextDark,
+                    fontWeight = FontWeight.SemiBold
+                  )
+                  Text(
+                    text = "Completed Tasks: ${u.completedTasksCount} • Status: ${u.approvalStatus.uppercase(Locale.US)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AdminTextMuted
+                  )
+                }
+                Text(
+                  text = "${formatCoins(userCoins)} (${formatRewardInr(userCents)})",
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.Bold,
+                  color = AdminBluePrimary
+                )
+              }
+              HorizontalDivider(color = AdminBorderColor.copy(alpha = 0.6f))
             }
           }
         }
       }
     }
 
-    // 2. Search Ledger
-    item {
-      OutlinedTextField(
-        value = searchQuery,
-        onValueChange = { searchQuery = it },
-        placeholder = { Text("Search reward ledger by title, user UID or task ID...") },
-        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-        trailingIcon = {
-          if (searchQuery.isNotEmpty()) {
-            IconButton(onClick = { searchQuery = "" }) {
-              Icon(Icons.Default.Close, contentDescription = "Clear")
-            }
-          }
-        },
-        singleLine = true,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth().testTag("admin_ledger_search_input")
-      )
-    }
-
-    // 3. Auditable Reward Ledger
+    // 4. Reward Transactions & Approval Records
     item {
       Text(
-        text = "Auditable Coin & Reward Ledger (${filteredTransactions.size})",
+        text = "Reward Transactions & Approval Ledger (${creditTransactions.size})",
         style = MaterialTheme.typography.titleMedium,
+        color = AdminTextDark,
         fontWeight = FontWeight.Bold
       )
     }
 
-    if (filteredTransactions.isEmpty()) {
+    if (creditTransactions.isEmpty()) {
       item {
         Card(
           modifier = Modifier.fillMaxWidth(),
           shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-          border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+          colors = CardDefaults.cardColors(containerColor = AdminSoftGreyBg),
+          border = BorderStroke(1.dp, AdminBorderColor)
         ) {
           Text(
-            text = "No reward ledger transactions match the current filter.",
+            text = "No reward credit transactions recorded yet.",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = AdminTextMuted,
             modifier = Modifier.padding(16.dp)
           )
         }
       }
     } else {
-      items(filteredTransactions, key = { it.id.ifBlank { "${it.userId}_${it.referenceId}_${it.amountCents}" } }) { tx ->
-        val dateStr =
+      items(creditTransactions.take(40), key = { it.id }) { tx ->
+        val dateText =
           tx.createdAt?.toDate()?.let {
             SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
           } ?: "Recorded"
+        val txCoins = tx.getEffectiveAmountCoins()
+        val txCents = coinsToCents(txCoins)
         Card(
           modifier = Modifier.fillMaxWidth(),
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-          border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+          shape = RoundedCornerShape(12.dp),
+          colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+          border = BorderStroke(1.dp, AdminBorderColor)
         ) {
           Row(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
           ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
               Text(
-                text = tx.title.ifBlank { "Reward Credit" },
+                text = tx.title.ifBlank { "Task Reward Credit" },
                 style = MaterialTheme.typography.bodyMedium,
+                color = AdminTextDark,
                 fontWeight = FontWeight.Bold
               )
               Text(
-                text = "User UID: ${tx.userId.ifBlank { "N/A" }} • $dateStr",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                text = "User: ${tx.userName.ifBlank { tx.userId }} • Ref: ${tx.id}",
+                style = MaterialTheme.typography.bodySmall,
+                color = AdminTextMuted
               )
-              if (tx.referenceId.isNotBlank()) {
-                Text(
-                  text = "Ref ID: ${tx.referenceId}",
-                  style = MaterialTheme.typography.labelSmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-              }
+              Text(
+                text = dateText,
+                style = MaterialTheme.typography.labelSmall,
+                color = AdminTextMuted
+              )
             }
             Text(
-              text = "+${formatRewardInr(tx.amountCents)}",
-              style = MaterialTheme.typography.titleSmall,
-              color = Color(0xFF16A34A),
-              fontWeight = FontWeight.ExtraBold
+              text = "+${formatCoins(txCoins)} (${formatRewardInr(txCents)})",
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.ExtraBold,
+              color = AdminGreenSuccess
             )
           }
         }
@@ -683,9 +1607,9 @@ fun AdminCoinsRewardsSection(
 }
 
 /**
- * SECTION 7: ANALYTICS & REPORTS
- * Displays genuine data for users, tasks, campaigns, submissions, approvals, and rewards
- * with category and date-range filters.
+ * I. ANALYTICS & REPORTS PAGE
+ * Displays date filters (Daily, Weekly, Monthly, All Time), visual progress bars,
+ * and accurate breakdowns of Users, Tasks, Campaigns, Rewards, Withdrawals, and Engagement.
  */
 @Composable
 fun AdminAnalyticsReportsSection(
@@ -693,248 +1617,271 @@ fun AdminAnalyticsReportsSection(
   tasks: List<TaskItem>,
   campaigns: List<CampaignItem>,
   reviewTasks: List<TaskItem>,
-  transactions: List<TransactionRecord>
+  transactions: List<TransactionRecord>,
+  withdrawalRequests: List<DemoWithdrawalRequest> = emptyList()
 ) {
-  var selectedRange by rememberSaveable { mutableStateOf("ALL") }
-  var selectedCategory by rememberSaveable { mutableStateOf("ALL") }
-
-  val nowMillis = System.currentTimeMillis()
-  val cutoffMillis =
-    when (selectedRange) {
-      "TODAY" -> nowMillis - 24L * 60 * 60 * 1000
-      "7D" -> nowMillis - 7L * 24 * 60 * 60 * 1000
-      "30D" -> nowMillis - 30L * 24 * 60 * 60 * 1000
+  var selectedWindow by rememberSaveable { mutableStateOf("ALL") }
+  val nowMs = System.currentTimeMillis()
+  val cutoffMs =
+    when (selectedWindow) {
+      "24H" -> nowMs - 24L * 3600_000L
+      "7D" -> nowMs - 7L * 24L * 3600_000L
+      "30D" -> nowMs - 30L * 24L * 3600_000L
       else -> 0L
     }
 
+  val filteredUsers =
+    remember(users, cutoffMs) {
+      if (cutoffMs == 0L) users
+      else users.filter { (it.createdAt?.toDate()?.time ?: nowMs) >= cutoffMs }
+    }
   val filteredTasks =
-    remember(tasks, selectedRange, selectedCategory, cutoffMillis) {
-      tasks.filter { task ->
-        val tsMillis = (task.updatedAt ?: task.createdAt)?.toDate()?.time ?: Long.MAX_VALUE
-        val inTime = cutoffMillis == 0L || tsMillis >= cutoffMillis
-        val inCat = selectedCategory == "ALL" || task.category.equals(selectedCategory, ignoreCase = true)
-        inTime && inCat
-      }
+    remember(tasks, cutoffMs) {
+      if (cutoffMs == 0L) tasks
+      else tasks.filter { (it.createdAt?.toDate()?.time ?: nowMs) >= cutoffMs }
+    }
+  val filteredReviews =
+    remember(reviewTasks, cutoffMs) {
+      if (cutoffMs == 0L) reviewTasks
+      else reviewTasks.filter { ((it.updatedAt ?: it.createdAt)?.toDate()?.time ?: nowMs) >= cutoffMs }
+    }
+  val filteredCampaigns =
+    remember(campaigns, cutoffMs) {
+      if (cutoffMs == 0L) campaigns
+      else campaigns.filter { (it.createdAt?.toDate()?.time ?: nowMs) >= cutoffMs }
+    }
+  val filteredTransactions =
+    remember(transactions, cutoffMs) {
+      if (cutoffMs == 0L) transactions
+      else transactions.filter { (it.createdAt?.toDate()?.time ?: nowMs) >= cutoffMs }
     }
 
-  val filteredSubmissions =
-    remember(reviewTasks, selectedRange, selectedCategory, cutoffMillis) {
-      reviewTasks.filter { sub ->
-        val tsMillis = (sub.updatedAt ?: sub.createdAt)?.toDate()?.time ?: Long.MAX_VALUE
-        val inTime = cutoffMillis == 0L || tsMillis >= cutoffMillis
-        val inCat = selectedCategory == "ALL" || sub.category.equals(selectedCategory, ignoreCase = true)
-        inTime && inCat
-      }
-    }
+  val totalSubmissions = filteredReviews.size
+  val approvedCount = filteredReviews.count { it.status == TaskStatus.APPROVED }
+  val rejectedCount = filteredReviews.count { it.status == TaskStatus.REJECTED }
+  val pendingCount = filteredReviews.count { it.status == TaskStatus.SUBMITTED }
+  val approvalRate =
+    if (approvedCount + rejectedCount > 0) {
+      (approvedCount.toFloat() / (approvedCount + rejectedCount).toFloat())
+    } else 0f
 
-  val submittedCount = filteredSubmissions.count { it.status == TaskStatus.SUBMITTED }
-  val approvedCount = filteredSubmissions.count { it.status == TaskStatus.APPROVED }
-  val rejectedCount = filteredSubmissions.count { it.status == TaskStatus.REJECTED }
-  val totalReviewed = approvedCount + rejectedCount
-  val approvalRatePercent =
-    if (totalReviewed > 0) (approvedCount * 100) / totalReviewed else 100
-  val approvedCoinsInPeriod =
-    filteredSubmissions
-      .filter { it.status == TaskStatus.APPROVED }
-      .sumOf { it.rewardCents.coerceAtLeast(0L) }
+  val totalCampaignTarget = filteredCampaigns.sumOf { it.targetSubmissions }
+  val totalCampaignCompleted = filteredCampaigns.sumOf { it.completedSubmissions }
+  val campaignProgress =
+    if (totalCampaignTarget > 0) {
+      (totalCampaignCompleted.toFloat() / totalCampaignTarget.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+
+  val totalBudgetCents = filteredCampaigns.sumOf { it.budgetCents }
+  val usedBudgetCents = filteredCampaigns.sumOf { it.spentCents }
+  val remainingBudgetCents = (totalBudgetCents - usedBudgetCents).coerceAtLeast(0L)
+  val budgetUtilization =
+    if (totalBudgetCents > 0L) {
+      (usedBudgetCents.toFloat() / totalBudgetCents.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+
+  val activeUsersCount =
+    filteredUsers.count {
+      val s = it.approvalStatus.lowercase(Locale.US)
+      s == "approved" || s == "active"
+    }
+  val engagedUsersCount =
+    filteredUsers.count { it.completedTasksCount > 0L || it.getEffectiveBalanceCoins() > 0L }
+  val engagementRate =
+    if (filteredUsers.isNotEmpty()) {
+      (engagedUsersCount.toFloat() / filteredUsers.size.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+
+  val periodDistributedCoins =
+    filteredTransactions
+      .filter { it.type != TransactionType.DEMO_WITHDRAWAL }
+      .sumOf { it.getEffectiveAmountCoins() }
+      .let { txCoins ->
+        val approvedSubCoins =
+          filteredReviews.filter { it.status == TaskStatus.APPROVED }.sumOf { it.getEffectiveRewardCoins() }
+        maxOf(txCoins, approvedSubCoins)
+      }
+  val periodDistributedCents = coinsToCents(periodDistributedCoins)
+
+  val pendingWithdrawalsCount =
+    withdrawalRequests.count { it.status.contains("pending", ignoreCase = true) }
+  val approvedWithdrawalsCount =
+    withdrawalRequests.count { it.status.equals("approved", ignoreCase = true) }
+  val rejectedWithdrawalsCount =
+    withdrawalRequests.count { it.status.equals("rejected", ignoreCase = true) }
 
   LazyColumn(
-    modifier = Modifier.fillMaxSize().testTag("admin_analytics_reports_section"),
+    modifier = Modifier.fillMaxSize().testTag("admin_analytics_section"),
     verticalArrangement = Arrangement.spacedBy(12.dp),
     contentPadding = PaddingValues(bottom = 48.dp)
   ) {
-    // Date Range Filters
+    // Date Range Filters: Daily, Weekly, Monthly, All Time
     item {
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-          text = "Date Range & Category Filters",
-          style = MaterialTheme.typography.titleSmall,
-          fontWeight = FontWeight.Bold
-        )
-        Row(
-          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-          listOf(
-            "ALL" to "All Time",
-            "TODAY" to "Last 24 Hours",
-            "7D" to "Last 7 Days",
-            "30D" to "Last 30 Days"
-          ).forEach { (key, label) ->
-            FilterChip(
-              selected = selectedRange == key,
-              onClick = { selectedRange = key },
-              label = { Text(label) }
-            )
-          }
-        }
-        Row(
-          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        listOf(
+          "24H" to "Daily (24h)",
+          "7D" to "Weekly (7d)",
+          "30D" to "Monthly (30d)",
+          "ALL" to "All Time"
+        ).forEach { (key, label) ->
           FilterChip(
-            selected = selectedCategory == "ALL",
-            onClick = { selectedCategory = "ALL" },
-            label = { Text("All Categories") }
+            selected = selectedWindow == key,
+            onClick = { selectedWindow = key },
+            label = { Text(label) },
+            colors =
+              FilterChipDefaults.filterChipColors(
+                selectedContainerColor = AdminBluePrimary,
+                selectedLabelColor = Color.White
+              ),
+            modifier = Modifier.testTag("analytics_filter_$key")
           )
-          TaskCategories.ALL.forEach { cat ->
-            FilterChip(
-              selected = selectedCategory == cat,
-              onClick = { selectedCategory = cat },
-              label = { Text(cat) }
-            )
-          }
         }
       }
     }
 
-    // Submission & Approval Funnel
+    // 1. User Registration, Active Users & Engagement Trends
     item {
-      Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-      ) {
-        Column(
-          modifier = Modifier.fillMaxWidth().padding(16.dp),
-          verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-          Text(
-            text = "Submission & Verification Funnel",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
+      AnalyticsTrendCard(
+        title = "User Registration & Engagement Trends",
+        subtitle = "${filteredUsers.size} Registered • $activeUsersCount Active • $engagedUsersCount Engaged",
+        progress = engagementRate,
+        progressLabel = "User Engagement Rate: ${(engagementRate * 100).toInt()}%",
+        metrics =
+          listOf(
+            "Registered Users" to filteredUsers.size.toString(),
+            "Active Approved" to activeUsersCount.toString(),
+            "Pending Verification" to filteredUsers.count { it.approvalStatus.equals("pending", true) }.toString(),
+            "Users With Earnings" to engagedUsersCount.toString()
           )
-          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Column {
-              Text("Tasks in Scope", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-              Text("${filteredTasks.size}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            }
-            Column {
-              Text("Pending Review", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-              Text("$submittedCount", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            }
-            Column {
-              Text("Approved", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-              Text("$approvedCount", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color(0xFF16A34A))
-            }
-            Column {
-              Text("Rejected", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-              Text("$rejectedCount", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
-            }
-          }
-          LinearProgressIndicator(
-            progress = { (approvalRatePercent / 100f).coerceIn(0f, 1f) },
-            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp))
+      )
+    }
+
+    // 2. Task Creation, Completion & Approval/Rejection Trends
+    item {
+      AnalyticsTrendCard(
+        title = "Task Completion & Approval Analytics",
+        subtitle = "${filteredTasks.size} Tasks Created • $totalSubmissions Total Submissions",
+        progress = approvalRate,
+        progressLabel = "Submission Approval Rate: ${(approvalRate * 100).toInt()}%",
+        metrics =
+          listOf(
+            "Tasks Created" to filteredTasks.size.toString(),
+            "Approved Proofs" to approvedCount.toString(),
+            "Pending Review" to pendingCount.toString(),
+            "Rejected Proofs" to rejectedCount.toString()
           )
+      )
+    }
+
+    // 3. Campaign Performance & Budget Utilization
+    item {
+      AnalyticsTrendCard(
+        title = "Campaign Performance & Budget Utilization",
+        subtitle = "${filteredCampaigns.size} Campaigns • $totalCampaignCompleted / $totalCampaignTarget Quota Filled",
+        progress = campaignProgress,
+        progressLabel = "Quota Completion: ${(campaignProgress * 100).toInt()}% • Budget Used: ${(budgetUtilization * 100).toInt()}%",
+        metrics =
+          listOf(
+            "Total Budget" to formatRewardInr(totalBudgetCents),
+            "Used Budget" to formatRewardInr(usedBudgetCents),
+            "Remaining Budget" to formatRewardInr(remainingBudgetCents),
+            "Active Campaigns" to filteredCampaigns.count { it.status.equals("ACTIVE", true) }.toString()
+          )
+      )
+    }
+
+    // 4. Reward Distribution & Withdrawal Trends
+    item {
+      AnalyticsTrendCard(
+        title = "Reward Distribution & Withdrawal Trends",
+        subtitle = "Total Distributed in Period: ${formatCoins(periodDistributedCoins)} (${formatRewardInr(periodDistributedCents)})",
+        progress = if (withdrawalRequests.isNotEmpty()) {
+          approvedWithdrawalsCount.toFloat() / withdrawalRequests.size.toFloat()
+        } else 0f,
+        progressLabel = "Withdrawal Requests: ${withdrawalRequests.size} Total ($pendingWithdrawalsCount Pending)",
+        metrics =
+          listOf(
+            "Coins Distributed" to formatCoins(periodDistributedCoins),
+            "INR Equivalent" to formatRewardInr(periodDistributedCents),
+            "Pending Withdrawals" to pendingWithdrawalsCount.toString(),
+            "Approved / Rejected" to "$approvedWithdrawalsCount / $rejectedWithdrawalsCount"
+          )
+      )
+    }
+  }
+}
+
+@Composable
+private fun AnalyticsTrendCard(
+  title: String,
+  subtitle: String,
+  progress: Float,
+  progressLabel: String,
+  metrics: List<Pair<String, String>>
+) {
+  Card(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(16.dp),
+    colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+    border = BorderStroke(1.dp, AdminBorderColor)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Text(
+        text = title,
+        style = MaterialTheme.typography.titleMedium,
+        color = AdminTextDark,
+        fontWeight = FontWeight.Bold
+      )
+      Text(
+        text = subtitle,
+        style = MaterialTheme.typography.bodySmall,
+        color = AdminTextMuted
+      )
+      LinearProgressIndicator(
+        progress = { progress.coerceIn(0f, 1f) },
+        modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+        color = AdminBluePrimary,
+        trackColor = AdminSurfaceGrey
+      )
+      Text(
+        text = progressLabel,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        color = AdminBlueDark
+      )
+      HorizontalDivider(color = AdminBorderColor)
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        metrics.chunked(2).forEach { rowItems ->
           Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
           ) {
-            Text(
-              text = "Approval Rate: $approvalRatePercent%",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.Bold
-            )
-            Text(
-              text = "Rewards Credited: ${formatRewardInr(approvedCoinsInPeriod)}",
-              style = MaterialTheme.typography.labelMedium,
-              color = MaterialTheme.colorScheme.primary,
-              fontWeight = FontWeight.Bold
-            )
-          }
-        }
-      }
-    }
-
-    // Category Breakdown
-    item {
-      Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-      ) {
-        Column(
-          modifier = Modifier.fillMaxWidth().padding(16.dp),
-          verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-          Text(
-            text = "Performance by Task Category",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-          )
-          TaskCategories.ALL.forEach { cat ->
-            val catTasks = tasks.count { it.category.equals(cat, ignoreCase = true) }
-            val catApproved =
-              reviewTasks.count {
-                it.category.equals(cat, ignoreCase = true) && it.status == TaskStatus.APPROVED
-              }
-            val catPending =
-              reviewTasks.count {
-                it.category.equals(cat, ignoreCase = true) && it.status == TaskStatus.SUBMITTED
-              }
-            Row(
-              modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically
-            ) {
-              Text(text = cat, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-              Text(
-                text = "$catTasks tasks • $catApproved approved • $catPending pending",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-              )
-            }
-          }
-        }
-      }
-    }
-
-    // Campaign Quota Utilization Report
-    item {
-      Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-      ) {
-        Column(
-          modifier = Modifier.fillMaxWidth().padding(16.dp),
-          verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-          Text(
-            text = "Campaign Quota & Completion Report (${campaigns.size})",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-          )
-          if (campaigns.isEmpty()) {
-            Text(
-              text = "No campaigns created yet.",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-          } else {
-            campaigns.forEach { camp ->
-              Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            rowItems.forEach { (mLabel, mVal) ->
+              Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = AdminSoftGreyBg,
+                border = BorderStroke(1.dp, AdminBorderColor),
+                modifier = Modifier.weight(1f)
               ) {
-                Column(modifier = Modifier.weight(1f)) {
-                  Text(camp.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                Column(modifier = Modifier.padding(10.dp)) {
                   Text(
-                    text = "${camp.status} • Remaining Quota: ${camp.remainingQuota}",
+                    text = mLabel,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = AdminTextMuted
+                  )
+                  Text(
+                    text = mVal,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AdminTextDark,
+                    fontWeight = FontWeight.ExtraBold
                   )
                 }
-                Text(
-                  text = "${camp.completedSubmissions}/${camp.targetSubmissions}",
-                  style = MaterialTheme.typography.bodyMedium,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.primary
-                )
               }
             }
           }
@@ -945,12 +1892,9 @@ fun AdminAnalyticsReportsSection(
 }
 
 /**
- * SECTION 8: VERIFICATION & FRAUD
- * - Review submitted proof
- * - Detect duplicate submissions where possible (duplicate proof text, duplicate screenshot URL/hash, suspended user attempts)
- * - Flag suspicious activity
- * - Prevent repeated reward claims
- * - Ensure reward approval is securely validated
+ * J. VERIFICATION & FRAUD PAGE
+ * Manages both User Verification (Pending, Approved, Rejected/Suspended users)
+ * and Task Submission Verification (Pending, Approved, Rejected proofs with image preview & duplicate detection).
  */
 @Composable
 fun AdminVerificationFraudSection(
@@ -959,111 +1903,260 @@ fun AdminVerificationFraudSection(
   withdrawalRequests: List<DemoWithdrawalRequest>,
   selectedFilter: String,
   onSelectFilter: (String) -> Unit,
-  onReviewSubmission: (TaskItem, Boolean, String) -> Unit
+  onReviewSubmission: (TaskItem, Boolean, String) -> Unit,
+  onUpdateUserStatus: ((UserProfile, String) -> Unit)? = null
 ) {
-  // Compute fraud / duplicate heuristics across all submissions
-  val proofTextCounts =
+  var showUserVerifications by rememberSaveable { mutableStateOf(false) }
+  var userVerificationFilter by rememberSaveable { mutableStateOf("pending") }
+
+  val duplicateProofMap =
     remember(reviewTasks) {
       reviewTasks
-        .map { it.proofText.trim().lowercase(Locale.US) }
-        .filter { it.isNotBlank() }
-        .groupingBy { it }
-        .eachCount()
+        .filter { it.proofText.isNotBlank() || it.proofImageUrl.isNotBlank() }
+        .groupBy { "${it.proofText.trim().lowercase(Locale.US)}|${it.proofImageUrl.trim()}" }
+        .filterValues { list -> list.map { it.assignedUserId }.distinct().size > 1 || list.size > 1 }
     }
-  val proofImageCounts =
-    remember(reviewTasks) {
-      reviewTasks
-        .map { it.proofImageUrl.trim() }
-        .filter { it.isNotBlank() }
-        .groupingBy { it }
-        .eachCount()
-    }
-  val userStatusById =
-    remember(users) {
-      users.associateBy({ it.userId.ifBlank { it.id } }, { it.approvalStatus })
+  val suspiciousIds =
+    remember(duplicateProofMap) {
+      duplicateProofMap.values.flatten().map { it.id }.toSet()
     }
 
-  val suspiciousSubmissionIds =
-    remember(reviewTasks, proofTextCounts, proofImageCounts, userStatusById) {
-      reviewTasks
-        .filter { sub ->
-          val normText = sub.proofText.trim().lowercase(Locale.US)
-          val img = sub.proofImageUrl.trim()
-          val dupText = normText.isNotBlank() && (proofTextCounts[normText] ?: 0) > 1
-          val dupImg = img.isNotBlank() && (proofImageCounts[img] ?: 0) > 1
-          val shortText = normText.length in 1..5
-          val userSuspended =
-            userStatusById[sub.assignedUserId]?.equals("suspended", ignoreCase = true) == true
-          dupText || dupImg || shortText || userSuspended
-        }
-        .map { it.id }
-        .toSet()
+  val pendingCount = reviewTasks.count { it.status == TaskStatus.SUBMITTED }
+  val approvedCount = reviewTasks.count { it.status == TaskStatus.APPROVED }
+  val rejectedCount = reviewTasks.count { it.status == TaskStatus.REJECTED }
+  val duplicateCount = suspiciousIds.size
+
+  val pendingUsers = users.filter { it.approvalStatus.equals("pending", ignoreCase = true) }
+  val approvedUsers =
+    users.filter {
+      it.approvalStatus.equals("approved", ignoreCase = true) ||
+        it.approvalStatus.equals("active", ignoreCase = true)
+    }
+  val rejectedOrSuspendedUsers =
+    users.filter {
+      it.approvalStatus.equals("rejected", ignoreCase = true) ||
+        it.approvalStatus.equals("suspended", ignoreCase = true)
     }
 
-  Column(modifier = Modifier.fillMaxSize().testTag("admin_verification_fraud_section")) {
+  Column(
+    modifier = Modifier.fillMaxSize().testTag("admin_verification_fraud_section"),
+    verticalArrangement = Arrangement.spacedBy(10.dp)
+  ) {
+    // Summary Card + Queue Switcher (Task Submissions vs User Verifications)
     Card(
-      modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+      modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(14.dp),
-      colors =
-        CardDefaults.cardColors(
-          containerColor =
-            if (suspiciousSubmissionIds.isNotEmpty())
-              MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
-            else MaterialTheme.colorScheme.surface
-        ),
-      border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+      colors = CardDefaults.cardColors(containerColor = AdminSoftGreyBg),
+      border = BorderStroke(1.dp, AdminBorderColor)
     ) {
-      Row(
+      Column(
         modifier = Modifier.fillMaxWidth().padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
       ) {
-        Icon(
-          imageVector =
-            if (suspiciousSubmissionIds.isNotEmpty()) Icons.Default.WarningAmber
-            else Icons.Default.Shield,
-          contentDescription = null,
-          tint =
-            if (suspiciousSubmissionIds.isNotEmpty()) MaterialTheme.colorScheme.error
-            else Color(0xFF16A34A),
-          modifier = Modifier.size(22.dp)
-        )
-        Column(modifier = Modifier.weight(1f)) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Icon(
+              imageVector = if (duplicateCount > 0) Icons.Default.Warning else Icons.Default.VerifiedUser,
+              contentDescription = null,
+              tint = if (duplicateCount > 0) AdminAmberWarning else AdminBluePrimary
+            )
+            Column {
+              Text(
+                text = "Verification & Fraud Control",
+                style = MaterialTheme.typography.titleSmall,
+                color = AdminTextDark,
+                fontWeight = FontWeight.ExtraBold
+              )
+              Text(
+                text = "Proofs: $pendingCount Pending, $approvedCount Appr, $rejectedCount Rej • Users: ${pendingUsers.size} Pending",
+                style = MaterialTheme.typography.labelSmall,
+                color = AdminTextSecondary
+              )
+            }
+          }
+        }
+
+        if (duplicateCount > 0) {
           Text(
-            text =
-              if (suspiciousSubmissionIds.isNotEmpty())
-                "${suspiciousSubmissionIds.size} Submission(s) Flagged for Duplicate / Suspicious Proof"
-              else "Anti-Fraud & Duplicate Guard Active",
-            style = MaterialTheme.typography.labelLarge,
+            text = "Alert: $duplicateCount submission(s) share identical proof text/URLs across multiple entries.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AdminRedDanger,
             fontWeight = FontWeight.Bold
           )
-          Text(
-            text = "Deterministic submission IDs (`{taskId}_{userId}`) and ledger keys (`tx_approval_{submissionId}`) block duplicate reward claims.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+        }
+
+        // Toggle between Task Submission Proofs and User Account Verifications
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          FilterChip(
+            selected = !showUserVerifications,
+            onClick = { showUserVerifications = false },
+            label = { Text("Task Submissions ($pendingCount Pending)") },
+            colors =
+              FilterChipDefaults.filterChipColors(
+                selectedContainerColor = AdminBluePrimary,
+                selectedLabelColor = Color.White
+              ),
+            modifier = Modifier.testTag("verification_tab_submissions")
+          )
+          FilterChip(
+            selected = showUserVerifications,
+            onClick = { showUserVerifications = true },
+            label = { Text("User Verifications (${pendingUsers.size} Pending)") },
+            colors =
+              FilterChipDefaults.filterChipColors(
+                selectedContainerColor = AdminBluePrimary,
+                selectedLabelColor = Color.White
+              ),
+            modifier = Modifier.testTag("verification_tab_users")
           )
         }
       }
     }
 
-    AdminSubmissionsTabContent(
-      tasks = reviewTasks,
-      withdrawalRequests = withdrawalRequests,
-      selectedFilter = selectedFilter,
-      onSelectFilter = onSelectFilter,
-      onReviewSubmission = onReviewSubmission,
-      suspiciousSubmissionIds = suspiciousSubmissionIds
-    )
+    if (showUserVerifications) {
+      // User Verification Queue (Pending, Approved, Rejected/Suspended)
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        listOf(
+          "pending" to "Pending (${pendingUsers.size})",
+          "approved" to "Approved (${approvedUsers.size})",
+          "rejected" to "Rejected / Suspended (${rejectedOrSuspendedUsers.size})"
+        ).forEach { (key, label) ->
+          FilterChip(
+            selected = userVerificationFilter == key,
+            onClick = { userVerificationFilter = key },
+            label = { Text(label) }
+          )
+        }
+      }
+
+      val displayedUsers =
+        when (userVerificationFilter) {
+          "pending" -> pendingUsers
+          "approved" -> approvedUsers
+          else -> rejectedOrSuspendedUsers
+        }
+
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(bottom = 36.dp)
+      ) {
+        if (displayedUsers.isEmpty()) {
+          item {
+            Card(
+              modifier = Modifier.fillMaxWidth(),
+              shape = RoundedCornerShape(12.dp),
+              colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+              border = BorderStroke(1.dp, AdminBorderColor)
+            ) {
+              Text(
+                text = "No user accounts in this verification status.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AdminTextMuted,
+                modifier = Modifier.padding(16.dp)
+              )
+            }
+          }
+        } else {
+          items(displayedUsers, key = { it.id.ifBlank { it.userId } }) { user ->
+            val targetUid = user.userId.ifBlank { user.id }
+            Card(
+              modifier = Modifier.fillMaxWidth(),
+              shape = RoundedCornerShape(12.dp),
+              colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+              border = BorderStroke(1.dp, AdminBorderColor)
+            ) {
+              Column(
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                      text = user.displayName.ifBlank { "TaskFlow User" },
+                      style = MaterialTheme.typography.titleSmall,
+                      color = AdminTextDark,
+                      fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                      text = formatVisibleUserEmail(user.email, user.role),
+                      style = MaterialTheme.typography.bodySmall,
+                      color = AdminTextMuted
+                    )
+                  }
+                  Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = AdminBlueTint
+                  ) {
+                    Text(
+                      text = user.approvalStatus.uppercase(Locale.US),
+                      style = MaterialTheme.typography.labelSmall,
+                      color = AdminBlueDark,
+                      fontWeight = FontWeight.Bold,
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                  }
+                }
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                  Button(
+                    onClick = { onUpdateUserStatus?.invoke(user, "approved") },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AdminGreenSuccess),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                  ) {
+                    Text("Approve User", style = MaterialTheme.typography.labelSmall)
+                  }
+                  OutlinedButton(
+                    onClick = { onUpdateUserStatus?.invoke(user, "suspended") },
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                  ) {
+                    Text("Reject / Suspend", style = MaterialTheme.typography.labelSmall, color = AdminRedDanger)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } else {
+      // Task Submission Proof Verification Queue (reuses AdminSubmissionsTabContent with image preview)
+      AdminSubmissionsTabContent(
+        tasks = reviewTasks,
+        withdrawalRequests = withdrawalRequests,
+        selectedFilter = selectedFilter,
+        onSelectFilter = onSelectFilter,
+        onReviewSubmission = onReviewSubmission,
+        suspiciousSubmissionIds = suspiciousIds
+      )
+    }
   }
 }
 
 /**
- * SECTION 9: APP SETTINGS
- * Shows ONLY settings that are actually implemented and safely configurable:
- * 1. Theme Mode (Light Minimal Default / Dark Mode / Follow System) via ThemePreferences
- * 2. App Version & Remote Update Check via AppUpdateManager
- * 3. Notification Channels Verification
- * 4. Firebase & Security Rules Configuration Inspector
+ * K. APP SETTINGS PAGE
+ * Displays only actual supported configurations: Theme Mode, App Version & Update Check,
+ * Reward & Limit Rules, Notification Preferences, and Firebase Security Rules Diagnostics.
  */
 @Composable
 fun AdminAppSettingsSection(
@@ -1073,19 +2166,26 @@ fun AdminAppSettingsSection(
 ) {
   val context = LocalContext.current
   val currentThemeMode by ThemePreferences.currentThemeMode.collectAsState()
+  val prefs = remember(context) { context.getSharedPreferences("taskflow_admin_prefs", Context.MODE_PRIVATE) }
+  var notifyOnNewSubmissions by rememberSaveable {
+    mutableStateOf(prefs.getBoolean("notify_new_submissions", true))
+  }
+  var notifyOnWithdrawals by rememberSaveable {
+    mutableStateOf(prefs.getBoolean("notify_withdrawals", true))
+  }
 
   LazyColumn(
     modifier = Modifier.fillMaxSize().testTag("admin_app_settings_section"),
     verticalArrangement = Arrangement.spacedBy(12.dp),
     contentPadding = PaddingValues(bottom = 48.dp)
   ) {
-    // 1. UI Appearance & Theme Mode
+    // 1. Theme & Display Mode
     item {
       Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+        border = BorderStroke(1.dp, AdminBorderColor)
       ) {
         Column(
           modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -1094,12 +2194,13 @@ fun AdminAppSettingsSection(
           Text(
             text = "Appearance & Theme Mode",
             style = MaterialTheme.typography.titleMedium,
+            color = AdminTextDark,
             fontWeight = FontWeight.Bold
           )
           Text(
             text = "Configure the active theme for TaskFlow on this device (persisted in SharedPreferences).",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = AdminTextMuted
           )
           Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1114,6 +2215,11 @@ fun AdminAppSettingsSection(
                 selected = currentThemeMode == mode,
                 onClick = { ThemePreferences.setThemeMode(context, mode) },
                 label = { Text(label) },
+                colors =
+                  FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AdminBluePrimary,
+                    selectedLabelColor = Color.White
+                  ),
                 modifier = Modifier.testTag("admin_theme_mode_${mode.name.lowercase(Locale.US)}")
               )
             }
@@ -1122,13 +2228,123 @@ fun AdminAppSettingsSection(
       }
     }
 
-    // 2. App Build & Remote Update Check
+    // 2. Reward, Task & Campaign Limit Configuration
     item {
       Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+        border = BorderStroke(1.dp, AdminBorderColor)
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Text(
+            text = "Reward & Task/Campaign Limit Rules",
+            style = MaterialTheme.typography.titleMedium,
+            color = AdminTextDark,
+            fontWeight = FontWeight.Bold
+          )
+          FinancialSummaryRow("Coin Conversion Standard", "$COINS_PER_RUPEE Coins = ₹1.00 INR")
+          FinancialSummaryRow("Daily Check-In Reward", "30-Day Schedule (25–1,000 Coins)")
+          FinancialSummaryRow("Watch Video & Earn", "30–35 Random Coins (2-Ad Flow)")
+          FinancialSummaryRow("Spin & Earn Wheel", "10–150 Coins (Free 24h + Extra Spins)")
+          FinancialSummaryRow("Minimum Withdrawal Threshold", "25,000 Coins (₹200.00 INR)")
+          FinancialSummaryRow("Duplicate Credit Protection", "Enforced (tx_approval_{submissionId})")
+        }
+      }
+    }
+
+    // 3. Admin Notification Preferences
+    item {
+      Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+        border = BorderStroke(1.dp, AdminBorderColor)
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Icon(Icons.Default.Notifications, contentDescription = null, tint = AdminBluePrimary)
+            Text(
+              text = "Notification Preferences",
+              style = MaterialTheme.typography.titleMedium,
+              color = AdminTextDark,
+              fontWeight = FontWeight.Bold
+            )
+          }
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Alert on New Task Submissions",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AdminTextDark,
+                fontWeight = FontWeight.SemiBold
+              )
+              Text(
+                text = "Highlight pending task proofs in Verification & Overview",
+                style = MaterialTheme.typography.bodySmall,
+                color = AdminTextMuted
+              )
+            }
+            Switch(
+              checked = notifyOnNewSubmissions,
+              onCheckedChange = {
+                notifyOnNewSubmissions = it
+                prefs.edit().putBoolean("notify_new_submissions", it).apply()
+              },
+              colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AdminBluePrimary)
+            )
+          }
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Alert on New Withdrawal Requests",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AdminTextDark,
+                fontWeight = FontWeight.SemiBold
+              )
+              Text(
+                text = "Show badge count on Withdrawals card when pending > 0",
+                style = MaterialTheme.typography.bodySmall,
+                color = AdminTextMuted
+              )
+            }
+            Switch(
+              checked = notifyOnWithdrawals,
+              onCheckedChange = {
+                notifyOnWithdrawals = it
+                prefs.edit().putBoolean("notify_withdrawals", it).apply()
+              },
+              colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AdminBluePrimary)
+            )
+          }
+        }
+      }
+    }
+
+    // 4. App Build & Remote Update Check
+    item {
+      Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+        border = BorderStroke(1.dp, AdminBorderColor)
       ) {
         Column(
           modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -1137,22 +2353,18 @@ fun AdminAppSettingsSection(
           Text(
             text = "Application Build & Remote Update",
             style = MaterialTheme.typography.titleMedium,
+            color = AdminTextDark,
             fontWeight = FontWeight.Bold
           )
           Text(
             text = "Package ID: ${BuildConfig.APPLICATION_ID}",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = AdminTextSecondary
           )
           Text(
             text = "Version: ${BuildConfig.VERSION_NAME} (Code ${BuildConfig.VERSION_CODE})",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-          )
-          Text(
-            text = "Reward Conversion Rate: $COINS_PER_RUPEE Coins = ₹1.00 INR",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = AdminTextSecondary
           )
           Spacer(modifier = Modifier.height(4.dp))
           OutlinedButton(
@@ -1168,13 +2380,13 @@ fun AdminAppSettingsSection(
       }
     }
 
-    // 3. Firebase & Backend Security Diagnostics
+    // 5. Firebase & Backend Security Diagnostics
     item {
       Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+        border = BorderStroke(1.dp, AdminBorderColor)
       ) {
         Column(
           modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -1184,17 +2396,18 @@ fun AdminAppSettingsSection(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
           ) {
-            Icon(Icons.Default.Security, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Icon(Icons.Default.Security, contentDescription = null, tint = AdminBluePrimary)
             Text(
               text = "Firebase & Zero-Trust Security Config",
               style = MaterialTheme.typography.titleMedium,
+              color = AdminTextDark,
               fontWeight = FontWeight.Bold
             )
           }
           Text(
             text = "Project ID: taskflow-8852d\nFirestore Database ID: $databaseId",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = AdminTextSecondary
           )
           OutlinedButton(
             onClick = onOpenSecurityDialog,
@@ -1212,9 +2425,10 @@ fun AdminAppSettingsSection(
 }
 
 /**
- * SECTION 10: ACTIVITY LOGS
- * Records and displays important admin actions, campaign changes, task changes,
- * approvals, rejections, and reward operations.
+ * L. ACTIVITY LOGS PAGE
+ * Chronological audit log of admin actions, user registrations, user approvals/rejections,
+ * task & campaign creations/modifications, task submissions, approvals/rejections,
+ * reward credits, and withdrawal requests.
  */
 @Composable
 fun AdminActivityLogsSection(
@@ -1222,12 +2436,22 @@ fun AdminActivityLogsSection(
   reviewTasks: List<TaskItem>,
   tasks: List<TaskItem>,
   campaigns: List<CampaignItem>,
-  transactions: List<TransactionRecord>
+  transactions: List<TransactionRecord>,
+  users: List<UserProfile> = emptyList(),
+  withdrawalRequests: List<DemoWithdrawalRequest> = emptyList()
 ) {
   var selectedCategoryFilter by rememberSaveable { mutableStateOf("ALL") }
   val allEntries =
-    remember(activityLogs, reviewTasks, tasks, campaigns, transactions) {
-      buildCombinedActivityEntries(activityLogs, reviewTasks, tasks, campaigns, transactions)
+    remember(activityLogs, reviewTasks, tasks, campaigns, transactions, users, withdrawalRequests) {
+      buildCombinedActivityEntries(
+        activityLogs = activityLogs,
+        reviewTasks = reviewTasks,
+        tasks = tasks,
+        campaigns = campaigns,
+        transactions = transactions,
+        users = users,
+        withdrawalRequests = withdrawalRequests
+      )
     }
 
   val filteredEntries =
@@ -1255,12 +2479,18 @@ fun AdminActivityLogsSection(
           "CAMPAIGN" to "Campaigns",
           "SUBMISSION" to "Approvals & Reviews",
           "REWARD" to "Rewards & Coins",
-          "USER" to "User Actions"
+          "USER" to "User Actions",
+          "WITHDRAWAL" to "Withdrawals"
         ).forEach { (key, label) ->
           FilterChip(
             selected = selectedCategoryFilter == key,
             onClick = { selectedCategoryFilter = key },
-            label = { Text(label) }
+            label = { Text(label) },
+            colors =
+              FilterChipDefaults.filterChipColors(
+                selectedContainerColor = AdminBluePrimary,
+                selectedLabelColor = Color.White
+              )
           )
         }
       }
@@ -1271,13 +2501,13 @@ fun AdminActivityLogsSection(
         Card(
           modifier = Modifier.fillMaxWidth(),
           shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-          border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+          colors = CardDefaults.cardColors(containerColor = AdminSoftGreyBg),
+          border = BorderStroke(1.dp, AdminBorderColor)
         ) {
           Text(
             text = "No activity logs recorded for this filter yet.",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = AdminTextMuted,
             modifier = Modifier.padding(16.dp)
           )
         }
@@ -1286,28 +2516,28 @@ fun AdminActivityLogsSection(
       items(filteredEntries, key = { it.id }) { entry ->
         Card(
           modifier = Modifier.fillMaxWidth(),
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-          border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+          shape = RoundedCornerShape(12.dp),
+          colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+          border = BorderStroke(1.dp, AdminBorderColor)
         ) {
           Row(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
           ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
               Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
               ) {
                 Surface(
                   shape = RoundedCornerShape(6.dp),
-                  color = MaterialTheme.colorScheme.primaryContainer
+                  color = AdminBlueTint
                 ) {
                   Text(
                     text = entry.category,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    color = AdminBlueDark,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                   )
@@ -1315,20 +2545,21 @@ fun AdminActivityLogsSection(
                 Text(
                   text = entry.title,
                   style = MaterialTheme.typography.bodyMedium,
+                  color = AdminTextDark,
                   fontWeight = FontWeight.Bold
                 )
               }
               Text(
                 text = entry.subtitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = AdminTextSecondary
               )
             }
             Spacer(modifier = Modifier.width(8.dp))
             Text(
               text = entry.dateLabel,
               style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant
+              color = AdminTextMuted
             )
           }
         }
@@ -1351,7 +2582,9 @@ internal fun buildCombinedActivityEntries(
   reviewTasks: List<TaskItem>,
   tasks: List<TaskItem>,
   campaigns: List<CampaignItem>,
-  transactions: List<TransactionRecord>
+  transactions: List<TransactionRecord>,
+  users: List<UserProfile> = emptyList(),
+  withdrawalRequests: List<DemoWithdrawalRequest> = emptyList()
 ): List<CombinedActivityEntry> {
   val fmt = SimpleDateFormat("MMM d, h:mm a", Locale.US)
   val items = mutableListOf<CombinedActivityEntry>()
@@ -1364,6 +2597,7 @@ internal fun buildCombinedActivityEntries(
         log.actionType.contains("SUBMISSION", ignoreCase = true) -> "SUBMISSION"
         log.actionType.contains("USER", ignoreCase = true) -> "USER"
         log.actionType.contains("REWARD", ignoreCase = true) -> "REWARD"
+        log.actionType.contains("WITHDRAW", ignoreCase = true) -> "WITHDRAWAL"
         else -> "TASK"
       }
     items.add(
@@ -1374,6 +2608,37 @@ internal fun buildCombinedActivityEntries(
         subtitle = log.details,
         timestampMillis = ts,
         dateLabel = if (ts > 0L) fmt.format(Date(ts)) else "Recent"
+      )
+    )
+  }
+
+  users.take(20).forEach { u ->
+    val ts = u.createdAt?.toDate()?.time ?: 0L
+    val uid = u.userId.ifBlank { u.id }
+    val coins = u.getEffectiveBalanceCoins()
+    items.add(
+      CombinedActivityEntry(
+        id = "user_reg_${uid}_${u.approvalStatus}",
+        category = "USER",
+        title = "User ${u.approvalStatus.uppercase(Locale.US)} • ${u.displayName.ifBlank { "TaskFlow User" }}",
+        subtitle = "UID: $uid • Balance: ${formatCoins(coins)}",
+        timestampMillis = ts,
+        dateLabel = if (ts > 0L) fmt.format(Date(ts)) else "Recorded"
+      )
+    )
+  }
+
+  tasks.take(15).forEach { t ->
+    val ts = (t.updatedAt ?: t.createdAt)?.toDate()?.time ?: 0L
+    val stateLabel = if (t.isActive) "ACTIVE" else "PAUSED"
+    items.add(
+      CombinedActivityEntry(
+        id = "task_cfg_${t.id}_$stateLabel",
+        category = "TASK",
+        title = "Task $stateLabel • ${t.title}",
+        subtitle = "Task ID: ${t.id} • Reward: ${formatCoins(t.getEffectiveRewardCoins())}",
+        timestampMillis = ts,
+        dateLabel = if (ts > 0L) fmt.format(Date(ts)) else "Recorded"
       )
     )
   }
@@ -1391,7 +2656,7 @@ internal fun buildCombinedActivityEntries(
         id = "sub_${sub.id}_${sub.status}",
         category = "SUBMISSION",
         title = "$statusLabel • ${sub.title}",
-        subtitle = "User: ${sub.assignedUserName.ifBlank { sub.assignedUserId }} • ${formatRewardInr(sub.rewardCents)}",
+        subtitle = "User: ${sub.assignedUserName.ifBlank { sub.assignedUserId }} • ${formatCoins(sub.getEffectiveRewardCoins())}",
         timestampMillis = ts,
         dateLabel = if (ts > 0L) fmt.format(Date(ts)) else "Recorded"
       )
@@ -1405,7 +2670,7 @@ internal fun buildCombinedActivityEntries(
         id = "camp_${camp.id}_${camp.status}",
         category = "CAMPAIGN",
         title = "Campaign ${camp.status} • ${camp.title}",
-        subtitle = "Progress: ${camp.completedSubmissions}/${camp.targetSubmissions} • Reward: ${formatRewardInr(camp.rewardPerTaskCents)}",
+        subtitle = "Quota: ${camp.completedSubmissions}/${camp.targetSubmissions} • Budget: ${formatRewardInr(camp.spentCents)}/${formatRewardInr(camp.budgetCents)}",
         timestampMillis = ts,
         dateLabel = if (ts > 0L) fmt.format(Date(ts)) else "Recorded"
       )
@@ -1418,8 +2683,23 @@ internal fun buildCombinedActivityEntries(
       CombinedActivityEntry(
         id = "tx_${tx.id}",
         category = "REWARD",
-        title = tx.title.ifBlank { "Reward Operation" },
-        subtitle = "User UID: ${tx.userId} • Amount: +${formatRewardInr(tx.amountCents)}",
+        title = tx.title.ifBlank { "Reward Credit" },
+        subtitle = "User: ${tx.userName.ifBlank { tx.userId }} • Amount: +${formatCoins(tx.getEffectiveAmountCoins())}",
+        timestampMillis = ts,
+        dateLabel = if (ts > 0L) fmt.format(Date(ts)) else "Recorded"
+      )
+    )
+  }
+
+  withdrawalRequests.take(15).forEach { req ->
+    val ts = req.createdAt?.toDate()?.time ?: 0L
+    val reqId = req.id.ifBlank { req.requestId }
+    items.add(
+      CombinedActivityEntry(
+        id = "wd_${reqId}_${req.status}",
+        category = "WITHDRAWAL",
+        title = "Withdrawal ${req.status.uppercase(Locale.US)} • ${formatRewardInr(req.amountCents)}",
+        subtitle = "User: ${req.userName.ifBlank { req.userId }} • Method: ${req.method}",
         timestampMillis = ts,
         dateLabel = if (ts > 0L) fmt.format(Date(ts)) else "Recorded"
       )

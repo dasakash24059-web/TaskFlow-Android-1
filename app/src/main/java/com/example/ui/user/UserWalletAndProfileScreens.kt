@@ -229,29 +229,29 @@ fun UserWalletScreen(
       contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
       verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-      // 1. Dark Neon Glass Wallet Hero Card (Coin System)
+      // 1. High-Contrast Wallet Hero Card (Coin System)
       item {
         NeonGlassCard(
           modifier = Modifier.fillMaxWidth().testTag("wallet_hero_card"),
-          borderColor = Color(0x70A855F7),
-          backgroundColor = Color(0x40141938)
+          borderColor = Color(0xFFC7D2FE),
+          backgroundColor = MaterialTheme.colorScheme.surface
         ) {
-          Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+          Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
             Row(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
               Surface(
                 shape = CircleShape,
-                color = Color(0x35F59E0B),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FBBF24)),
-                modifier = Modifier.size(38.dp)
+                color = Color(0xFFFEF3C7),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B)),
+                modifier = Modifier.size(40.dp)
               ) {
                 Box(contentAlignment = Alignment.Center) {
                   Icon(
                     imageVector = Icons.Default.AccountBalanceWallet,
                     contentDescription = "TaskFlow Wallet",
-                    tint = Color(0xFFFBBF24),
+                    tint = Color(0xFFD97706),
                     modifier = Modifier.size(20.dp)
                   )
                 }
@@ -260,13 +260,14 @@ fun UserWalletScreen(
                 Text(
                   text = "TASKFLOW COIN WALLET",
                   style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFF94A3B8),
+                  color = Color(0xFF4F46E5),
                   fontWeight = FontWeight.Bold
                 )
                 Text(
                   text = "Total Coin Balance",
                   style = MaterialTheme.typography.bodyMedium,
-                  color = Color.White.copy(alpha = 0.9f)
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  fontWeight = FontWeight.Medium
                 )
               }
             }
@@ -276,12 +277,12 @@ fun UserWalletScreen(
             Text(
               text = formatCoins(totalBalanceCoins),
               style = MaterialTheme.typography.headlineLarge,
-              color = Color(0xFFFDE047),
+              color = MaterialTheme.colorScheme.onSurface,
               fontWeight = FontWeight.ExtraBold,
               modifier = Modifier.testTag("wallet_available_balance")
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Eligible Withdrawable Coins vs Promotional Coins breakdown
             Row(
@@ -290,21 +291,23 @@ fun UserWalletScreen(
             ) {
               Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0x2510B981),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8034D399)),
+                color = Color(0xFFECFDF5),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF6EE7B7)),
                 modifier = Modifier.weight(1f)
               ) {
-                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                   Text(
                     text = "Eligible Withdrawable",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFFA7F3D0),
+                    color = Color(0xFF065F46),
+                    fontWeight = FontWeight.SemiBold,
                     fontSize = 10.sp
                   )
+                  Spacer(modifier = Modifier.height(2.dp))
                   Text(
                     text = formatCoins(eligibleCoins),
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color(0xFF34D399),
+                    color = Color(0xFF047857),
                     fontWeight = FontWeight.ExtraBold,
                     modifier = Modifier.testTag("wallet_eligible_coins")
                   )
@@ -312,21 +315,23 @@ fun UserWalletScreen(
               }
               Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0x2506B6D4),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8022D3EE)),
+                color = Color(0xFFE0F2FE),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF7DD3FC)),
                 modifier = Modifier.weight(1f)
               ) {
-                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                   Text(
                     text = "Promotional Coins",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFFBAE6FD),
+                    color = Color(0xFF075985),
+                    fontWeight = FontWeight.SemiBold,
                     fontSize = 10.sp
                   )
+                  Spacer(modifier = Modifier.height(2.dp))
                   Text(
                     text = formatCoins(promotionalCoins),
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color(0xFF22D3EE),
+                    color = Color(0xFF0284C7),
                     fontWeight = FontWeight.ExtraBold,
                     modifier = Modifier.testTag("wallet_promotional_coins")
                   )
@@ -334,25 +339,25 @@ fun UserWalletScreen(
               }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Surface(
               shape = RoundedCornerShape(50),
-              color = Color(0x25A855F7),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80C084FC))
+              color = Color(0xFFEEF2FF),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFC7D2FE))
             ) {
               Text(
                 text = "Minimum Withdrawal: 25,000 Coins",
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFFC084FC),
+                color = Color(0xFF4338CA),
                 fontWeight = FontWeight.Bold,
                 modifier =
-                  Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                  Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
                     .testTag("wallet_min_withdrawal_text")
               )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             Button(
               onClick = {
@@ -362,7 +367,7 @@ fun UserWalletScreen(
               shape = RoundedCornerShape(14.dp),
               colors =
                 ButtonDefaults.buttonColors(
-                  containerColor = Color(0xFF7C3AED),
+                  containerColor = Color(0xFF4F46E5),
                   contentColor = Color.White
                 ),
               modifier =
@@ -446,7 +451,7 @@ fun UserWalletScreen(
           text = "Withdrawal Requests (${withdrawalRequests.size})",
           style = MaterialTheme.typography.titleLarge,
           fontWeight = FontWeight.Bold,
-          color = Color.White
+          color = MaterialTheme.colorScheme.onBackground
         )
       }
 
@@ -564,7 +569,7 @@ fun UserWalletScreen(
             text = "Credited Task Rewards (${approvedUserTasks.size})",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            color = Color.White
+            color = MaterialTheme.colorScheme.onBackground
           )
         }
         items(approvedUserTasks, key = { "wallet_earned_${it.id}" }) { task ->
@@ -615,7 +620,7 @@ fun UserWalletScreen(
           text = "Transaction History (${transactions.size})",
           style = MaterialTheme.typography.titleLarge,
           fontWeight = FontWeight.Bold,
-          color = Color.White,
+          color = MaterialTheme.colorScheme.onBackground,
           modifier = Modifier.testTag("wallet_transaction_history_section")
         )
       }
@@ -1180,11 +1185,11 @@ fun UserProfileScreen(
           .testTag("user_profile_screen"),
       verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-      // Top Header: User Profile Card with Avatar, Neon Border, Verified Badge Overlay
+      // Top Header: User Profile Card with Avatar, Crisp Border, Verified Badge Overlay
       NeonGlassCard(
         modifier = Modifier.fillMaxWidth().testTag("profile_header_card"),
-        borderColor = Color(0x70A855F7),
-        backgroundColor = Color(0x40141938)
+        borderColor = MaterialTheme.colorScheme.outlineVariant,
+        backgroundColor = MaterialTheme.colorScheme.surface
       ) {
         Column(
           modifier = Modifier.fillMaxWidth().padding(20.dp),
@@ -1199,7 +1204,7 @@ fun UserProfileScreen(
                 modifier =
                   Modifier.size(84.dp)
                     .clip(CircleShape)
-                    .border(3.dp, Color(0xFF22D3EE), CircleShape)
+                    .border(3.dp, Color(0xFF4F46E5), CircleShape)
               )
             } else {
               Box(
@@ -1208,10 +1213,10 @@ fun UserProfileScreen(
                     .clip(CircleShape)
                     .background(
                       Brush.linearGradient(
-                        colors = listOf(Color(0xFFA855F7), Color(0xFF06B6D4))
+                        colors = listOf(Color(0xFF4F46E5), Color(0xFF06B6D4))
                       )
                     )
-                    .border(3.dp, Color(0xFF22D3EE), CircleShape),
+                    .border(3.dp, Color(0xFF4F46E5), CircleShape),
                 contentAlignment = Alignment.Center
               ) {
                 Text(
@@ -1231,7 +1236,7 @@ fun UserProfileScreen(
               Surface(
                 shape = CircleShape,
                 color = Color(0xFF0284C7),
-                border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF070A17)),
+                border = androidx.compose.foundation.BorderStroke(2.dp, Color.White),
                 modifier = Modifier.size(26.dp)
               ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -1251,7 +1256,7 @@ fun UserProfileScreen(
           Text(
             text = displayNameText,
             style = MaterialTheme.typography.headlineMedium,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.testTag("profile_display_name")
           )
@@ -1261,19 +1266,28 @@ fun UserProfileScreen(
           Text(
             text = visibleEmailText,
             style = MaterialTheme.typography.bodyMedium,
-            color = Color(0xFF94A3B8),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Medium,
             modifier = Modifier.testTag("profile_email_address")
           )
 
           val resolvedUid = userUid.ifBlank { profile?.userId ?: profile?.id ?: "" }
           if (resolvedUid.isNotBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-              text = "UID: $resolvedUid",
-              style = MaterialTheme.typography.labelSmall,
-              color = Color(0xFF64748B),
-              modifier = Modifier.testTag("profile_user_uid")
-            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+            ) {
+              Text(
+                text = "UID: $resolvedUid",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.Medium,
+                modifier =
+                  Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                    .testTag("profile_user_uid")
+              )
+            }
           }
 
           Spacer(modifier = Modifier.height(18.dp))
@@ -1288,8 +1302,8 @@ fun UserProfileScreen(
 
             Surface(
               shape = RoundedCornerShape(16.dp),
-              color = Color(0x30A855F7),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x60A855F7)),
+              color = Color(0xFFEEF2FF),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFC7D2FE)),
               modifier = Modifier.weight(1f)
             ) {
               Column(
@@ -1299,29 +1313,30 @@ fun UserProfileScreen(
                 Icon(
                   imageVector = Icons.Default.Assignment,
                   contentDescription = null,
-                  tint = Color(0xFFC084FC),
+                  tint = Color(0xFF4F46E5),
                   modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                   text = "${tasks.size}",
                   style = MaterialTheme.typography.titleMedium,
-                  color = Color.White,
-                  fontWeight = FontWeight.Bold
+                  color = Color(0xFF1E1B4B),
+                  fontWeight = FontWeight.ExtraBold
                 )
                 Text(
                   text = "Tasks",
                   style = MaterialTheme.typography.labelSmall,
                   fontSize = 10.sp,
-                  color = Color(0xFF94A3B8)
+                  fontWeight = FontWeight.SemiBold,
+                  color = Color(0xFF4338CA)
                 )
               }
             }
 
             Surface(
               shape = RoundedCornerShape(16.dp),
-              color = Color(0x3010B981),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x6034D399)),
+              color = Color(0xFFECFDF5),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA7F3D0)),
               modifier = Modifier.weight(1f)
             ) {
               Column(
@@ -1331,29 +1346,30 @@ fun UserProfileScreen(
                 Icon(
                   imageVector = Icons.Default.CheckCircle,
                   contentDescription = null,
-                  tint = Color(0xFF34D399),
+                  tint = Color(0xFF059669),
                   modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                   text = "$approvedCount",
                   style = MaterialTheme.typography.titleMedium,
-                  color = Color.White,
-                  fontWeight = FontWeight.Bold
+                  color = Color(0xFF064E3B),
+                  fontWeight = FontWeight.ExtraBold
                 )
                 Text(
                   text = "Completed",
                   style = MaterialTheme.typography.labelSmall,
                   fontSize = 10.sp,
-                  color = Color(0xFF94A3B8)
+                  fontWeight = FontWeight.SemiBold,
+                  color = Color(0xFF047857)
                 )
               }
             }
 
             Surface(
               shape = RoundedCornerShape(16.dp),
-              color = Color(0x30F59E0B),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x60FBBF24)),
+              color = Color(0xFFFFFBEB),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFDE68A)),
               modifier = Modifier.weight(1f)
             ) {
               Column(
@@ -1363,21 +1379,22 @@ fun UserProfileScreen(
                 Icon(
                   imageVector = Icons.Default.MonetizationOn,
                   contentDescription = null,
-                  tint = Color(0xFFFBBF24),
+                  tint = Color(0xFFD97706),
                   modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                   text = "$effectiveCoins",
                   style = MaterialTheme.typography.titleMedium,
-                  color = Color(0xFFFDE047),
-                  fontWeight = FontWeight.Bold
+                  color = Color(0xFF92400E),
+                  fontWeight = FontWeight.ExtraBold
                 )
                 Text(
                   text = "Coins",
                   style = MaterialTheme.typography.labelSmall,
                   fontSize = 10.sp,
-                  color = Color(0xFF94A3B8)
+                  fontWeight = FontWeight.SemiBold,
+                  color = Color(0xFFB45309)
                 )
               }
             }
@@ -1434,16 +1451,16 @@ fun UserProfileScreen(
         testTag = "profile_menu_about"
       )
 
-      // Sign Out / Logout Button matching Reference Image Screen 4
+      // Sign Out / Logout Button
       Spacer(modifier = Modifier.height(8.dp))
       Button(
         onClick = onSignOut,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = ButtonDefaults.buttonColors(
-          containerColor = Color(0x70881337),
-          contentColor = Color(0xFFFFE4E6)
+          containerColor = Color(0xFFFEF2F2),
+          contentColor = Color(0xFFDC2626)
         ),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF43F5E)),
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFFCA5A5)),
         modifier =
           Modifier.fillMaxWidth()
             .height(52.dp)
@@ -1452,7 +1469,7 @@ fun UserProfileScreen(
         Icon(
           imageVector = Icons.AutoMirrored.Filled.Logout,
           contentDescription = null,
-          tint = Color(0xFFFB7185),
+          tint = Color(0xFFDC2626),
           modifier = Modifier.size(20.dp)
         )
         Spacer(modifier = Modifier.width(8.dp))
@@ -1460,7 +1477,7 @@ fun UserProfileScreen(
           text = "Logout",
           style = MaterialTheme.typography.titleMedium,
           fontWeight = FontWeight.Bold,
-          color = Color.White
+          color = Color(0xFFDC2626)
         )
       }
     }
@@ -1477,8 +1494,8 @@ private fun ProfileMenuCard(
 ) {
   NeonGlassCard(
     modifier = Modifier.fillMaxWidth().testTag(testTag),
-    borderColor = Color(0x40A855F7),
-    backgroundColor = Color(0x3B1F174B),
+    borderColor = MaterialTheme.colorScheme.outlineVariant,
+    backgroundColor = MaterialTheme.colorScheme.surface,
     onClick = onClick
   ) {
     Row(
@@ -1488,15 +1505,15 @@ private fun ProfileMenuCard(
     ) {
       Surface(
         shape = RoundedCornerShape(14.dp),
-        color = Color(0x35A855F7),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80C084FC)),
+        color = Color(0xFFEEF2FF),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFC7D2FE)),
         modifier = Modifier.size(46.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = Color(0xFFC084FC),
+            tint = Color(0xFF4F46E5),
             modifier = Modifier.size(22.dp)
           )
         }
@@ -1505,20 +1522,20 @@ private fun ProfileMenuCard(
         Text(
           text = title,
           style = MaterialTheme.typography.titleMedium,
-          color = Color.White,
+          color = MaterialTheme.colorScheme.onSurface,
           fontWeight = FontWeight.Bold
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
           text = subtitle,
           style = MaterialTheme.typography.bodySmall,
-          color = Color(0xFF94A3B8)
+          color = MaterialTheme.colorScheme.onSurfaceVariant
         )
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open $title",
-        tint = Color(0xFFC084FC)
+        tint = Color(0xFF4F46E5)
       )
     }
   }

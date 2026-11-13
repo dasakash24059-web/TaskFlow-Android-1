@@ -1,9 +1,11 @@
 package com.example.ui.admin
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -74,6 +76,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -94,6 +97,8 @@ import com.example.data.model.TaskStep
 import com.example.data.model.TransactionRecord
 import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethod
+import com.example.data.model.centsToCoins
+import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
 import com.example.data.model.formatVisibleUserEmail
 import com.example.data.model.isValidImageUrlOrDataUri
@@ -411,7 +416,13 @@ fun AdminDashboardScreen(
   val pendingUsersCount =
     registeredUsers.count { it.approvalStatus.equals("pending", ignoreCase = true) }
 
+  BackHandler(enabled = currentTab != AdminTab.HOME) {
+    navigateToTab(AdminTab.HOME)
+  }
+
   Scaffold(
+    containerColor = AdminWhiteBg,
+    floatingActionButtonPosition = androidx.compose.material3.FabPosition.Start,
     floatingActionButton = {
       if (currentTab == AdminTab.TASKS || currentTab == AdminTab.OVERVIEW) {
         FloatingActionButton(
@@ -420,8 +431,8 @@ fun AdminDashboardScreen(
             preselectedAssignee = null
             showTaskModal = true
           },
-          containerColor = MaterialTheme.colorScheme.primary,
-          contentColor = MaterialTheme.colorScheme.onPrimary,
+          containerColor = AdminBluePrimary,
+          contentColor = Color.White,
           modifier = Modifier.testTag("admin_create_task_fab")
         ) {
           Row(
@@ -439,153 +450,174 @@ fun AdminDashboardScreen(
     Column(
       modifier =
         Modifier.fillMaxSize()
+          .background(AdminWhiteBg)
           .padding(innerPadding)
-          .padding(horizontal = 18.dp, vertical = 12.dp)
+          .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-      // 10-Section Admin Navigation Bar
-      AdminSectionNavigationBar(
-        activeTab = currentTab,
-        pendingUsersCount = pendingUsersCount,
-        pendingSubmissionsCount = pendingSubmissionsCount,
-        onSelectTab = navigateToTab
-      )
+      if (currentTab == AdminTab.HOME) {
+        AdminControlCenterHomeScreen(
+          users = registeredUsers,
+          tasks = activeManagedTasks,
+          campaigns = campaigns,
+          reviewTasks = mergedReviewTasks,
+          withdrawalRequests = withdrawalRequests,
+          transactions = transactions,
+          activityLogs = activityLogs,
+          onSelectSection = navigateToTab
+        )
+      } else {
+        // Dedicated Management Page Header with Back Navigation to Dashboard Home
+        AdminDedicatedPageHeader(
+          activeTab = currentTab,
+          onBackToHome = { navigateToTab(AdminTab.HOME) }
+        )
 
-      // 4 Dashboard Statistics Cards: Total Tasks, Needs Review (Pending), Approved, Users
-      AdminMetricsBanner(
-        totalTasks = tasks.size,
-        pendingReviews = pendingSubmissionsCount,
-        approvedSubmissions = approvedSubmissionsCount,
-        totalUsers = registeredUsers.size
-      )
+        Spacer(modifier = Modifier.height(6.dp))
 
-      Spacer(modifier = Modifier.height(14.dp))
+        // Ultra-compact live metrics strip on dedicated pages
+        AdminMetricsBanner(
+          totalTasks = tasks.size,
+          pendingReviews = pendingSubmissionsCount,
+          approvedSubmissions = approvedSubmissionsCount,
+          totalUsers = registeredUsers.size
+        )
 
-      when (currentTab) {
-        AdminTab.OVERVIEW -> {
-          AdminOverviewSection(
-            users = registeredUsers,
-            tasks = activeManagedTasks,
-            campaigns = campaigns,
-            reviewTasks = mergedReviewTasks,
-            transactions = transactions,
-            activityLogs = activityLogs,
-            onNavigateTab = navigateToTab,
-            onCreateTaskClick = {
-              editingTask = null
-              preselectedAssignee = null
-              showTaskModal = true
-            }
-          )
-        }
-        AdminTab.TASKS -> {
-          AdminTasksTabContent(
-            tasks = activeManagedTasks,
-            withdrawalRequests = withdrawalRequests,
-            onCreateClick = {
-              editingTask = null
-              preselectedAssignee = null
-              showTaskModal = true
-            },
-            onEditTask = { task ->
-              editingTask = task
-              showTaskModal = true
-            },
-            onToggleTaskActive = onToggleTaskActive,
-            onDeleteTask = onDeleteTask
-          )
-        }
-        AdminTab.SUBMISSIONS -> {
-          AdminSubmissionsTabContent(
-            tasks = mergedReviewTasks,
-            withdrawalRequests = withdrawalRequests,
-            selectedFilter = submissionFilter,
-            onSelectFilter = onSelectSubmissionFilter,
-            onReviewSubmission = onReviewSubmission
-          )
-        }
-        AdminTab.VERIFICATION_FRAUD -> {
-          AdminVerificationFraudSection(
-            reviewTasks = mergedReviewTasks,
-            users = registeredUsers,
-            withdrawalRequests = withdrawalRequests,
-            selectedFilter = submissionFilter,
-            onSelectFilter = onSelectSubmissionFilter,
-            onReviewSubmission = onReviewSubmission
-          )
-        }
-        AdminTab.USERS -> {
-          AdminUsersTabContent(
-            users = registeredUsers,
-            reviewTasks = mergedReviewTasks,
-            transactions = transactions,
-            onAssignTaskToUser = { user ->
-              editingTask = null
-              preselectedAssignee = user
-              showTaskModal = true
-            },
-            onToggleUserStatus = onToggleUserStatus,
-            onUpdateUserStatus = onUpdateUserStatus,
-            onUpdateUserName = onUpdateUserName
-          )
-        }
-        AdminTab.WITHDRAWALS -> {
-          LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(bottom = 24.dp)
-          ) {
-            item {
-              AdminWithdrawalRequestsSection(withdrawalRequests = withdrawalRequests)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        when (currentTab) {
+          AdminTab.HOME -> Unit
+          AdminTab.OVERVIEW -> {
+            AdminOverviewSection(
+              users = registeredUsers,
+              tasks = activeManagedTasks,
+              campaigns = campaigns,
+              reviewTasks = mergedReviewTasks,
+              transactions = transactions,
+              activityLogs = activityLogs,
+              withdrawalRequests = withdrawalRequests,
+              onNavigateTab = navigateToTab,
+              onCreateTaskClick = {
+                editingTask = null
+                preselectedAssignee = null
+                showTaskModal = true
+              }
+            )
+          }
+          AdminTab.TASKS -> {
+            AdminTasksTabContent(
+              tasks = activeManagedTasks,
+              reviewTasks = mergedReviewTasks,
+              withdrawalRequests = withdrawalRequests,
+              onCreateClick = {
+                editingTask = null
+                preselectedAssignee = null
+                showTaskModal = true
+              },
+              onEditTask = { task ->
+                editingTask = task
+                showTaskModal = true
+              },
+              onToggleTaskActive = onToggleTaskActive,
+              onDeleteTask = onDeleteTask
+            )
+          }
+          AdminTab.SUBMISSIONS -> {
+            AdminSubmissionsTabContent(
+              tasks = mergedReviewTasks,
+              withdrawalRequests = withdrawalRequests,
+              selectedFilter = submissionFilter,
+              onSelectFilter = onSelectSubmissionFilter,
+              onReviewSubmission = onReviewSubmission
+            )
+          }
+          AdminTab.VERIFICATION_FRAUD -> {
+            AdminVerificationFraudSection(
+              reviewTasks = mergedReviewTasks,
+              users = registeredUsers,
+              withdrawalRequests = withdrawalRequests,
+              selectedFilter = submissionFilter,
+              onSelectFilter = onSelectSubmissionFilter,
+              onReviewSubmission = onReviewSubmission,
+              onUpdateUserStatus = onUpdateUserStatus
+            )
+          }
+          AdminTab.USERS -> {
+            AdminUsersTabContent(
+              users = registeredUsers,
+              reviewTasks = mergedReviewTasks,
+              transactions = transactions,
+              onAssignTaskToUser = { user ->
+                editingTask = null
+                preselectedAssignee = user
+                showTaskModal = true
+              },
+              onToggleUserStatus = onToggleUserStatus,
+              onUpdateUserStatus = onUpdateUserStatus,
+              onUpdateUserName = onUpdateUserName
+            )
+          }
+          AdminTab.WITHDRAWALS -> {
+            LazyColumn(
+              modifier = Modifier.fillMaxSize(),
+              verticalArrangement = Arrangement.spacedBy(12.dp),
+              contentPadding = PaddingValues(bottom = 24.dp)
+            ) {
+              item {
+                AdminWithdrawalRequestsSection(withdrawalRequests = withdrawalRequests)
+              }
             }
           }
-        }
-        AdminTab.CAMPAIGNS -> {
-          AdminCampaignsTabContent(
-            campaignsState = campaignsState,
-            onCreateCampaign = onCreateCampaign,
-            onCreateCampaignFull = onCreateCampaignFull,
-            onUpdateCampaignStatus = onUpdateCampaignStatus,
-            onUpdateCampaignDetails = onUpdateCampaignDetails
-          )
-        }
-        AdminTab.COINS_REWARDS -> {
-          AdminCoinsRewardsSection(
-            users = registeredUsers,
-            reviewTasks = mergedReviewTasks,
-            transactions = transactions
-          )
-        }
-        AdminTab.ANALYTICS -> {
-          AdminAnalyticsReportsSection(
-            users = registeredUsers,
-            tasks = activeManagedTasks,
-            campaigns = campaigns,
-            reviewTasks = mergedReviewTasks,
-            transactions = transactions
-          )
-        }
-        AdminTab.APP_SETTINGS -> {
-          AdminAppSettingsSection(
-            databaseId = databaseId,
-            onOpenSecurityDialog = onOpenSecuritySheet,
-            onTriggerUpdateCheck = onTriggerUpdateCheck
-          )
-        }
-        AdminTab.ACTIVITY_LOGS -> {
-          AdminActivityLogsSection(
-            activityLogs = activityLogs,
-            reviewTasks = mergedReviewTasks,
-            tasks = activeManagedTasks,
-            campaigns = campaigns,
-            transactions = transactions
-          )
-        }
-        AdminTab.APPS -> {
-          AdminAppsTabContent(
-            appsState = appsState,
-            onCreateApp = onCreateApp,
-            onUpdateApp = onUpdateApp
-          )
+          AdminTab.CAMPAIGNS -> {
+            AdminCampaignsTabContent(
+              campaignsState = campaignsState,
+              onCreateCampaign = onCreateCampaign,
+              onCreateCampaignFull = onCreateCampaignFull,
+              onUpdateCampaignStatus = onUpdateCampaignStatus,
+              onUpdateCampaignDetails = onUpdateCampaignDetails
+            )
+          }
+          AdminTab.COINS_REWARDS -> {
+            AdminCoinsRewardsSection(
+              users = registeredUsers,
+              reviewTasks = mergedReviewTasks,
+              transactions = transactions
+            )
+          }
+          AdminTab.ANALYTICS -> {
+            AdminAnalyticsReportsSection(
+              users = registeredUsers,
+              tasks = activeManagedTasks,
+              campaigns = campaigns,
+              reviewTasks = mergedReviewTasks,
+              transactions = transactions,
+              withdrawalRequests = withdrawalRequests
+            )
+          }
+          AdminTab.APP_SETTINGS -> {
+            AdminAppSettingsSection(
+              databaseId = databaseId,
+              onOpenSecurityDialog = onOpenSecuritySheet,
+              onTriggerUpdateCheck = onTriggerUpdateCheck
+            )
+          }
+          AdminTab.ACTIVITY_LOGS -> {
+            AdminActivityLogsSection(
+              activityLogs = activityLogs,
+              reviewTasks = mergedReviewTasks,
+              tasks = activeManagedTasks,
+              campaigns = campaigns,
+              transactions = transactions,
+              users = registeredUsers,
+              withdrawalRequests = withdrawalRequests
+            )
+          }
+          AdminTab.APPS -> {
+            AdminAppsTabContent(
+              appsState = appsState,
+              onCreateApp = onCreateApp,
+              onUpdateApp = onUpdateApp
+            )
+          }
         }
       }
     }
@@ -599,36 +631,34 @@ private fun AdminMetricsBanner(
   approvedSubmissions: Int,
   totalUsers: Int
 ) {
-  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-      AdminMetricCard(
-        label = "TOTAL TASKS",
-        value = totalTasks.toString(),
-        icon = Icons.Default.Task,
-        modifier = Modifier.weight(1f)
-      )
-      AdminMetricCard(
-        label = "NEEDS REVIEW",
-        value = pendingReviews.toString(),
-        icon = Icons.Default.RateReview,
-        modifier = Modifier.weight(1f)
-      )
-      AdminMetricCard(
-        label = "APPROVED",
-        value = approvedSubmissions.toString(),
-        icon = Icons.Default.CheckCircle,
-        modifier = Modifier.weight(1f)
-      )
-      AdminMetricCard(
-        label = "USERS",
-        value = totalUsers.toString(),
-        icon = Icons.Default.People,
-        modifier = Modifier.weight(1f)
-      )
-    }
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(6.dp)
+  ) {
+    AdminMetricCard(
+      label = "TOTAL TASKS",
+      value = totalTasks.toString(),
+      icon = Icons.Default.Task,
+      modifier = Modifier.weight(1f)
+    )
+    AdminMetricCard(
+      label = "NEEDS REVIEW",
+      value = pendingReviews.toString(),
+      icon = Icons.Default.RateReview,
+      modifier = Modifier.weight(1f)
+    )
+    AdminMetricCard(
+      label = "APPROVED",
+      value = approvedSubmissions.toString(),
+      icon = Icons.Default.CheckCircle,
+      modifier = Modifier.weight(1f)
+    )
+    AdminMetricCard(
+      label = "USERS",
+      value = totalUsers.toString(),
+      icon = Icons.Default.People,
+      modifier = Modifier.weight(1f)
+    )
   }
 }
 
@@ -640,35 +670,35 @@ private fun AdminMetricCard(
   modifier: Modifier = Modifier
 ) {
   Surface(
-    shape = RoundedCornerShape(16.dp),
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 2.dp,
+    shape = RoundedCornerShape(10.dp),
+    color = AdminSoftGreyBg,
+    border = BorderStroke(1.dp, AdminBorderColor),
     modifier = modifier.testTag("admin_metric_${label.lowercase().replace(' ', '_')}")
   ) {
-    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)) {
+    Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)) {
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
       ) {
         Icon(
           imageVector = icon,
           contentDescription = null,
-          tint = MaterialTheme.colorScheme.primary,
-          modifier = Modifier.size(14.dp)
+          tint = AdminBluePrimary,
+          modifier = Modifier.size(12.dp)
         )
         Text(
           text = label,
           style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          color = AdminTextMuted,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
       }
-      Spacer(modifier = Modifier.height(6.dp))
       Text(
         text = value,
-        style = MaterialTheme.typography.headlineMedium,
-        fontWeight = FontWeight.Bold
+        style = MaterialTheme.typography.titleMedium,
+        color = AdminTextDark,
+        fontWeight = FontWeight.ExtraBold
       )
     }
   }
@@ -678,11 +708,30 @@ private fun AdminMetricCard(
 private fun AdminWithdrawalRequestsSection(
   withdrawalRequests: List<DemoWithdrawalRequest>
 ) {
+  var statusFilter by rememberSaveable { mutableStateOf("ALL") }
+  val pendingCount = withdrawalRequests.count { it.status.contains("pending", ignoreCase = true) }
+  val approvedCount = withdrawalRequests.count { it.status.equals("approved", ignoreCase = true) }
+  val rejectedCount = withdrawalRequests.count { it.status.equals("rejected", ignoreCase = true) }
+  val totalRequestedCents = withdrawalRequests.sumOf { it.amountCents }
+  val totalApprovedCents =
+    withdrawalRequests.filter { it.status.equals("approved", ignoreCase = true) }.sumOf { it.amountCents }
+
+  val filteredRequests =
+    remember(withdrawalRequests, statusFilter) {
+      when (statusFilter) {
+        "PENDING" -> withdrawalRequests.filter { it.status.contains("pending", ignoreCase = true) }
+        "APPROVED" -> withdrawalRequests.filter { it.status.equals("approved", ignoreCase = true) }
+        "REJECTED" -> withdrawalRequests.filter { it.status.equals("rejected", ignoreCase = true) }
+        else -> withdrawalRequests
+      }
+    }
+
   Card(
     modifier = Modifier.fillMaxWidth().testTag("admin_withdrawal_requests_section"),
-    shape = RoundedCornerShape(20.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    shape = RoundedCornerShape(16.dp),
+    colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+    border = BorderStroke(1.dp, AdminBorderColor),
+    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
   ) {
     Column(
       modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -695,45 +744,48 @@ private fun AdminWithdrawalRequestsSection(
       ) {
         Text(
           text = "Withdrawal Requests (${withdrawalRequests.size})",
-          style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold
+          style = MaterialTheme.typography.titleMedium,
+          color = AdminTextDark,
+          fontWeight = FontWeight.ExtraBold
         )
         Surface(
           shape = RoundedCornerShape(50),
-          color = MaterialTheme.colorScheme.primaryContainer
+          color = AdminBlueTint
         ) {
           Text(
             text = "Demo / Request Only",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            color = AdminBlueDark,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
           )
         }
       }
 
-      if (withdrawalRequests.isEmpty()) {
+      if (filteredRequests.isEmpty()) {
         Text(
           text = "No withdrawal requests submitted yet.",
           style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
+          color = AdminTextMuted
         )
       } else {
-        withdrawalRequests.forEach { req ->
+        filteredRequests.forEach { req ->
           val reqId = req.id.ifBlank { req.requestId }
           val dateStr =
             req.createdAt?.toDate()?.let {
               SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
             } ?: "Recently submitted"
+          val coinsVal = req.getEffectiveAmountCoins()
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            color = AdminSoftGreyBg,
+            border = BorderStroke(1.dp, AdminBorderColor),
             modifier =
               Modifier.fillMaxWidth()
                 .testTag("admin_withdrawal_card_$reqId")
           ) {
             Row(
-              modifier = Modifier.fillMaxWidth().padding(14.dp),
+              modifier = Modifier.fillMaxWidth().padding(12.dp),
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -741,6 +793,7 @@ private fun AdminWithdrawalRequestsSection(
                 Text(
                   text = req.userName.ifBlank { "TaskFlow User" },
                   style = MaterialTheme.typography.titleMedium,
+                  color = AdminTextDark,
                   fontWeight = FontWeight.Bold,
                   modifier = Modifier.testTag("admin_withdrawal_user_$reqId")
                 )
@@ -748,19 +801,24 @@ private fun AdminWithdrawalRequestsSection(
                 Text(
                   text = "Method: ${req.method} • Date: $dateStr",
                   style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  color = AdminTextSecondary,
                   modifier = Modifier.testTag("admin_withdrawal_method_$reqId")
                 )
-                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                  text = "Request ID: $reqId • Coins: ${formatCoins(coinsVal)}",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = AdminTextMuted
+                )
+                Spacer(modifier = Modifier.height(4.dp))
                 Surface(
                   shape = RoundedCornerShape(50),
-                  color = MaterialTheme.colorScheme.secondaryContainer,
+                  color = AdminAmberTint,
                   modifier = Modifier.testTag("admin_withdrawal_status_$reqId")
                 ) {
                   Text(
                     text = "Demo / Pending",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    color = AdminAmberWarning,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
                   )
@@ -769,12 +827,79 @@ private fun AdminWithdrawalRequestsSection(
               Text(
                 text = formatRewardInr(req.amountCents),
                 style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.primary,
+                color = AdminBluePrimary,
                 fontWeight = FontWeight.ExtraBold,
                 modifier = Modifier.testTag("admin_withdrawal_amount_$reqId")
               )
             }
           }
+        }
+      }
+
+      // Summary metrics for Pending, Approved, Rejected, Total Requested & Approved Amount
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        Surface(
+          shape = RoundedCornerShape(10.dp),
+          color = AdminSoftGreyBg,
+          border = BorderStroke(1.dp, AdminBorderColor),
+          modifier = Modifier.weight(1f)
+        ) {
+          Column(modifier = Modifier.padding(10.dp)) {
+            Text("Total Requested", style = MaterialTheme.typography.labelSmall, color = AdminTextMuted)
+            Text(
+              text = "Req: ${formatRewardInr(totalRequestedCents)}",
+              style = MaterialTheme.typography.titleSmall,
+              color = AdminTextDark,
+              fontWeight = FontWeight.ExtraBold
+            )
+            Text(
+              text = "$pendingCount Pending • ${withdrawalRequests.size} Total",
+              style = MaterialTheme.typography.labelSmall,
+              color = AdminTextSecondary
+            )
+          }
+        }
+        Surface(
+          shape = RoundedCornerShape(10.dp),
+          color = AdminSoftGreyBg,
+          border = BorderStroke(1.dp, AdminBorderColor),
+          modifier = Modifier.weight(1f)
+        ) {
+          Column(modifier = Modifier.padding(10.dp)) {
+            Text("Total Approved", style = MaterialTheme.typography.labelSmall, color = AdminTextMuted)
+            Text(
+              text = "Appr: ${formatRewardInr(totalApprovedCents)}",
+              style = MaterialTheme.typography.titleSmall,
+              color = AdminGreenSuccess,
+              fontWeight = FontWeight.ExtraBold
+            )
+            Text(
+              text = "$approvedCount Approved • $rejectedCount Rejected",
+              style = MaterialTheme.typography.labelSmall,
+              color = AdminTextSecondary
+            )
+          }
+        }
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+      ) {
+        listOf(
+          "ALL" to "All (${withdrawalRequests.size})",
+          "PENDING" to "Pending ($pendingCount)",
+          "APPROVED" to "Approved ($approvedCount)",
+          "REJECTED" to "Rejected ($rejectedCount)"
+        ).forEach { (key, label) ->
+          FilterChip(
+            selected = statusFilter == key,
+            onClick = { statusFilter = key },
+            label = { Text(label) }
+          )
         }
       }
     }
@@ -784,6 +909,7 @@ private fun AdminWithdrawalRequestsSection(
 @Composable
 private fun AdminTasksTabContent(
   tasks: List<TaskItem>,
+  reviewTasks: List<TaskItem> = emptyList(),
   withdrawalRequests: List<DemoWithdrawalRequest>,
   onCreateClick: () -> Unit,
   onEditTask: (TaskItem) -> Unit,
@@ -791,6 +917,22 @@ private fun AdminTasksTabContent(
   onDeleteTask: (String) -> Unit
 ) {
   var taskPendingDeletion by remember { mutableStateOf<TaskItem?>(null) }
+  var taskFilter by rememberSaveable { mutableStateOf("ALL") }
+  val activeTasksCount = tasks.count { it.isActive && !it.isQuotaExhausted }
+  val pausedTasksCount = tasks.count { !it.isActive }
+  val completedTasksCount =
+    tasks.count { it.isQuotaExhausted } + reviewTasks.count { it.status == TaskStatus.APPROVED }
+  val pendingReviewCount = reviewTasks.count { it.status == TaskStatus.SUBMITTED }
+
+  val filteredTasks =
+    remember(tasks, taskFilter) {
+      when (taskFilter) {
+        "ACTIVE" -> tasks.filter { it.isActive && !it.isQuotaExhausted }
+        "PAUSED" -> tasks.filter { !it.isActive }
+        "COMPLETED" -> tasks.filter { it.isQuotaExhausted || it.completedSubmissions > 0L }
+        else -> tasks
+      }
+    }
 
   taskPendingDeletion?.let { targetTask ->
     AlertDialog(
@@ -849,7 +991,7 @@ private fun AdminTasksTabContent(
       }
     }
 
-    if (tasks.isEmpty()) {
+    if (filteredTasks.isEmpty()) {
       item {
         Card(
           modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -892,7 +1034,7 @@ private fun AdminTasksTabContent(
         }
       }
     } else {
-      items(tasks, key = { it.id }) { task ->
+      items(filteredTasks, key = { it.id }) { task ->
         val appOrSiteLabel = resolveAppOrWebsiteLabel(task)
         Card(
           modifier = Modifier.fillMaxWidth().testTag("admin_task_card_${task.id}"),
@@ -1083,6 +1225,40 @@ private fun AdminTasksTabContent(
               }
             }
           }
+        }
+      }
+    }
+
+    // Task Status Summary Strip
+    item {
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+      ) {
+        listOf(
+          "ALL" to "Total (${tasks.size})",
+          "ACTIVE" to "Active ($activeTasksCount)",
+          "PAUSED" to "Paused ($pausedTasksCount)",
+          "COMPLETED" to "Completed ($completedTasksCount)"
+        ).forEach { (key, label) ->
+          FilterChip(
+            selected = taskFilter == key,
+            onClick = { taskFilter = key },
+            label = { Text(label) }
+          )
+        }
+        Surface(
+          shape = RoundedCornerShape(8.dp),
+          color = AdminAmberTint,
+          modifier = Modifier.align(Alignment.CenterVertically)
+        ) {
+          Text(
+            text = "Pending Proofs: $pendingReviewCount",
+            style = MaterialTheme.typography.labelSmall,
+            color = AdminAmberWarning,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+          )
         }
       }
     }
@@ -1817,7 +1993,7 @@ private fun AdminUsersTabContent(
 
   LazyColumn(
     modifier = Modifier.fillMaxSize().testTag("admin_users_tab_content"),
-    verticalArrangement = Arrangement.spacedBy(12.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
     contentPadding = PaddingValues(bottom = 24.dp)
   ) {
     // 1. Search Bar
@@ -1925,14 +2101,14 @@ private fun AdminUsersTabContent(
         Card(
           modifier =
             Modifier.fillMaxWidth()
-              .clip(RoundedCornerShape(20.dp))
+              .clip(RoundedCornerShape(18.dp))
               .clickable { selectedUserForDetail = user }
               .testTag("admin_user_card_$uid"),
-          shape = RoundedCornerShape(20.dp),
+          shape = RoundedCornerShape(18.dp),
           colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
           elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
-          Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
+          Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
             Row(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.SpaceBetween,
@@ -1940,19 +2116,19 @@ private fun AdminUsersTabContent(
             ) {
               Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.weight(1f)
               ) {
                 Box(
                   modifier =
-                    Modifier.size(44.dp)
+                    Modifier.size(38.dp)
                       .clip(CircleShape)
                       .background(MaterialTheme.colorScheme.primaryContainer),
                   contentAlignment = Alignment.Center
                 ) {
                   Text(
                     text = (user.displayName.firstOrNull() ?: 'U').uppercaseChar().toString(),
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                   )
                 }
@@ -1964,7 +2140,7 @@ private fun AdminUsersTabContent(
                   )
                   Text(
                     text = formatVisibleUserEmail(user.email, user.role),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
                 }
@@ -1972,7 +2148,7 @@ private fun AdminUsersTabContent(
               RewardBadge(rewardCents = user.balanceCents)
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             Row(
               modifier = Modifier.fillMaxWidth(),
@@ -2016,7 +2192,7 @@ private fun AdminUsersTabContent(
               )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Row(
               modifier = Modifier.fillMaxWidth(),
@@ -2976,45 +3152,123 @@ fun AdminCampaignsTabContent(
     )
   }
 
+  val totalCampaignsCount = campaigns.size
+  val activeCampaignsCount =
+    campaigns.count { it.status.equals("ACTIVE", ignoreCase = true) && !it.isQuotaExhausted }
+  val pausedCampaignsCount =
+    campaigns.count { it.status.equals("PAUSED", ignoreCase = true) }
+  val completedCampaignsCount =
+    campaigns.count {
+      it.status.equals("COMPLETED", ignoreCase = true) ||
+        it.status.equals("CLOSED", ignoreCase = true) ||
+        it.isQuotaExhausted
+    }
+  val totalBudgetCents = campaigns.sumOf { it.budgetCents }
+  val usedBudgetCents = campaigns.sumOf { it.spentCents }
+  val remainingBudgetCents = (totalBudgetCents - usedBudgetCents).coerceAtLeast(0L)
+  val totalParticipation = campaigns.sumOf { it.completedSubmissions }
+  val totalTargetQuota = campaigns.sumOf { it.targetSubmissions }
+  val conversionRatePct =
+    if (totalTargetQuota > 0L) ((totalParticipation * 100L) / totalTargetQuota).coerceIn(0L, 100L)
+    else 0L
+
   LazyColumn(
     modifier = Modifier.fillMaxSize().testTag("admin_campaigns_list"),
-    verticalArrangement = Arrangement.spacedBy(14.dp),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
     contentPadding = PaddingValues(bottom = 32.dp)
   ) {
     item {
       Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = AdminSoftGreyBg),
+        border = BorderStroke(1.dp, AdminBorderColor)
       ) {
-        Row(
+        Column(
           modifier = Modifier.fillMaxWidth().padding(16.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.SpaceBetween
+          verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = "Campaign Management & Quotas",
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold
-            )
-            Text(
-              text = "Create campaigns with quotas, dates & eligibility; auto-closes when quota is reached.",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-          }
-          Button(
-            onClick = {
-              editingCampaign = null
-              showCreateDialog = true
-            },
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.testTag("admin_new_campaign_button")
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
           ) {
-            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(modifier = Modifier.width(4.dp))
-            Text("Launch")
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Campaign Management & Quotas",
+                style = MaterialTheme.typography.titleMedium,
+                color = AdminTextDark,
+                fontWeight = FontWeight.ExtraBold
+              )
+              Text(
+                text = "Total: $totalCampaignsCount • Active: $activeCampaignsCount • Paused: $pausedCampaignsCount • Completed: $completedCampaignsCount",
+                style = MaterialTheme.typography.bodySmall,
+                color = AdminTextSecondary
+              )
+            }
+            Button(
+              onClick = {
+                editingCampaign = null
+                showCreateDialog = true
+              },
+              shape = RoundedCornerShape(10.dp),
+              colors = ButtonDefaults.buttonColors(containerColor = AdminBluePrimary),
+              modifier = Modifier.testTag("admin_new_campaign_button")
+            ) {
+              Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("Launch")
+            }
+          }
+
+          HorizontalDivider(color = AdminBorderColor)
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Surface(
+              shape = RoundedCornerShape(10.dp),
+              color = AdminWhiteBg,
+              border = BorderStroke(1.dp, AdminBorderColor),
+              modifier = Modifier.weight(1f)
+            ) {
+              Column(modifier = Modifier.padding(10.dp)) {
+                Text("Total / Used Budget", style = MaterialTheme.typography.labelSmall, color = AdminTextMuted)
+                Text(
+                  text = "${formatRewardInr(totalBudgetCents)} / ${formatRewardInr(usedBudgetCents)}",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = AdminTextDark,
+                  fontWeight = FontWeight.Bold
+                )
+                Text(
+                  text = "Remaining: ${formatRewardInr(remainingBudgetCents)}",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = AdminGreenSuccess
+                )
+              }
+            }
+            Surface(
+              shape = RoundedCornerShape(10.dp),
+              color = AdminWhiteBg,
+              border = BorderStroke(1.dp, AdminBorderColor),
+              modifier = Modifier.weight(1f)
+            ) {
+              Column(modifier = Modifier.padding(10.dp)) {
+                Text("Participation & Completion", style = MaterialTheme.typography.labelSmall, color = AdminTextMuted)
+                Text(
+                  text = "$totalParticipation / $totalTargetQuota Submissions",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = AdminTextDark,
+                  fontWeight = FontWeight.Bold
+                )
+                Text(
+                  text = "Completion Rate: $conversionRatePct%",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = AdminBluePrimary
+                )
+              }
+            }
           }
         }
       }
