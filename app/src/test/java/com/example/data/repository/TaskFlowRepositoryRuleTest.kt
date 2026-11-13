@@ -5,7 +5,10 @@ import com.example.base.FirestoreEmulatorTestBase
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.TaskStatus
+import com.example.data.model.WithdrawalMethodType
+import com.example.data.model.WithdrawalStatus
 import com.example.data.model.calculateDailyCheckInState
+import com.example.data.model.getEffectiveBalanceCoins
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestoreException
 import java.util.UUID
@@ -763,58 +766,199 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
           .getOrThrow()
       }
 
-      // 3. User signs back in with ₹300.00 balance
+      // 3. User signs back in with ₹300.00 (37,500 Coins) balance
       signInTestUser(userEmail, emailVerified = true)
       val profileBefore =
         withTimeout(DEFAULT_TIMEOUT_MS) {
           repository.getUserProfile(userUid).getOrThrow() ?: error("Expected user profile")
         }
       assertEquals(30_000L, profileBefore.balanceCents)
+      assertEquals(37_500L, profileBefore.getEffectiveBalanceCoins())
 
-      // 3a. Withdrawal below ₹200 (₹150 = 15,000 paise) -> MUST FAIL
-      val belowMinResult =
+      // 3a. Invalid UPI denomination (₹100) -> MUST FAIL
+      val invalidDenomResult =
         withTimeout(DEFAULT_TIMEOUT_MS) {
-          repository.submitDemoWithdrawalRequest(
+          repository.submitWithdrawalRedemption(
             uid = userUid,
             userName = "Priya Verma",
-            amountCents = 15_000L,
-            method = "Bank Account"
+            method = WithdrawalMethodType.UPI,
+            amountRupees = 100L,
+            upiId = "priya@upi"
           )
         }
-      assertTrue("Expected withdrawal below ₹200 to fail", belowMinResult.isFailure)
+      assertTrue("Expected non-catalog denomination to fail", invalidDenomResult.isFailure)
 
-      // 3b. Withdrawal exceeding ₹300 balance (₹450 = 45,000 paise) -> MUST FAIL
+      // 3b. Insufficient balance (UPI ₹500 = 82,500 Coins > 37,500 Coins) -> MUST FAIL
       val exceedsBalanceResult =
         withTimeout(DEFAULT_TIMEOUT_MS) {
-          repository.submitDemoWithdrawalRequest(
+          repository.submitWithdrawalRedemption(
             uid = userUid,
             userName = "Priya Verma",
-            amountCents = 45_000L,
-            method = "UPI ID"
+            method = WithdrawalMethodType.UPI,
+            amountRupees = 500L,
+            upiId = "priya@upi"
           )
         }
       assertTrue("Expected withdrawal exceeding balance to fail", exceedsBalanceResult.isFailure)
 
-      // 3c. Valid Demo Withdrawal Request of ₹250.00 (25,000 paise) via UPI ID -> MUST SUCCEED
-      val validReqId =
+      // 3c. Valid UPI ₹200 (33,000 Coins) redemption -> MUST SUCCEED and immediately deduct 33,000 Coins
+      val upiRequest =
         withTimeout(DEFAULT_TIMEOUT_MS) {
           repository
-            .submitDemoWithdrawalRequest(
+            .submitWithdrawalRedemption(
               uid = userUid,
               userName = "Priya Verma",
-              amountCents = 25_000L,
-              method = "UPI ID"
+              method = WithdrawalMethodType.UPI,
+              amountRupees = 200L,
+              upiId = "priya@upi"
             )
             .getOrThrow()
         }
-      assertTrue(validReqId.isNotBlank())
+      assertTrue(upiRequest.requestId.isNotBlank())
+      assertEquals(33_000L, upiRequest.amountCoins)
+      assertEquals(WithdrawalStatus.SUBMITTED, upiRequest.status)
+      assertTrue(upiRequest.coinsDeducted)
 
-      // 4. Verify User's wallet balance was NOT deducted (still 30,000 paise = ₹300.00)
-      val profileAfter =
+      // 4. Verify User's wallet balance was IMMEDIATELY deducted (37,500 - 33,000 = 4,500 Coins remaining)
+      val profileAfterDebit =
         withTimeout(DEFAULT_TIMEOUT_MS) {
           repository.getUserProfile(userUid).getOrThrow() ?: error("Expected user profile")
         }
-      assertEquals(30_000L, profileAfter.balanceCents)
+      assertEquals(4_500L, profileAfterDebit.getEffectiveBalanceCoins())
+
+      // 5. Admin accepts request -> status becomes UNDER_REVIEW and balance remains 4,500 Coins
+      signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository
+          .adminAcceptWithdrawalRequest(
+            requestId = upiRequest.requestId,
+            targetStatus = WithdrawalStatus.UNDER_REVIEW,
+            statusNote = "Reviewing payout"
+          )
+          .getOrThrow()
+      }
+      val profileAfterAccept =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.getUserProfile(userUid).getOrThrow() ?: error("Expected user profile")
+        }
+      assertEquals(4_500L, profileAfterAccept.getEffectiveBalanceCoins())
+
+      // 6. Admin rejects with reason -> refunds 33,000 Coins ONCE atomically (restored to 37,500 Coins)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository
+          .adminRejectWithdrawalAndRefund(
+            requestId = upiRequest.requestId,
+            rejectionReason = "UPI handle unreachable"
+          )
+          .getOrThrow()
+      }
+      val profileAfterRefund =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.getUserProfile(userUid).getOrThrow() ?: error("Expected user profile")
+        }
+      assertEquals(37_500L, profileAfterRefund.getEffectiveBalanceCoins())
+
+      // 6b. Second rejection/refund attempt on terminal REJECTED request -> MUST FAIL
+      val secondRejectResult =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.adminRejectWithdrawalAndRefund(
+            requestId = upiRequest.requestId,
+            rejectionReason = "Duplicate reject"
+          )
+        }
+      assertTrue("Expected double refund on terminal request to fail", secondRejectResult.isFailure)
+
+      // 7. User submits Amazon Gift Card ₹150 (33,000 Coins) & Admin sends unique code -> SUCCEEDS; duplicate code -> FAILS
+      signInTestUser(userEmail, emailVerified = true)
+      val gcRequest =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository
+            .submitWithdrawalRedemption(
+              uid = userUid,
+              userName = "Priya Verma",
+              method = WithdrawalMethodType.AMAZON_GIFT_CARD,
+              amountRupees = 150L
+            )
+            .getOrThrow()
+        }
+      signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository
+          .adminSendGiftCardCode(
+            requestId = gcRequest.requestId,
+            rawGiftCode = "AMZN-UNIQUE-1122-3344",
+            statusNote = "Issued"
+          )
+          .getOrThrow()
+      }
+
+      // User now submits another ₹150 Gift Card after earning/topping up or checking duplicate code protection:
+      // Let's approve another user and verify duplicate gift code reuse is blocked
+      val user2Email = "gc_user2_${UUID.randomUUID()}@test.com"
+      val user2Uid = signInTestUser(user2Email, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.ensureUserProfile(user2Uid, user2Email, "User Two").getOrThrow()
+      }
+      signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.updateUserApprovalStatus(user2Uid, "approved").getOrThrow()
+      }
+      // Credit user2 via task submission + approval
+      val task2Id =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository
+            .createTask(
+              title = "Task 2",
+              description = "Test",
+              category = "App Install",
+              rewardCents = 30_000L,
+              assignedUserId = adminUid,
+              assignedUserName = "Admin",
+              assignedUserEmail = BOOTSTRAPPED_ADMIN_EMAIL,
+              instructions = "Install",
+              taskLink = "https://play.google.com/store/apps/details?id=com.example.task2"
+            )
+            .getOrThrow()
+        }
+      signInTestUser(user2Email, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository
+          .createSubmissionRecord(
+            taskId = task2Id,
+            taskTitle = "Task 2",
+            rewardCents = 30_000L,
+            userName = "User Two",
+            userEmail = user2Email,
+            proofText = "Done",
+            imageUri = sampleGalleryUri
+          )
+          .getOrThrow()
+      }
+      signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      val subTask2 = withTimeout(DEFAULT_TIMEOUT_MS) { repository.getTaskById(task2Id).getOrThrow()!! }
+      withTimeout(DEFAULT_TIMEOUT_MS) { repository.reviewSubmission(subTask2, true, "OK").getOrThrow() }
+      signInTestUser(user2Email, emailVerified = true)
+      val gcRequest2 =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository
+            .submitWithdrawalRedemption(
+              uid = user2Uid,
+              userName = "User Two",
+              method = WithdrawalMethodType.AMAZON_GIFT_CARD,
+              amountRupees = 150L
+            )
+            .getOrThrow()
+        }
+      signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      val duplicateCodeResult =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.adminSendGiftCardCode(
+            requestId = gcRequest2.requestId,
+            rawGiftCode = "AMZN-UNIQUE-1122-3344",
+            statusNote = "Duplicate test"
+          )
+        }
+      assertTrue("Expected duplicate gift code reuse to fail", duplicateCodeResult.isFailure)
     }
 
   @Test

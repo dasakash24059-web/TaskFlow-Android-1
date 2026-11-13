@@ -7,6 +7,7 @@ import android.net.Uri
 import android.util.Base64
 import android.util.Log
 import com.example.data.model.AdminActivityLog
+import com.example.data.model.AdminNotificationItem
 import com.example.data.model.AppItem
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.CampaignItem
@@ -25,9 +26,14 @@ import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
 import com.example.data.model.UserTaskProgress
+import com.example.data.model.WithdrawalAvailabilityConfig
+import com.example.data.model.WithdrawalCatalog
 import com.example.data.model.WithdrawalMethod
+import com.example.data.model.WithdrawalMethodType
+import com.example.data.model.WithdrawalStatus
 import com.example.data.model.calculateDailyCheckInState
 import com.example.data.model.centsToCoins
+import com.example.data.model.coinsToCents
 import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
 import com.example.data.model.getTodayDateKey
@@ -45,6 +51,7 @@ import com.google.firebase.firestore.SetOptions
 import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.storage.FirebaseStorage
 import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 import kotlin.random.Random
@@ -939,6 +946,40 @@ class TaskFlowRepository(
   private val supportTicketsCollection = firestore.collection("support_tickets")
   private val appsCollection = firestore.collection("apps")
   private val adminLogsCollection = firestore.collection("admin_logs")
+  private val usedGiftCodesCollection = firestore.collection("used_gift_codes")
+  private val appConfigCollection = firestore.collection("app_config")
+  private val withdrawalAvailabilityDoc = appConfigCollection.document("withdrawal_availability")
+  private val adminNotificationsCollection = firestore.collection("admin_notifications")
+
+  internal fun hashGiftCode(rawCode: String): String {
+    val normalized = rawCode.trim().uppercase(Locale.US)
+    val digest = MessageDigest.getInstance("SHA-256").digest(normalized.toByteArray(Charsets.UTF_8))
+    return digest.joinToString("") { "%02x".format(it) }
+  }
+
+  private fun parseBooleanMap(raw: Any?, defaults: Map<String, Boolean>): Map<String, Boolean> {
+    val map = raw as? Map<*, *> ?: return defaults
+    return defaults.mapValues { (key, defaultVal) ->
+      (map[key] as? Boolean) ?: defaultVal
+    }
+  }
+
+  private fun DocumentSnapshot.toWithdrawalAvailabilityConfig(): WithdrawalAvailabilityConfig {
+    if (!exists()) return WithdrawalAvailabilityConfig()
+    val defaultUpi = mapOf("200" to true, "500" to true)
+    val defaultGift = mapOf("150" to true, "200" to true, "250" to true)
+    return WithdrawalAvailabilityConfig(
+      upiEnabled = getBoolean("upiEnabled") ?: true,
+      amazonEnabled = getBoolean("amazonEnabled") ?: true,
+      googlePlayEnabled = getBoolean("googlePlayEnabled") ?: true,
+      flipkartEnabled = getBoolean("flipkartEnabled") ?: true,
+      upiDenominationsEnabled = parseBooleanMap(get("upiDenominationsEnabled"), defaultUpi),
+      amazonDenominationsEnabled = parseBooleanMap(get("amazonDenominationsEnabled"), defaultGift),
+      googlePlayDenominationsEnabled = parseBooleanMap(get("googlePlayDenominationsEnabled"), defaultGift),
+      flipkartDenominationsEnabled = parseBooleanMap(get("flipkartDenominationsEnabled"), defaultGift),
+      updatedAt = getTimestamp("updatedAt")
+    )
+  }
 
   suspend fun recordAdminActivity(
     actionType: String,
@@ -1997,6 +2038,14 @@ class TaskFlowRepository(
 
     if (approve && submittingUserId.isNotBlank()) {
       val currentBalance = userSnap?.getLong("balanceCents") ?: 0L
+      val oldExplicitEligible = userSnap?.getLong("eligibleCoins") ?: 0L
+      val oldEligibleCoins = maxOf(oldExplicitEligible, centsToCoins(currentBalance))
+      val oldPromoCoins = userSnap?.getLong("promotionalCoins") ?: 0L
+      val oldBalanceCoins = maxOf(userSnap?.getLong("balanceCoins") ?: 0L, oldEligibleCoins + oldPromoCoins)
+      val newBalanceCents = currentBalance + rewardCents
+      val newEligibleCoins = maxOf(oldEligibleCoins + centsToCoins(rewardCents), centsToCoins(newBalanceCents))
+      val eligibleDelta = newEligibleCoins - oldEligibleCoins
+      val newBalanceCoins = oldBalanceCoins + eligibleDelta
       val currentCompleted = userSnap?.getLong("completedTasksCount") ?: 0L
       val currentApproval = userSnap?.getString("approvalStatus") ?: "approved"
       val submittingUserName =
@@ -2009,6 +2058,8 @@ class TaskFlowRepository(
         userRef,
         mapOf(
           "balanceCents" to FieldValue.increment(rewardCents),
+          "eligibleCoins" to newEligibleCoins,
+          "balanceCoins" to newBalanceCoins,
           "completedTasksCount" to FieldValue.increment(1L),
           "assignedTaskId" to actualTaskId,
           "updatedAt" to FieldValue.serverTimestamp()
@@ -2132,82 +2183,710 @@ class TaskFlowRepository(
       batch.commit().await()
     }
 
-  /**
-   * Submits a safe demo-only withdrawal request to `/withdrawal_requests/{requestId}`.
-   *
-   * Security & Privacy Guarantees:
-   * - Requires `approvalStatus == "approved"` (pending and suspended users are rejected).
-   * - Never collects or stores bank account numbers, IFSC codes, bank names, or UPI IDs in Firestore.
-   * - Validates minimum withdrawal amount of ₹200.00 (20,000 paise).
-   * - Validates that the requested amount does not exceed the user's available wallet balance.
-   * - Never deducts the user's wallet balance (`balanceCents` remains unchanged).
-   */
-  suspend fun submitDemoWithdrawalRequest(
-    uid: String,
-    userName: String,
-    amountCents: Long,
-    method: String
-  ): Result<String> = runCatching {
-    require(uid.isNotBlank()) { "Must be signed in to submit a withdrawal request." }
-    val cleanedMethod = method.trim()
-    require(cleanedMethod in WithdrawalMethod.ALL) {
-      "Please select a valid withdrawal method (Bank Account or UPI ID)."
-    }
-    require(amountCents >= MIN_WITHDRAWAL_CENTS) { // 20,000 paise = 25,000 Coins = ₹200
-      "Minimum withdrawal amount is 25,000 Coins (₹200.00)."
-    }
-    require(amountCents <= 12_500_000L) {
-      "Maximum single demo withdrawal request is ₹1,00,000.00."
-    }
-
-    val userSnap = usersCollection.document(uid).get().await()
-    check(userSnap.exists()) { "User profile not found." }
-    val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
-    check(approvalStatus == "approved") {
-      if (approvalStatus == "suspended") {
-        "Suspended accounts cannot submit withdrawal requests."
-      } else {
-        "Pending accounts cannot submit withdrawal requests until approved by Admin."
+  fun observeWithdrawalAvailability(): Flow<WithdrawalAvailabilityConfig> = callbackFlow {
+    val listener =
+      withdrawalAvailabilityDoc.addSnapshotListener { snapshot, error ->
+        if (error != null || snapshot == null) {
+          trySend(WithdrawalAvailabilityConfig())
+          return@addSnapshotListener
+        }
+        trySend(snapshot.toWithdrawalAvailabilityConfig())
       }
-    }
-    val availableBalanceCents = userSnap.getLong("balanceCents") ?: 0L
-    require(amountCents <= availableBalanceCents) {
-      "Entered amount (${formatCoins(centsToCoins(amountCents))}) exceeds your eligible balance of ${formatCoins(centsToCoins(availableBalanceCents))} (${formatRewardInr(availableBalanceCents)})."
-    }
+    awaitClose { listener.remove() }
+  }
 
-    val resolvedUserName =
-      (userSnap.getString("displayName") ?: userName).trim().ifEmpty { "TaskFlow User" }
-
-    val docRef = withdrawalRequestsCollection.document()
+  suspend fun updateWithdrawalAvailabilityConfig(
+    config: WithdrawalAvailabilityConfig
+  ): Result<Unit> = runCatching {
     val payload =
       mapOf(
-        "requestId" to docRef.id,
-        "userId" to uid,
-        "userName" to resolvedUserName,
-        "amountCents" to amountCents,
-        "method" to cleanedMethod,
-        "status" to "pending_demo",
-        "isDemo" to true,
-        "createdAt" to FieldValue.serverTimestamp()
+        "upiEnabled" to config.upiEnabled,
+        "amazonEnabled" to config.amazonEnabled,
+        "googlePlayEnabled" to config.googlePlayEnabled,
+        "flipkartEnabled" to config.flipkartEnabled,
+        "upiDenominationsEnabled" to config.upiDenominationsEnabled,
+        "amazonDenominationsEnabled" to config.amazonDenominationsEnabled,
+        "googlePlayDenominationsEnabled" to config.googlePlayDenominationsEnabled,
+        "flipkartDenominationsEnabled" to config.flipkartDenominationsEnabled,
+        "updatedAt" to FieldValue.serverTimestamp()
       )
-    val txRef = transactionsCollection.document()
-    val batch = firestore.batch()
-    batch.set(docRef, payload)
-    batch.set(
-      txRef,
-      mapOf(
-        "userId" to uid,
-        "userName" to resolvedUserName,
-        "type" to TransactionType.DEMO_WITHDRAWAL,
-        "title" to "Demo Withdrawal ($cleanedMethod)",
-        "amountCents" to amountCents,
-        "status" to "PENDING_DEMO",
-        "referenceId" to docRef.id,
-        "createdAt" to FieldValue.serverTimestamp()
-      )
+    withdrawalAvailabilityDoc.set(payload, SetOptions.merge()).await()
+    recordAdminActivity(
+      actionType = "WITHDRAWAL",
+      title = "Updated Withdrawal Availability",
+      details = "UPI: ${if (config.upiEnabled) "On" else "Off"} • Amazon: ${if (config.amazonEnabled) "On" else "Off"} • Google Play: ${if (config.googlePlayEnabled) "On" else "Off"} • Flipkart: ${if (config.flipkartEnabled) "On" else "Off"}",
+      targetId = "withdrawal_availability"
     )
-    batch.commit().await()
-    docRef.id
+  }
+
+  fun observeAdminNotifications(isAdminAuthorized: Boolean): Flow<List<AdminNotificationItem>> =
+    callbackFlow {
+      if (!isAdminAuthorized) {
+        trySend(emptyList())
+        awaitClose {}
+        return@callbackFlow
+      }
+      val listener =
+        adminNotificationsCollection.addSnapshotListener { snapshot, error ->
+          if (error != null) {
+            trySend(emptyList())
+            return@addSnapshotListener
+          }
+          val items =
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toObject(AdminNotificationItem::class.java) }
+              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+              ?: emptyList()
+          trySend(items)
+        }
+      awaitClose { listener.remove() }
+    }
+
+  suspend fun markAdminNotificationRead(notificationId: String): Result<Unit> = runCatching {
+    if (notificationId.isBlank()) return@runCatching
+    adminNotificationsCollection.document(notificationId).update("isRead", true).await()
+  }
+
+  /**
+   * Submits a fixed-denomination UPI or Gift Card withdrawal request with immediate atomic coin
+   * deduction, deterministic debit transaction (`wd_debit_{requestId}`), and user/admin alerts.
+   */
+  suspend fun submitWithdrawalRedemption(
+    uid: String,
+    userName: String,
+    method: String,
+    amountRupees: Long,
+    upiId: String = "",
+    idempotencyKey: String = UUID.randomUUID().toString().replace("-", "")
+  ): Result<DemoWithdrawalRequest> = runCatching {
+    require(uid.isNotBlank()) { "Must be signed in to submit a withdrawal request." }
+    val normalizedMethod = method.trim().uppercase(Locale.US)
+    require(normalizedMethod in WithdrawalMethodType.ALL_REDEMPTION_METHODS) {
+      "Please select a valid withdrawal method."
+    }
+    val requiredCoins =
+      WithdrawalCatalog.resolveRequiredCoins(normalizedMethod, amountRupees)
+        ?: throw IllegalArgumentException("Invalid denomination ₹$amountRupees for $normalizedMethod.")
+    val cleanedUpi = if (normalizedMethod == WithdrawalMethodType.UPI) upiId.trim() else ""
+    if (normalizedMethod == WithdrawalMethodType.UPI) {
+      require(cleanedUpi.isNotEmpty() && cleanedUpi.contains("@") && !cleanedUpi.contains(" ")) {
+        "Please enter a valid UPI ID (e.g., name@upi)."
+      }
+    }
+
+    val resolvedRequestId =
+      idempotencyKey.trim().ifEmpty { UUID.randomUUID().toString().replace("-", "") }
+    val reqRef = withdrawalRequestsCollection.document(resolvedRequestId)
+    val userRef = usersCollection.document(uid)
+    val txRef = transactionsCollection.document("wd_debit_$resolvedRequestId")
+    val leaderboardRef = leaderboardCollection.document(uid)
+    val userNotifRef =
+      userRef.collection("notifications").document("user_wd_submit_$resolvedRequestId")
+    val adminNotifRef = adminNotificationsCollection.document("admin_wd_$resolvedRequestId")
+    val amountCents = amountRupees * 100L
+    val methodLabel = WithdrawalMethodType.displayLabel(normalizedMethod)
+
+    firestore.runTransaction { transaction ->
+      val existingReqSnap = transaction.get(reqRef)
+      if (existingReqSnap.exists()) {
+        check(existingReqSnap.getString("userId") == uid) {
+          "Withdrawal request ID collision detected. Please try again."
+        }
+        return@runTransaction existingReqSnap.toObject(DemoWithdrawalRequest::class.java)
+          ?: DemoWithdrawalRequest(
+            id = resolvedRequestId,
+            requestId = resolvedRequestId,
+            userId = uid,
+            userName = userName,
+            amountRupees = amountRupees,
+            amountCents = amountCents,
+            amountCoins = requiredCoins,
+            method = normalizedMethod,
+            upiId = cleanedUpi,
+            status = WithdrawalStatus.SUBMITTED,
+            coinsDeducted = true
+          )
+      }
+
+      val userSnap = transaction.get(userRef)
+      check(userSnap.exists()) { "User profile not found." }
+      val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
+      check(approvalStatus == "approved") {
+        if (approvalStatus == "suspended") {
+          "Suspended accounts cannot submit withdrawal requests."
+        } else {
+          "Pending accounts cannot submit withdrawal requests until approved by Admin."
+        }
+      }
+
+      val availSnap = transaction.get(withdrawalAvailabilityDoc)
+      val availability = availSnap.toWithdrawalAvailabilityConfig()
+      check(availability.isDenominationAvailable(normalizedMethod, amountRupees)) {
+        "₹$amountRupees $methodLabel is currently unavailable."
+      }
+
+      val oldBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+      val explicitEligible = userSnap.getLong("eligibleCoins") ?: 0L
+      val oldEligibleCoins = maxOf(explicitEligible, centsToCoins(oldBalanceCents))
+      val oldPromoCoins = userSnap.getLong("promotionalCoins") ?: 0L
+      val oldBalanceCoins =
+        maxOf(userSnap.getLong("balanceCoins") ?: 0L, oldEligibleCoins + oldPromoCoins)
+
+      check(oldBalanceCoins >= requiredCoins) {
+        "Insufficient balance. You need ${formatCoins(requiredCoins)} (Available: ${formatCoins(oldBalanceCoins)})."
+      }
+
+      val deductEligible = minOf(oldEligibleCoins, requiredCoins)
+      val deductPromo = minOf(oldPromoCoins, requiredCoins - deductEligible)
+      val deductCents = minOf(oldBalanceCents, coinsToCents(deductEligible))
+
+      val newBalanceCoins = oldBalanceCoins - requiredCoins
+      val newEligibleCoins = oldEligibleCoins - deductEligible
+      val newPromoCoins = oldPromoCoins - deductPromo
+      val newBalanceCents = oldBalanceCents - deductCents
+      val resolvedUserName =
+        (userSnap.getString("displayName") ?: userName).trim().ifEmpty { "TaskFlow User" }
+      val completedTasksCount = userSnap.getLong("completedTasksCount") ?: 0L
+
+      transaction.update(
+        userRef,
+        mapOf(
+          "balanceCoins" to newBalanceCoins,
+          "eligibleCoins" to newEligibleCoins,
+          "promotionalCoins" to newPromoCoins,
+          "balanceCents" to newBalanceCents,
+          "lastWithdrawalRequestId" to resolvedRequestId,
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
+      )
+
+      if (deductCents > 0L) {
+        transaction.set(
+          leaderboardRef,
+          buildLeaderboardPayload(
+            userId = uid,
+            displayName = resolvedUserName,
+            balanceCents = newBalanceCents,
+            completedTasksCount = completedTasksCount,
+            approvalStatus = approvalStatus
+          )
+        )
+      }
+
+      val requestPayload =
+        mapOf(
+          "requestId" to resolvedRequestId,
+          "userId" to uid,
+          "userName" to resolvedUserName,
+          "method" to normalizedMethod,
+          "amountRupees" to amountRupees,
+          "amountCents" to amountCents,
+          "amountCoins" to requiredCoins,
+          "upiId" to cleanedUpi,
+          "status" to WithdrawalStatus.SUBMITTED,
+          "statusNote" to "",
+          "adminActionBy" to "",
+          "paymentReference" to "",
+          "giftCode" to "",
+          "giftCodeHash" to "",
+          "coinsDeducted" to true,
+          "coinsRefunded" to false,
+          "deductedBalanceCoins" to requiredCoins,
+          "deductedEligibleCoins" to deductEligible,
+          "deductedPromotionalCoins" to deductPromo,
+          "deductedBalanceCents" to deductCents,
+          "idempotencyKey" to resolvedRequestId,
+          "isDemo" to false,
+          "createdAt" to FieldValue.serverTimestamp(),
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
+      transaction.set(reqRef, requestPayload)
+
+      transaction.set(
+        txRef,
+        mapOf(
+          "userId" to uid,
+          "userName" to resolvedUserName,
+          "type" to TransactionType.WITHDRAWAL_DEBIT,
+          "title" to "$methodLabel Redemption (₹$amountRupees)",
+          "amountCents" to amountCents,
+          "amountCoins" to requiredCoins,
+          "status" to "DEBITED",
+          "referenceId" to resolvedRequestId,
+          "createdAt" to FieldValue.serverTimestamp()
+        )
+      )
+
+      transaction.set(
+        userNotifRef,
+        mapOf(
+          "userId" to uid,
+          "title" to "Withdrawal Request Submitted",
+          "body" to "Your $methodLabel request for ₹$amountRupees (${formatCoins(requiredCoins)}) has been received. Estimated processing time: 24–48 hours.",
+          "type" to "WITHDRAWAL",
+          "referenceId" to resolvedRequestId,
+          "isRead" to false,
+          "createdAt" to FieldValue.serverTimestamp()
+        )
+      )
+
+      transaction.set(
+        adminNotifRef,
+        mapOf(
+          "userId" to uid,
+          "userName" to resolvedUserName,
+          "title" to "New $methodLabel Request",
+          "body" to "$resolvedUserName requested ₹$amountRupees (${formatCoins(requiredCoins)}).",
+          "type" to "WITHDRAWAL_REQUEST",
+          "referenceId" to resolvedRequestId,
+          "isRead" to false,
+          "createdAt" to FieldValue.serverTimestamp()
+        )
+      )
+
+      DemoWithdrawalRequest(
+        id = resolvedRequestId,
+        requestId = resolvedRequestId,
+        userId = uid,
+        userName = resolvedUserName,
+        amountRupees = amountRupees,
+        amountCents = amountCents,
+        amountCoins = requiredCoins,
+        method = normalizedMethod,
+        upiId = cleanedUpi,
+        status = WithdrawalStatus.SUBMITTED,
+        coinsDeducted = true,
+        coinsRefunded = false,
+        deductedBalanceCoins = requiredCoins,
+        deductedEligibleCoins = deductEligible,
+        deductedPromotionalCoins = deductPromo,
+        deductedBalanceCents = deductCents,
+        idempotencyKey = resolvedRequestId,
+        isDemo = false
+      )
+    }.await()
+  }
+
+  /**
+   * Admin accepts a withdrawal request (`UNDER_REVIEW` or `PROCESSING`) without deducting or refunding coins.
+   */
+  suspend fun adminAcceptWithdrawalRequest(
+    requestId: String,
+    targetStatus: String = WithdrawalStatus.UNDER_REVIEW,
+    statusNote: String = ""
+  ): Result<Unit> = runCatching {
+    require(requestId.isNotBlank()) { "requestId must not be blank" }
+    require(targetStatus == WithdrawalStatus.UNDER_REVIEW || targetStatus == WithdrawalStatus.PROCESSING) {
+      "Invalid target status $targetStatus"
+    }
+    val adminUid = authProvider().currentUser?.uid?.trim().orEmpty()
+    require(adminUid.isNotBlank()) { "Admin sign-in required." }
+    val cleanedNote = statusNote.trim().take(500)
+    val reqRef = withdrawalRequestsCollection.document(requestId)
+
+    val (targetUid, methodLabel, amountRupees) =
+      firestore.runTransaction { transaction ->
+        val reqSnap = transaction.get(reqRef)
+        check(reqSnap.exists()) { "Withdrawal request not found." }
+        val currentStatus = reqSnap.getString("status").orEmpty()
+        check(!WithdrawalStatus.isTerminal(currentStatus)) {
+          "Cannot update a completed or rejected request."
+        }
+        check(currentStatus != targetStatus) {
+          "Request is already ${WithdrawalStatus.displayLabel(targetStatus)}."
+        }
+        check(!(currentStatus == WithdrawalStatus.PROCESSING && targetStatus == WithdrawalStatus.UNDER_REVIEW)) {
+          "Cannot move a Processing request back to Under Review."
+        }
+        val uid = reqSnap.getString("userId").orEmpty()
+        val method = reqSnap.getString("method").orEmpty()
+        val rupees = reqSnap.getLong("amountRupees") ?: ((reqSnap.getLong("amountCents") ?: 0L) / 100L)
+        val label = WithdrawalMethodType.displayLabel(method)
+        val defaultNote =
+          if (targetStatus == WithdrawalStatus.UNDER_REVIEW) "Accepted and placed under review."
+          else "Your request is currently being processed."
+        val resolvedNote = cleanedNote.ifEmpty { defaultNote }
+
+        transaction.update(
+          reqRef,
+          mapOf(
+            "status" to targetStatus,
+            "statusNote" to resolvedNote,
+            "adminActionBy" to adminUid,
+            "reviewedAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        if (uid.isNotBlank()) {
+          val notifRef =
+            usersCollection
+              .document(uid)
+              .collection("notifications")
+              .document("user_wd_status_${requestId}_$targetStatus")
+          val statusTitle = WithdrawalStatus.displayLabel(targetStatus)
+          transaction.set(
+            notifRef,
+            mapOf(
+              "userId" to uid,
+              "title" to "Withdrawal $statusTitle",
+              "body" to "Your $label request for ₹$rupees is now $statusTitle. $resolvedNote",
+              "type" to "WITHDRAWAL",
+              "referenceId" to requestId,
+              "isRead" to false,
+              "createdAt" to FieldValue.serverTimestamp()
+            )
+          )
+        }
+        Triple(uid, label, rupees)
+      }.await()
+
+    recordAdminActivity(
+      actionType = "WITHDRAWAL",
+      title = "Withdrawal ${WithdrawalStatus.displayLabel(targetStatus)}",
+      details = "$methodLabel ₹$amountRupees ($requestId) for user $targetUid",
+      targetId = requestId
+    )
+  }
+
+  /**
+   * Admin manually delivers a unique, non-reusable Gift Card Code and marks the request `COMPLETED`.
+   */
+  suspend fun adminSendGiftCardCode(
+    requestId: String,
+    rawGiftCode: String,
+    statusNote: String = ""
+  ): Result<Unit> = runCatching {
+    require(requestId.isNotBlank()) { "requestId must not be blank" }
+    val cleanedCode = rawGiftCode.trim()
+    require(cleanedCode.isNotEmpty() && cleanedCode.length <= 200) {
+      "Please enter a valid Gift Card Code."
+    }
+    val adminUid = authProvider().currentUser?.uid?.trim().orEmpty()
+    require(adminUid.isNotBlank()) { "Admin sign-in required." }
+    val codeHash = hashGiftCode(cleanedCode)
+    val cleanedNote = statusNote.trim().take(500)
+
+    val reqRef = withdrawalRequestsCollection.document(requestId)
+    val usedCodeRef = usedGiftCodesCollection.document(codeHash)
+
+    val (methodLabel, amountRupees) =
+      firestore.runTransaction { transaction ->
+        val reqSnap = transaction.get(reqRef)
+        check(reqSnap.exists()) { "Withdrawal request not found." }
+        val method = reqSnap.getString("method").orEmpty()
+        check(WithdrawalMethodType.isGiftCard(method)) {
+          "Gift card codes can only be delivered for Gift Card requests."
+        }
+        val currentStatus = reqSnap.getString("status").orEmpty()
+        check(!WithdrawalStatus.isTerminal(currentStatus)) {
+          "This request has already reached a terminal state ($currentStatus)."
+        }
+        val coinsDeducted = reqSnap.getBoolean("coinsDeducted") ?: false
+        val alreadyRefunded = reqSnap.getBoolean("coinsRefunded") ?: false
+        check(coinsDeducted && !alreadyRefunded) {
+          "Cannot complete a request whose coins are not debited or already refunded."
+        }
+
+        val usedSnap = transaction.get(usedCodeRef)
+        check(!usedSnap.exists()) {
+          "This gift card code has already been issued to another request. Please enter a unique code."
+        }
+
+        val uid = reqSnap.getString("userId").orEmpty()
+        val rupees = reqSnap.getLong("amountRupees") ?: ((reqSnap.getLong("amountCents") ?: 0L) / 100L)
+        val label = WithdrawalMethodType.displayLabel(method)
+        val resolvedNote = cleanedNote.ifEmpty { "$label code delivered by Admin." }
+
+        transaction.set(
+          usedCodeRef,
+          mapOf(
+            "codeHash" to codeHash,
+            "requestId" to requestId,
+            "method" to method,
+            "amountRupees" to rupees,
+            "assignedBy" to adminUid,
+            "assignedAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        transaction.update(
+          reqRef,
+          mapOf(
+            "status" to WithdrawalStatus.COMPLETED,
+            "statusNote" to resolvedNote,
+            "adminActionBy" to adminUid,
+            "giftCode" to cleanedCode,
+            "giftCodeHash" to codeHash,
+            "giftCodeAssignedAt" to FieldValue.serverTimestamp(),
+            "completedAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        if (uid.isNotBlank()) {
+          val notifRef =
+            usersCollection
+              .document(uid)
+              .collection("notifications")
+              .document("user_wd_ready_$requestId")
+          transaction.set(
+            notifRef,
+            mapOf(
+              "userId" to uid,
+              "title" to "Your Gift Card is Ready!",
+              "body" to "Your $label request has been successfully completed. Please open TaskFlow → Withdrawal → Withdrawal History to view your gift code.",
+              "type" to "GIFT_CARD_READY",
+              "referenceId" to requestId,
+              "isRead" to false,
+              "createdAt" to FieldValue.serverTimestamp()
+            )
+          )
+        }
+        label to rupees
+      }.await()
+
+    recordAdminActivity(
+      actionType = "WITHDRAWAL",
+      title = "Delivered $methodLabel Code",
+      details = "Completed ₹$amountRupees request $requestId with unique gift code.",
+      targetId = requestId
+    )
+  }
+
+  /**
+   * Admin marks a UPI withdrawal `COMPLETED` after actual manual UPI payout transfer.
+   */
+  suspend fun adminCompleteUpiWithdrawal(
+    requestId: String,
+    paymentReference: String = "",
+    statusNote: String = ""
+  ): Result<Unit> = runCatching {
+    require(requestId.isNotBlank()) { "requestId must not be blank" }
+    val adminUid = authProvider().currentUser?.uid?.trim().orEmpty()
+    require(adminUid.isNotBlank()) { "Admin sign-in required." }
+    val cleanedRef = paymentReference.trim().take(120)
+    val cleanedNote = statusNote.trim().take(500)
+    val reqRef = withdrawalRequestsCollection.document(requestId)
+
+    val amountRupees =
+      firestore.runTransaction { transaction ->
+        val reqSnap = transaction.get(reqRef)
+        check(reqSnap.exists()) { "Withdrawal request not found." }
+        val method = reqSnap.getString("method").orEmpty()
+        check(WithdrawalMethodType.isUpi(method)) {
+          "UPI completion is only valid for UPI withdrawal requests."
+        }
+        val currentStatus = reqSnap.getString("status").orEmpty()
+        check(!WithdrawalStatus.isTerminal(currentStatus)) {
+          "This request has already reached a terminal state ($currentStatus)."
+        }
+        val coinsDeducted = reqSnap.getBoolean("coinsDeducted") ?: false
+        val alreadyRefunded = reqSnap.getBoolean("coinsRefunded") ?: false
+        check(coinsDeducted && !alreadyRefunded) {
+          "Cannot complete a request whose coins are not debited or already refunded."
+        }
+
+        val uid = reqSnap.getString("userId").orEmpty()
+        val rupees = reqSnap.getLong("amountRupees") ?: ((reqSnap.getLong("amountCents") ?: 0L) / 100L)
+        val resolvedNote =
+          cleanedNote.ifEmpty {
+            if (cleanedRef.isNotBlank()) "UPI transfer completed (Ref: $cleanedRef)."
+            else "UPI transfer completed by Admin."
+          }
+
+        transaction.update(
+          reqRef,
+          mapOf(
+            "status" to WithdrawalStatus.COMPLETED,
+            "statusNote" to resolvedNote,
+            "adminActionBy" to adminUid,
+            "paymentReference" to cleanedRef,
+            "completedAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        if (uid.isNotBlank()) {
+          val notifRef =
+            usersCollection
+              .document(uid)
+              .collection("notifications")
+              .document("user_wd_completed_$requestId")
+          transaction.set(
+            notifRef,
+            mapOf(
+              "userId" to uid,
+              "title" to "UPI Payment Completed",
+              "body" to "Your UPI withdrawal for ₹$rupees has been completed.${if (cleanedRef.isNotBlank()) " Ref: $cleanedRef" else ""}",
+              "type" to "WITHDRAWAL",
+              "referenceId" to requestId,
+              "isRead" to false,
+              "createdAt" to FieldValue.serverTimestamp()
+            )
+          )
+        }
+        rupees
+      }.await()
+
+    recordAdminActivity(
+      actionType = "WITHDRAWAL",
+      title = "Completed UPI Withdrawal",
+      details = "Marked UPI ₹$amountRupees ($requestId) Completed.${if (cleanedRef.isNotBlank()) " Ref: $cleanedRef" else ""}",
+      targetId = requestId
+    )
+  }
+
+  /**
+   * Admin rejects a non-terminal withdrawal request with a mandatory reason and atomically refunds
+   * the exact deducted coins once (`coinsRefunded = true`, `wd_refund_{requestId}`).
+   */
+  suspend fun adminRejectWithdrawalAndRefund(
+    requestId: String,
+    rejectionReason: String
+  ): Result<Unit> = runCatching {
+    require(requestId.isNotBlank()) { "requestId must not be blank" }
+    val cleanedReason = rejectionReason.trim()
+    require(cleanedReason.isNotEmpty() && cleanedReason.length <= 500) {
+      "A clear rejection reason is required."
+    }
+    val adminUid = authProvider().currentUser?.uid?.trim().orEmpty()
+    require(adminUid.isNotBlank()) { "Admin sign-in required." }
+
+    val reqRef = withdrawalRequestsCollection.document(requestId)
+    val refundTxRef = transactionsCollection.document("wd_refund_$requestId")
+
+    val (methodLabel, amountRupees, refundedCoins) =
+      firestore.runTransaction { transaction ->
+        val reqSnap = transaction.get(reqRef)
+        check(reqSnap.exists()) { "Withdrawal request not found." }
+        val currentStatus = reqSnap.getString("status").orEmpty()
+        check(!WithdrawalStatus.isTerminal(currentStatus)) {
+          "Cannot reject a request that is already $currentStatus."
+        }
+        val coinsDeducted = reqSnap.getBoolean("coinsDeducted") ?: false
+        val alreadyRefunded = reqSnap.getBoolean("coinsRefunded") ?: false
+        check(coinsDeducted && !alreadyRefunded) {
+          "Coins have already been refunded or were not deducted for this request."
+        }
+        val existingRefundTx = transaction.get(refundTxRef)
+        check(!existingRefundTx.exists()) {
+          "Refund transaction already recorded for this request."
+        }
+
+        val targetUid = reqSnap.getString("userId").orEmpty()
+        check(targetUid.isNotBlank()) { "Request is missing userId." }
+        val userRef = usersCollection.document(targetUid)
+        val userSnap = transaction.get(userRef)
+        check(userSnap.exists()) { "User profile not found for refund." }
+
+        val method = reqSnap.getString("method").orEmpty()
+        val label = WithdrawalMethodType.displayLabel(method)
+        val rupees = reqSnap.getLong("amountRupees") ?: ((reqSnap.getLong("amountCents") ?: 0L) / 100L)
+        val amountCents = reqSnap.getLong("amountCents") ?: (rupees * 100L)
+        val amountCoins = reqSnap.getLong("amountCoins") ?: centsToCoins(amountCents)
+        val deductBalCoins = reqSnap.getLong("deductedBalanceCoins") ?: amountCoins
+        val deductEligCoins = reqSnap.getLong("deductedEligibleCoins") ?: 0L
+        val deductPromoCoins = reqSnap.getLong("deductedPromotionalCoins") ?: 0L
+        val deductCents = reqSnap.getLong("deductedBalanceCents") ?: 0L
+
+        val oldBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+        val oldExplicitEligible = userSnap.getLong("eligibleCoins") ?: centsToCoins(oldBalanceCents)
+        val oldPromoCoins = userSnap.getLong("promotionalCoins") ?: 0L
+        val oldBalanceCoins = userSnap.getLong("balanceCoins") ?: 0L
+
+        val newBalanceCoins = oldBalanceCoins + deductBalCoins
+        val newEligibleCoins = oldExplicitEligible + deductEligCoins
+        val newPromoCoins = oldPromoCoins + deductPromoCoins
+        val newBalanceCents = oldBalanceCents + deductCents
+
+        val resolvedUserName =
+          (userSnap.getString("displayName") ?: reqSnap.getString("userName") ?: "TaskFlow Member")
+            .trim()
+            .ifEmpty { "TaskFlow Member" }
+        val completedTasksCount = userSnap.getLong("completedTasksCount") ?: 0L
+        val approvalStatus = userSnap.getString("approvalStatus") ?: "approved"
+
+        transaction.update(
+          userRef,
+          mapOf(
+            "balanceCoins" to newBalanceCoins,
+            "eligibleCoins" to newEligibleCoins,
+            "promotionalCoins" to newPromoCoins,
+            "balanceCents" to newBalanceCents,
+            "lastRefundedWithdrawalId" to requestId,
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        if (deductCents > 0L) {
+          transaction.set(
+            leaderboardCollection.document(targetUid),
+            buildLeaderboardPayload(
+              userId = targetUid,
+              displayName = resolvedUserName,
+              balanceCents = newBalanceCents,
+              completedTasksCount = completedTasksCount,
+              approvalStatus = approvalStatus
+            )
+          )
+        }
+
+        transaction.update(
+          reqRef,
+          mapOf(
+            "status" to WithdrawalStatus.REJECTED,
+            "statusNote" to cleanedReason,
+            "adminActionBy" to adminUid,
+            "coinsRefunded" to true,
+            "rejectedAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        transaction.set(
+          refundTxRef,
+          mapOf(
+            "userId" to targetUid,
+            "userName" to resolvedUserName,
+            "type" to TransactionType.WITHDRAWAL_REFUND,
+            "title" to "$label Refund (₹$rupees)",
+            "amountCents" to amountCents,
+            "amountCoins" to amountCoins,
+            "status" to "REFUNDED",
+            "referenceId" to requestId,
+            "createdAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        val notifRef =
+          usersCollection
+            .document(targetUid)
+            .collection("notifications")
+            .document("user_wd_rejected_$requestId")
+        transaction.set(
+          notifRef,
+          mapOf(
+            "userId" to targetUid,
+            "title" to "Withdrawal Rejected & Coins Refunded",
+            "body" to "Your $label request for ₹$rupees was rejected: $cleanedReason. ${formatCoins(amountCoins)} have been refunded to your wallet.",
+            "type" to "WITHDRAWAL",
+            "referenceId" to requestId,
+            "isRead" to false,
+            "createdAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        Triple(label, rupees, amountCoins)
+      }.await()
+
+    recordAdminActivity(
+      actionType = "WITHDRAWAL",
+      title = "Rejected & Refunded $methodLabel",
+      details = "Rejected ₹$amountRupees ($requestId) and refunded ${formatCoins(refundedCoins)}. Reason: $cleanedReason",
+      targetId = requestId
+    )
   }
 
   /**

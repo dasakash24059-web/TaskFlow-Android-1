@@ -5,6 +5,7 @@ const {
 } = require("@firebase/rules-unit-testing");
 const { test, before, after, beforeEach } = require("node:test");
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 
 let testEnv;
 const PROJECT_ID = process.env.GCP_PROJECT || "demo-no-project";
@@ -801,19 +802,52 @@ test("6. Atomic task creation with HTTPS URL & instructions, task reassignment, 
   await assertSucceeds(deleteBatch.commit());
 });
 
-test("7. Safe Demo Withdrawal Requests (/withdrawal_requests): enforces >= ₹200 minimum, <= balanceCents, rejects banking/UPI PII keys, and allows Admin visibility", async () => {
+test("7. Fixed-Denomination Withdrawals & Gift Cards: immediate atomic coin deduction, unique gift codes, single atomic refund, and owner-only privacy", async () => {
   const ts = nowTimestamp();
 
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
+    await db.collection("users").doc(ADMIN_UID).set({
+      userId: ADMIN_UID,
+      email: ADMIN_EMAIL,
+      displayName: "Admin",
+      role: "admin",
+      approvalStatus: "approved",
+      balanceCents: 0,
+      balanceCoins: 0,
+      eligibleCoins: 0,
+      promotionalCoins: 0,
+      completedTasksCount: 0,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
     await db.collection("users").doc(ALICE_UID).set({
       userId: ALICE_UID,
       email: ALICE_EMAIL,
       displayName: "Alice",
       role: "user",
       approvalStatus: "approved",
-      balanceCents: 35000, // ₹350.00 available balance
+      balanceCents: 60000, // ₹600 = 75,000 eligible coins
+      balanceCoins: 75000,
+      eligibleCoins: 75000,
+      promotionalCoins: 0,
       completedTasksCount: 3,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("users").doc(BOB_UID).set({
+      userId: BOB_UID,
+      email: BOB_EMAIL,
+      displayName: "Bob",
+      role: "user",
+      approvalStatus: "approved",
+      balanceCents: 0,
+      balanceCoins: 0,
+      eligibleCoins: 0,
+      promotionalCoins: 0,
+      completedTasksCount: 0,
       assignedTaskId: "",
       createdAt: ts,
       updatedAt: ts,
@@ -827,6 +861,13 @@ test("7. Safe Demo Withdrawal Requests (/withdrawal_requests): enforces >= ₹20
     })
     .firestore();
 
+  const bobDb = testEnv
+    .authenticatedContext(BOB_UID, {
+      email: BOB_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
   const adminDb = testEnv
     .authenticatedContext(ADMIN_UID, {
       email: ADMIN_EMAIL,
@@ -834,82 +875,766 @@ test("7. Safe Demo Withdrawal Requests (/withdrawal_requests): enforces >= ₹20
     })
     .firestore();
 
-  // 1. Below ₹200 minimum (15000 paise = ₹150.00 < 20000) -> MUST FAIL
+  // 1. Non-admin CANNOT modify /app_config/withdrawal_availability; Admin CAN
   await assertFails(
-    aliceDb.collection("withdrawal_requests").doc("req_below_min").set({
-      requestId: "req_below_min",
+    aliceDb.collection("app_config").doc("withdrawal_availability").set({
+      upiEnabled: false,
+      updatedAt: ts,
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("app_config").doc("withdrawal_availability").set({
+      upiEnabled: true,
+      amazonEnabled: true,
+      googlePlayEnabled: true,
+      flipkartEnabled: true,
+      updatedAt: ts,
+    })
+  );
+  await assertSucceeds(aliceDb.collection("app_config").doc("withdrawal_availability").get());
+
+  // 2. Unapproved / mismatched denomination (UPI ₹200 with wrong coins 25000 instead of 33000) -> MUST FAIL
+  const badDenomId = "req_bad_denom";
+  const badBatch = aliceDb.batch();
+  badBatch.set(aliceDb.collection("withdrawal_requests").doc(badDenomId), {
+    requestId: badDenomId,
+    userId: ALICE_UID,
+    userName: "Alice",
+    method: "UPI",
+    amountRupees: 200,
+    amountCents: 20000,
+    amountCoins: 25000,
+    upiId: "alice@upi",
+    status: "SUBMITTED",
+    statusNote: "",
+    adminActionBy: "",
+    paymentReference: "",
+    giftCode: "",
+    giftCodeHash: "",
+    coinsDeducted: true,
+    coinsRefunded: false,
+    deductedBalanceCoins: 25000,
+    deductedEligibleCoins: 25000,
+    deductedPromotionalCoins: 0,
+    deductedBalanceCents: 20000,
+    idempotencyKey: "idem_bad_1",
+    isDemo: false,
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  badBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    balanceCoins: 50000,
+    eligibleCoins: 50000,
+    promotionalCoins: 0,
+    balanceCents: 40000,
+    lastWithdrawalRequestId: badDenomId,
+    updatedAt: ts,
+  });
+  badBatch.set(aliceDb.collection("transactions").doc(`wd_debit_${badDenomId}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "WITHDRAWAL_DEBIT",
+    title: "UPI Withdrawal (₹200)",
+    amountCents: 20000,
+    amountCoins: 25000,
+    status: "DEBITED",
+    referenceId: badDenomId,
+    createdAt: ts,
+  });
+  await assertFails(badBatch.commit());
+
+  // 3. Creating withdrawal request WITHOUT deducting user's coins -> MUST FAIL
+  await assertFails(
+    aliceDb.collection("withdrawal_requests").doc("req_no_deduct").set({
+      requestId: "req_no_deduct",
       userId: ALICE_UID,
       userName: "Alice",
+      method: "UPI",
+      amountRupees: 200,
+      amountCents: 20000,
+      amountCoins: 33000,
+      upiId: "alice@upi",
+      status: "SUBMITTED",
+      statusNote: "",
+      adminActionBy: "",
+      paymentReference: "",
+      giftCode: "",
+      giftCodeHash: "",
+      coinsDeducted: true,
+      coinsRefunded: false,
+      deductedBalanceCoins: 33000,
+      deductedEligibleCoins: 33000,
+      deductedPromotionalCoins: 0,
+      deductedBalanceCents: 26400,
+      idempotencyKey: "idem_no_deduct",
+      isDemo: false,
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+
+  // 4. Valid atomic Amazon Gift Card ₹150 (33,000 Coins) submission -> MUST SUCCEED
+  // 75,000 eligible - 33,000 = 42,000 remaining; floor(33000*100/125) = 26400 paise -> 60000 - 26400 = 33600
+  const gcReqId = "req_gc_150";
+  const gcBatch = aliceDb.batch();
+  gcBatch.set(aliceDb.collection("withdrawal_requests").doc(gcReqId), {
+    requestId: gcReqId,
+    userId: ALICE_UID,
+    userName: "Alice",
+    method: "AMAZON_GIFT_CARD",
+    amountRupees: 150,
+    amountCents: 15000,
+    amountCoins: 33000,
+    upiId: "",
+    status: "SUBMITTED",
+    statusNote: "",
+    adminActionBy: "",
+    paymentReference: "",
+    giftCode: "",
+    giftCodeHash: "",
+    coinsDeducted: true,
+    coinsRefunded: false,
+    deductedBalanceCoins: 33000,
+    deductedEligibleCoins: 33000,
+    deductedPromotionalCoins: 0,
+    deductedBalanceCents: 26400,
+    idempotencyKey: gcReqId,
+    isDemo: false,
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  gcBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    balanceCoins: 42000,
+    eligibleCoins: 42000,
+    promotionalCoins: 0,
+    balanceCents: 33600,
+    lastWithdrawalRequestId: gcReqId,
+    updatedAt: ts,
+  });
+  gcBatch.set(aliceDb.collection("transactions").doc(`wd_debit_${gcReqId}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "WITHDRAWAL_DEBIT",
+    title: "Amazon Gift Card (₹150)",
+    amountCents: 15000,
+    amountCoins: 33000,
+    status: "DEBITED",
+    referenceId: gcReqId,
+    createdAt: ts,
+  });
+  gcBatch.set(aliceDb.collection("admin_notifications").doc(`admin_wd_${gcReqId}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    title: "New Withdrawal Request",
+    body: "Alice requested Amazon Gift Card ₹150",
+    type: "WITHDRAWAL_REQUEST",
+    referenceId: gcReqId,
+    isRead: false,
+    createdAt: ts,
+  });
+  await assertSucceeds(gcBatch.commit());
+
+  // 5. Cross-user privacy: Bob CANNOT read Alice's withdrawal request
+  await assertFails(bobDb.collection("withdrawal_requests").doc(gcReqId).get());
+
+  // 6. Admin accepts request -> UNDER_REVIEW without modifying coins -> MUST SUCCEED
+  await assertSucceeds(
+    adminDb.collection("withdrawal_requests").doc(gcReqId).update({
+      status: "UNDER_REVIEW",
+      statusNote: "Accepted for manual review",
+      adminActionBy: ADMIN_UID,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
+    })
+  );
+
+  // 7. Admin fulfills Gift Card with unique codeHash -> MUST SUCCEED
+  const codeHash = crypto.createHash("sha256").update("AMZN-TEST-9988-7766").digest("hex");
+  const fulfillBatch = adminDb.batch();
+  fulfillBatch.set(adminDb.collection("used_gift_codes").doc(codeHash), {
+    codeHash,
+    requestId: gcReqId,
+    method: "AMAZON_GIFT_CARD",
+    amountRupees: 150,
+    assignedBy: ADMIN_UID,
+    assignedAt: new Date(),
+  });
+  fulfillBatch.update(adminDb.collection("withdrawal_requests").doc(gcReqId), {
+    status: "COMPLETED",
+    statusNote: "Delivered",
+    adminActionBy: ADMIN_UID,
+    giftCode: "AMZN-TEST-9988-7766",
+    giftCodeHash: codeHash,
+    giftCodeAssignedAt: new Date(),
+    completedAt: new Date(),
+    updatedAt: new Date(),
+  });
+  await assertSucceeds(fulfillBatch.commit());
+
+  // 8. Admin attempting to mutate terminal COMPLETED request -> MUST FAIL
+  await assertFails(
+    adminDb.collection("withdrawal_requests").doc(gcReqId).update({
+      status: "REJECTED",
+      statusNote: "Cannot reject completed",
+      adminActionBy: ADMIN_UID,
+      coinsRefunded: true,
+      rejectedAt: new Date(),
+      updatedAt: new Date(),
+    })
+  );
+
+  // 9. Alice submits a UPI ₹200 (33,000 Coins) request using remaining 42,000 Coins -> MUST SUCCEED
+  const upiReqId = "req_upi_200";
+  const upiBatch = aliceDb.batch();
+  upiBatch.set(aliceDb.collection("withdrawal_requests").doc(upiReqId), {
+    requestId: upiReqId,
+    userId: ALICE_UID,
+    userName: "Alice",
+    method: "UPI",
+    amountRupees: 200,
+    amountCents: 20000,
+    amountCoins: 33000,
+    upiId: "alice@upi",
+    status: "SUBMITTED",
+    statusNote: "",
+    adminActionBy: "",
+    paymentReference: "",
+    giftCode: "",
+    giftCodeHash: "",
+    coinsDeducted: true,
+    coinsRefunded: false,
+    deductedBalanceCoins: 33000,
+    deductedEligibleCoins: 33000,
+    deductedPromotionalCoins: 0,
+    deductedBalanceCents: 26400,
+    idempotencyKey: upiReqId,
+    isDemo: false,
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  upiBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    balanceCoins: 9000,
+    eligibleCoins: 9000,
+    promotionalCoins: 0,
+    balanceCents: 7200,
+    lastWithdrawalRequestId: upiReqId,
+    updatedAt: ts,
+  });
+  upiBatch.set(aliceDb.collection("transactions").doc(`wd_debit_${upiReqId}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "WITHDRAWAL_DEBIT",
+    title: "UPI Withdrawal (₹200)",
+    amountCents: 20000,
+    amountCoins: 33000,
+    status: "DEBITED",
+    referenceId: upiReqId,
+    createdAt: ts,
+  });
+  await assertSucceeds(upiBatch.commit());
+
+  // 10. Admin rejects UPI request and atomically refunds coins ONCE -> MUST SUCCEED
+  const refundTs = new Date();
+  const rejectBatch = adminDb.batch();
+  rejectBatch.update(adminDb.collection("withdrawal_requests").doc(upiReqId), {
+    status: "REJECTED",
+    statusNote: "Invalid UPI handle",
+    adminActionBy: ADMIN_UID,
+    coinsRefunded: true,
+    rejectedAt: refundTs,
+    updatedAt: refundTs,
+  });
+  rejectBatch.update(adminDb.collection("users").doc(ALICE_UID), {
+    balanceCoins: 42000,
+    eligibleCoins: 42000,
+    promotionalCoins: 0,
+    balanceCents: 33600,
+    lastRefundedWithdrawalId: upiReqId,
+    updatedAt: refundTs,
+  });
+  rejectBatch.set(adminDb.collection("transactions").doc(`wd_refund_${upiReqId}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "WITHDRAWAL_REFUND",
+    title: "Withdrawal Refund (₹200)",
+    amountCents: 20000,
+    amountCoins: 33000,
+    status: "REFUNDED",
+    referenceId: upiReqId,
+    createdAt: refundTs,
+  });
+  await assertSucceeds(rejectBatch.commit());
+
+  // 11. Attempting a second refund on an already-REJECTED request -> MUST FAIL
+  const doubleRefundBatch = adminDb.batch();
+  doubleRefundBatch.update(adminDb.collection("withdrawal_requests").doc(upiReqId), {
+    status: "REJECTED",
+    statusNote: "Second refund attempt",
+    adminActionBy: ADMIN_UID,
+    coinsRefunded: true,
+    rejectedAt: new Date(),
+    updatedAt: new Date(),
+  });
+  doubleRefundBatch.update(adminDb.collection("users").doc(ALICE_UID), {
+    balanceCoins: 75000,
+    eligibleCoins: 75000,
+    promotionalCoins: 0,
+    balanceCents: 60000,
+    lastRefundedWithdrawalId: upiReqId,
+    updatedAt: new Date(),
+  });
+  await assertFails(doubleRefundBatch.commit());
+
+  // 12. Disabled denomination in /app_config/withdrawal_availability blocks modified-client withdrawal -> MUST FAIL
+  await assertSucceeds(
+    adminDb.collection("app_config").doc("withdrawal_availability").set({
+      upiEnabled: true,
+      amazonEnabled: true,
+      googlePlayEnabled: true,
+      flipkartEnabled: true,
+      upiDenominationsEnabled: { "200": false, "500": true },
+      updatedAt: new Date(),
+    })
+  );
+  const blockedReqId = "req_blocked_denom";
+  const blockedBatch = aliceDb.batch();
+  blockedBatch.set(aliceDb.collection("withdrawal_requests").doc(blockedReqId), {
+    requestId: blockedReqId,
+    userId: ALICE_UID,
+    userName: "Alice",
+    method: "UPI",
+    amountRupees: 200,
+    amountCents: 20000,
+    amountCoins: 33000,
+    upiId: "alice@upi",
+    status: "SUBMITTED",
+    statusNote: "",
+    adminActionBy: "",
+    paymentReference: "",
+    giftCode: "",
+    giftCodeHash: "",
+    coinsDeducted: true,
+    coinsRefunded: false,
+    deductedBalanceCoins: 33000,
+    deductedEligibleCoins: 33000,
+    deductedPromotionalCoins: 0,
+    deductedBalanceCents: 26400,
+    idempotencyKey: blockedReqId,
+    isDemo: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  blockedBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    balanceCoins: 9000,
+    eligibleCoins: 9000,
+    promotionalCoins: 0,
+    balanceCents: 7200,
+    lastWithdrawalRequestId: blockedReqId,
+    updatedAt: new Date(),
+  });
+  blockedBatch.set(aliceDb.collection("transactions").doc(`wd_debit_${blockedReqId}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "WITHDRAWAL_DEBIT",
+    title: "UPI Withdrawal (₹200)",
+    amountCents: 20000,
+    amountCoins: 33000,
+    status: "DEBITED",
+    referenceId: blockedReqId,
+    createdAt: new Date(),
+  });
+  await assertFails(blockedBatch.commit());
+
+  // Re-enable UPI 200 for subsequent checks
+  await assertSucceeds(
+    adminDb.collection("app_config").doc("withdrawal_availability").set({
+      upiEnabled: true,
+      amazonEnabled: true,
+      googlePlayEnabled: true,
+      flipkartEnabled: true,
+      upiDenominationsEnabled: { "200": true, "500": true },
+      updatedAt: new Date(),
+    })
+  );
+
+  // 13. Bucket-skip exploit (claiming deductedEligibleCoins: 0 when Alice has 42,000 eligibleCoins) -> MUST FAIL
+  const skipReqId = "req_bucket_skip";
+  const skipBatch = aliceDb.batch();
+  skipBatch.set(aliceDb.collection("withdrawal_requests").doc(skipReqId), {
+    requestId: skipReqId,
+    userId: ALICE_UID,
+    userName: "Alice",
+    method: "UPI",
+    amountRupees: 200,
+    amountCents: 20000,
+    amountCoins: 33000,
+    upiId: "alice@upi",
+    status: "SUBMITTED",
+    statusNote: "",
+    adminActionBy: "",
+    paymentReference: "",
+    giftCode: "",
+    giftCodeHash: "",
+    coinsDeducted: true,
+    coinsRefunded: false,
+    deductedBalanceCoins: 33000,
+    deductedEligibleCoins: 0,
+    deductedPromotionalCoins: 0,
+    deductedBalanceCents: 0,
+    idempotencyKey: skipReqId,
+    isDemo: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  skipBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    balanceCoins: 9000,
+    eligibleCoins: 42000,
+    promotionalCoins: 0,
+    balanceCents: 33600,
+    lastWithdrawalRequestId: skipReqId,
+    updatedAt: new Date(),
+  });
+  skipBatch.set(aliceDb.collection("transactions").doc(`wd_debit_${skipReqId}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "WITHDRAWAL_DEBIT",
+    title: "UPI Withdrawal (₹200)",
+    amountCents: 20000,
+    amountCoins: 33000,
+    status: "DEBITED",
+    referenceId: skipReqId,
+    createdAt: new Date(),
+  });
+  await assertFails(skipBatch.commit());
+
+  // 14. Cross-user notification spoofing (Bob writing into Alice's notifications) -> MUST FAIL
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("notifications").doc("spoof_notif").set({
+      userId: ALICE_UID,
+      title: "Fake Notification",
+      body: "Spoofed message",
+      type: "WITHDRAWAL",
+      referenceId: upiReqId,
+      isRead: false,
+      createdAt: new Date(),
+    })
+  );
+
+  // 15. Forged standalone /admin_notifications create without an atomic withdrawal request -> MUST FAIL
+  await assertFails(
+    bobDb.collection("admin_notifications").doc("forged_admin_alert").set({
+      userId: BOB_UID,
+      userName: "Bob",
+      title: "Fake Withdrawal Alert",
+      body: "Forged",
+      type: "WITHDRAWAL_REQUEST",
+      referenceId: "nonexistent_req",
+      isRead: false,
+      createdAt: new Date(),
+    })
+  );
+
+  // 16. Client attempting direct balanceCoins inflation without promotionalCoins change -> MUST FAIL
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      balanceCoins: 999999,
+      updatedAt: new Date(),
+    })
+  );
+
+  // 17. Insufficient balance (Alice has 42,000 Coins, tries UPI ₹500 = 82,500 Coins) -> MUST FAIL
+  const insuffReqId = "req_insuff_500";
+  const insuffBatch = aliceDb.batch();
+  insuffBatch.set(aliceDb.collection("withdrawal_requests").doc(insuffReqId), {
+    requestId: insuffReqId,
+    userId: ALICE_UID,
+    userName: "Alice",
+    method: "UPI",
+    amountRupees: 500,
+    amountCents: 50000,
+    amountCoins: 82500,
+    upiId: "alice@upi",
+    status: "SUBMITTED",
+    statusNote: "",
+    adminActionBy: "",
+    paymentReference: "",
+    giftCode: "",
+    giftCodeHash: "",
+    coinsDeducted: true,
+    coinsRefunded: false,
+    deductedBalanceCoins: 82500,
+    deductedEligibleCoins: 42000,
+    deductedPromotionalCoins: 0,
+    deductedBalanceCents: 33600,
+    idempotencyKey: insuffReqId,
+    isDemo: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  insuffBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    balanceCoins: -40500,
+    eligibleCoins: 0,
+    promotionalCoins: 0,
+    balanceCents: 0,
+    lastWithdrawalRequestId: insuffReqId,
+    updatedAt: new Date(),
+  });
+  insuffBatch.set(aliceDb.collection("transactions").doc(`wd_debit_${insuffReqId}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "WITHDRAWAL_DEBIT",
+    title: "UPI Withdrawal (₹500)",
+    amountCents: 50000,
+    amountCoins: 82500,
+    status: "DEBITED",
+    referenceId: insuffReqId,
+    createdAt: new Date(),
+  });
+  await assertFails(insuffBatch.commit());
+
+  // 18. Under-deduction on users/{uid} (request 33,000 Coins while deducting only 1,000 from user) -> MUST FAIL
+  const underDeductId = "req_under_deduct";
+  const underBatch = aliceDb.batch();
+  underBatch.set(aliceDb.collection("withdrawal_requests").doc(underDeductId), {
+    requestId: underDeductId,
+    userId: ALICE_UID,
+    userName: "Alice",
+    method: "UPI",
+    amountRupees: 200,
+    amountCents: 20000,
+    amountCoins: 33000,
+    upiId: "alice@upi",
+    status: "SUBMITTED",
+    statusNote: "",
+    adminActionBy: "",
+    paymentReference: "",
+    giftCode: "",
+    giftCodeHash: "",
+    coinsDeducted: true,
+    coinsRefunded: false,
+    deductedBalanceCoins: 33000,
+    deductedEligibleCoins: 33000,
+    deductedPromotionalCoins: 0,
+    deductedBalanceCents: 26400,
+    idempotencyKey: underDeductId,
+    isDemo: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  underBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    balanceCoins: 41000,
+    eligibleCoins: 41000,
+    promotionalCoins: 0,
+    balanceCents: 32800,
+    lastWithdrawalRequestId: underDeductId,
+    updatedAt: new Date(),
+  });
+  underBatch.set(aliceDb.collection("transactions").doc(`wd_debit_${underDeductId}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "WITHDRAWAL_DEBIT",
+    title: "UPI Withdrawal (₹200)",
+    amountCents: 20000,
+    amountCoins: 33000,
+    status: "DEBITED",
+    referenceId: underDeductId,
+    createdAt: new Date(),
+  });
+  await assertFails(underBatch.commit());
+
+  // 19. Duplicate requestId reuse AND mismatched idempotencyKey != requestId -> MUST FAIL
+  await assertFails(
+    aliceDb.collection("withdrawal_requests").doc(gcReqId).set({
+      requestId: gcReqId,
+      userId: ALICE_UID,
+      userName: "Alice",
+      method: "AMAZON_GIFT_CARD",
+      amountRupees: 150,
       amountCents: 15000,
-      method: "Bank Account",
-      status: "pending_demo",
-      isDemo: true,
-      createdAt: ts,
+      amountCoins: 33000,
+      upiId: "",
+      status: "SUBMITTED",
+      statusNote: "",
+      adminActionBy: "",
+      paymentReference: "",
+      giftCode: "",
+      giftCodeHash: "",
+      coinsDeducted: true,
+      coinsRefunded: false,
+      deductedBalanceCoins: 33000,
+      deductedEligibleCoins: 33000,
+      deductedPromotionalCoins: 0,
+      deductedBalanceCents: 26400,
+      idempotencyKey: gcReqId,
+      isDemo: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
     })
   );
+  const mismatchId = "req_mismatch_idem";
+  const mismatchBatch = aliceDb.batch();
+  mismatchBatch.set(aliceDb.collection("withdrawal_requests").doc(mismatchId), {
+    requestId: mismatchId,
+    userId: ALICE_UID,
+    userName: "Alice",
+    method: "UPI",
+    amountRupees: 200,
+    amountCents: 20000,
+    amountCoins: 33000,
+    upiId: "alice@upi",
+    status: "SUBMITTED",
+    statusNote: "",
+    adminActionBy: "",
+    paymentReference: "",
+    giftCode: "",
+    giftCodeHash: "",
+    coinsDeducted: true,
+    coinsRefunded: false,
+    deductedBalanceCoins: 33000,
+    deductedEligibleCoins: 33000,
+    deductedPromotionalCoins: 0,
+    deductedBalanceCents: 26400,
+    idempotencyKey: "different_key",
+    isDemo: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  mismatchBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    balanceCoins: 9000,
+    eligibleCoins: 9000,
+    promotionalCoins: 0,
+    balanceCents: 7200,
+    lastWithdrawalRequestId: mismatchId,
+    updatedAt: new Date(),
+  });
+  mismatchBatch.set(aliceDb.collection("transactions").doc(`wd_debit_${mismatchId}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "WITHDRAWAL_DEBIT",
+    title: "UPI Withdrawal (₹200)",
+    amountCents: 20000,
+    amountCoins: 33000,
+    status: "DEBITED",
+    referenceId: mismatchId,
+    createdAt: new Date(),
+  });
+  await assertFails(mismatchBatch.commit());
 
-  // 2. Exceeding available wallet balance (50000 paise = ₹500.00 > ₹350.00) -> MUST FAIL
+  // 20. Owner-only giftCode privacy, blocked cross-user history list, & Admin-only /used_gift_codes
+  const ownerGcSnap = await assertSucceeds(
+    aliceDb.collection("withdrawal_requests").doc(gcReqId).get()
+  );
+  if (ownerGcSnap.data().giftCode !== "AMZN-TEST-9988-7766") {
+    throw new Error("Expected owner to read their own completed giftCode");
+  }
+  await assertFails(bobDb.collection("withdrawal_requests").get());
+  await assertFails(aliceDb.collection("used_gift_codes").doc(codeHash).get());
+  await assertFails(bobDb.collection("used_gift_codes").get());
+
+  // 21. Valid second Gift Card request so we can test user completion forgery, duplicate gift code, and monotonic Admin status
+  const gcReqId2 = "req_gc_150_second";
+  const gcBatch2 = aliceDb.batch();
+  gcBatch2.set(aliceDb.collection("withdrawal_requests").doc(gcReqId2), {
+    requestId: gcReqId2,
+    userId: ALICE_UID,
+    userName: "Alice",
+    method: "AMAZON_GIFT_CARD",
+    amountRupees: 150,
+    amountCents: 15000,
+    amountCoins: 33000,
+    upiId: "",
+    status: "SUBMITTED",
+    statusNote: "",
+    adminActionBy: "",
+    paymentReference: "",
+    giftCode: "",
+    giftCodeHash: "",
+    coinsDeducted: true,
+    coinsRefunded: false,
+    deductedBalanceCoins: 33000,
+    deductedEligibleCoins: 33000,
+    deductedPromotionalCoins: 0,
+    deductedBalanceCents: 26400,
+    idempotencyKey: gcReqId2,
+    isDemo: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  gcBatch2.update(aliceDb.collection("users").doc(ALICE_UID), {
+    balanceCoins: 9000,
+    eligibleCoins: 9000,
+    promotionalCoins: 0,
+    balanceCents: 7200,
+    lastWithdrawalRequestId: gcReqId2,
+    updatedAt: new Date(),
+  });
+  gcBatch2.set(aliceDb.collection("transactions").doc(`wd_debit_${gcReqId2}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "WITHDRAWAL_DEBIT",
+    title: "Amazon Gift Card (₹150)",
+    amountCents: 15000,
+    amountCoins: 33000,
+    status: "DEBITED",
+    referenceId: gcReqId2,
+    createdAt: new Date(),
+  });
+  await assertSucceeds(gcBatch2.commit());
+
+  // Ordinary user CANNOT mark their own request UNDER_REVIEW or COMPLETED (Gift Card or UPI forgery) -> MUST FAIL
   await assertFails(
-    aliceDb.collection("withdrawal_requests").doc("req_exceeds_bal").set({
-      requestId: "req_exceeds_bal",
-      userId: ALICE_UID,
-      userName: "Alice",
-      amountCents: 50000,
-      method: "UPI ID",
-      status: "pending_demo",
-      isDemo: true,
-      createdAt: ts,
+    aliceDb.collection("withdrawal_requests").doc(gcReqId2).update({
+      status: "COMPLETED",
+      giftCode: "FORGED-CODE-1111",
+      updatedAt: new Date(),
     })
   );
-
-  // 3. Attempting to store real banking or UPI details (accountNumber, ifscCode, upiId) -> MUST FAIL
   await assertFails(
-    aliceDb.collection("withdrawal_requests").doc("req_with_pii").set({
-      requestId: "req_with_pii",
-      userId: ALICE_UID,
-      userName: "Alice",
-      amountCents: 20000,
-      method: "Bank Account",
-      accountNumber: "123456789012",
-      ifscCode: "SBIN0001234",
-      status: "pending_demo",
-      isDemo: true,
-      createdAt: ts,
+    bobDb.collection("withdrawal_requests").doc(gcReqId2).update({
+      status: "UNDER_REVIEW",
+      updatedAt: new Date(),
     })
   );
 
-  // 4. Valid Demo Withdrawal Request (₹250.00 = 25000 paise via Bank Account, zero PII) -> MUST SUCCEED
+  // 22. Duplicate gift-code reuse by Admin AND backward PROCESSING -> UNDER_REVIEW transition -> MUST FAIL
+  const dupCodeBatch = adminDb.batch();
+  dupCodeBatch.set(adminDb.collection("used_gift_codes").doc(codeHash), {
+    codeHash,
+    requestId: gcReqId2,
+    method: "AMAZON_GIFT_CARD",
+    amountRupees: 150,
+    assignedBy: ADMIN_UID,
+    assignedAt: new Date(),
+  });
+  dupCodeBatch.update(adminDb.collection("withdrawal_requests").doc(gcReqId2), {
+    status: "COMPLETED",
+    statusNote: "Reused code",
+    adminActionBy: ADMIN_UID,
+    giftCode: "AMZN-TEST-9988-7766",
+    giftCodeHash: codeHash,
+    giftCodeAssignedAt: new Date(),
+    completedAt: new Date(),
+    updatedAt: new Date(),
+  });
+  await assertFails(dupCodeBatch.commit());
+
   await assertSucceeds(
-    aliceDb.collection("withdrawal_requests").doc("req_valid_bank").set({
-      requestId: "req_valid_bank",
-      userId: ALICE_UID,
-      userName: "Alice",
-      amountCents: 25000,
-      method: "Bank Account",
-      status: "pending_demo",
-      isDemo: true,
-      createdAt: ts,
+    adminDb.collection("withdrawal_requests").doc(gcReqId2).update({
+      status: "PROCESSING",
+      statusNote: "Processing gift card",
+      adminActionBy: ADMIN_UID,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
     })
   );
-
-  // 5. Valid Demo Withdrawal Request (₹200.00 = 20000 paise via UPI ID, zero PII) -> MUST SUCCEED
-  await assertSucceeds(
-    aliceDb.collection("withdrawal_requests").doc("req_valid_upi").set({
-      requestId: "req_valid_upi",
-      userId: ALICE_UID,
-      userName: "Alice",
-      amountCents: 20000,
-      method: "UPI ID",
-      status: "pending_demo",
-      isDemo: true,
-      createdAt: ts,
+  await assertFails(
+    adminDb.collection("withdrawal_requests").doc(gcReqId2).update({
+      status: "UNDER_REVIEW",
+      statusNote: "Backward transition",
+      adminActionBy: ADMIN_UID,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
     })
-  );
-
-  // 6. Admin can read and list all demo withdrawal requests -> MUST SUCCEED
-  await assertSucceeds(adminDb.collection("withdrawal_requests").get());
-  await assertSucceeds(
-    adminDb.collection("withdrawal_requests").doc("req_valid_bank").get()
   );
 });
 
@@ -1468,7 +2193,6 @@ test("11. Phase 1 Leaderboard Permissions & Privacy: non-admin cannot list /user
 });
 
 test("12. Phase 1 Server-Side Daily Check-In & Day 7 Reward Calculation + Unity S2S Signature Verification", async () => {
-  const crypto = require("node:crypto");
   const {
     _verifyUnityS2SSignature,
     _getDailyCheckInRewardCents,

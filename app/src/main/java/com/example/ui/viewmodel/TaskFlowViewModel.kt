@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
+import com.example.data.model.AdminNotificationItem
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.CampaignItem
 import com.example.data.model.DailyCheckInConstants
@@ -30,12 +31,17 @@ import com.example.data.model.UserTaskProgress
 import com.example.data.model.UpdateDownloadProgress
 import com.example.data.model.UpdateDownloadStatus
 import com.example.data.model.WatchStats
+import com.example.data.model.WithdrawalAvailabilityConfig
+import com.example.data.model.WithdrawalCatalog
 import com.example.data.model.WithdrawalMethod
+import com.example.data.model.WithdrawalMethodType
+import com.example.data.model.WithdrawalStatus
 import com.example.data.model.calculateDailyCheckInState
 import com.example.data.model.centsToCoins
 import com.example.data.model.coinsToCents
 import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
+import com.example.data.model.getEffectiveBalanceCoins
 import com.example.data.model.getEligibleWithdrawalCoins
 import com.example.data.model.getTodayDateKey
 import com.example.data.model.isValidImageUrlOrDataUri
@@ -95,6 +101,17 @@ enum class AdminTab {
   // Retained for backward compatibility with existing tests & deep links
   SUBMISSIONS,
   APPS
+}
+
+enum class WithdrawalScreenRoute {
+  NONE,
+  MAIN,
+  UPI,
+  AMAZON_GIFT_CARD,
+  GOOGLE_PLAY_GIFT_CARD,
+  FLIPKART_GIFT_CARD,
+  CONFIRMATION,
+  HISTORY
 }
 
 class TaskFlowViewModel(
@@ -356,6 +373,25 @@ class TaskFlowViewModel(
       .catch { emit(emptyList()) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+  val withdrawalAvailabilityState: StateFlow<WithdrawalAvailabilityConfig> =
+    repository
+      .observeWithdrawalAvailability()
+      .catch { emit(WithdrawalAvailabilityConfig()) }
+      .stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        WithdrawalAvailabilityConfig()
+      )
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  val adminNotificationsState: StateFlow<List<AdminNotificationItem>> =
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        repository.observeAdminNotifications(authorized)
+      }
+      .catch { emit(emptyList()) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
   @OptIn(ExperimentalCoroutinesApi::class)
   val selectedTaskProgressState: StateFlow<UserTaskProgress?> =
     _selectedTaskId
@@ -491,6 +527,10 @@ class TaskFlowViewModel(
     if (tab != UserTab.PROFILE) {
       _profileSubScreen.value = ProfileSubScreen.MAIN
     }
+    if (tab != UserTab.WALLET) {
+      _withdrawalRoute.value = WithdrawalScreenRoute.NONE
+      _openWithdrawOnWalletNavigation.value = false
+    }
   }
 
   fun setProfileSubScreen(subScreen: ProfileSubScreen) {
@@ -543,102 +583,233 @@ class TaskFlowViewModel(
     }
   }
 
-  fun submitDemoWithdrawal(
-    amountInrInput: String,
+  private var pendingWithdrawalAttemptSignature: String? = null
+  private var pendingWithdrawalIdempotencyKey: String? = null
+
+  private fun clearPendingWithdrawalAttempt() {
+    pendingWithdrawalAttemptSignature = null
+    pendingWithdrawalIdempotencyKey = null
+  }
+
+  fun submitWithdrawalRedemption(
     method: String,
-    accountHolderName: String = "",
-    bankName: String = "",
-    accountNumber: String = "",
-    ifscCode: String = "",
+    amountRupees: Long,
     upiId: String = "",
-    onSuccess: () -> Unit = {}
+    onSuccess: (DemoWithdrawalRequest) -> Unit = {}
   ) {
+    if (_isBusy.value) return
     _withdrawalValidationError.value = null
-    val cleanedMethod = method.trim()
-    if (cleanedMethod !in WithdrawalMethod.ALL) {
-      val msg = "Please select a withdrawal method (Bank Account or UPI ID)."
-      _withdrawalValidationError.value = msg
+    val normalizedMethod = method.trim().uppercase(java.util.Locale.US)
+    val cleanedUpi = upiId.trim()
+    val requiredCoins = WithdrawalCatalog.resolveRequiredCoins(normalizedMethod, amountRupees)
+    if (requiredCoins == null || requiredCoins <= 0L) {
+      _withdrawalValidationError.value = "Please select a valid denomination."
       return
     }
-
-    if (cleanedMethod == WithdrawalMethod.BANK_ACCOUNT) {
-      if (accountHolderName.isBlank() ||
-        bankName.isBlank() ||
-        accountNumber.isBlank() ||
-        ifscCode.isBlank()
-      ) {
-        val msg =
-          "Please fill in Account Holder Name, Bank Name, Account Number, and IFSC Code."
-        _withdrawalValidationError.value = msg
-        return
-      }
-    } else if (cleanedMethod == WithdrawalMethod.UPI_ID) {
-      if (upiId.isBlank() || !upiId.contains("@")) {
-        val msg = "Please enter a valid UPI ID (e.g., name@upi)."
-        _withdrawalValidationError.value = msg
+    if (normalizedMethod == WithdrawalMethodType.UPI) {
+      if (cleanedUpi.isEmpty() || !cleanedUpi.contains("@") || cleanedUpi.contains(" ")) {
+        _withdrawalValidationError.value = "Please enter a valid UPI ID (e.g., name@upi)."
         return
       }
     }
 
-    val cleanedInput = amountInrInput.trim().replace(",", "")
-    val parsedValue = cleanedInput.toDoubleOrNull()
-    if (parsedValue == null || parsedValue <= 0.0) {
-      val msg = "Please enter a valid withdrawal amount in Coins (Minimum: 25,000 Coins)."
-      _withdrawalValidationError.value = msg
-      return
-    }
-
-    // Support both Coin input (>= 25,000 Coins) and legacy INR test input (200..24999)
-    val amountCents =
-      if (parsedValue >= MIN_WITHDRAWAL_COINS.toDouble()) {
-        coinsToCents(parsedValue.roundToLong())
-      } else {
-        (parsedValue * 100.0).roundToLong()
-      }
-    val requestedCoins = centsToCoins(amountCents)
-
-    if (amountCents < MIN_WITHDRAWAL_CENTS) {
-      val msg = "Minimum withdrawal amount is 25,000 Coins."
-      _withdrawalValidationError.value = msg
+    val avail = withdrawalAvailabilityState.value
+    if (!avail.isDenominationAvailable(normalizedMethod, amountRupees)) {
+      _withdrawalValidationError.value = "This option is currently unavailable."
       return
     }
 
     val profile = (userProfileState.value as? UiState.Success)?.data
-    val availableBalanceCents = profile?.balanceCents ?: 0L
-    val availableEligibleCoins = profile?.getEligibleWithdrawalCoins() ?: 0L
-    if (amountCents > availableBalanceCents) {
-      val msg =
-        "Entered amount (${formatCoins(requestedCoins)}) exceeds your eligible withdrawable balance of ${formatCoins(availableEligibleCoins)}."
-      _withdrawalValidationError.value = msg
+    val totalAvailableCoins = profile?.getEffectiveBalanceCoins() ?: 0L
+    if (totalAvailableCoins < requiredCoins) {
+      _withdrawalValidationError.value =
+        "Insufficient balance. You need ${formatCoins(requiredCoins)} (Your balance: ${formatCoins(totalAvailableCoins)})."
       return
     }
 
     val resolvedName =
       profile?.displayName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
+    val signature = "$currentUserId|$normalizedMethod|$amountRupees|$cleanedUpi"
+    val idempotencyKey =
+      if (pendingWithdrawalAttemptSignature == signature && !pendingWithdrawalIdempotencyKey.isNullOrBlank()) {
+        pendingWithdrawalIdempotencyKey!!
+      } else {
+        UUID.randomUUID().toString().replace("-", "").also { generated ->
+          pendingWithdrawalAttemptSignature = signature
+          pendingWithdrawalIdempotencyKey = generated
+        }
+      }
 
-    // Sensitive demo inputs (accountNumber, ifscCode, bankName, upiId) are intentionally NOT
-    // passed to the repository or stored in Firestore.
+    _isBusy.value = true
     viewModelScope.launch {
-      _isBusy.value = true
-      repository
-        .submitDemoWithdrawalRequest(
-          uid = currentUserId,
-          userName = resolvedName,
-          amountCents = amountCents,
-          method = cleanedMethod
-        )
-        .onSuccess {
-          _withdrawalValidationError.value = null
-          _bannerMessage.value =
-            "Withdrawal request of ${formatCoins(requestedCoins)} via $cleanedMethod submitted!"
-          onSuccess()
-        }
-        .onFailure { err ->
-          val msg = err.localizedMessage ?: "Could not submit withdrawal request."
-          _withdrawalValidationError.value = msg
-          _bannerMessage.value = msg
-        }
-      _isBusy.value = false
+      try {
+        repository
+          .submitWithdrawalRedemption(
+            uid = currentUserId,
+            userName = resolvedName,
+            method = normalizedMethod,
+            amountRupees = amountRupees,
+            upiId = cleanedUpi,
+            idempotencyKey = idempotencyKey
+          )
+          .onSuccess { createdRequest ->
+            clearPendingWithdrawalAttempt()
+            _withdrawalValidationError.value = null
+            _lastSubmittedWithdrawal.value = createdRequest
+            _withdrawalRoute.value = WithdrawalScreenRoute.CONFIRMATION
+            _bannerMessage.value = "Request Submitted Successfully!"
+            onSuccess(createdRequest)
+          }
+          .onFailure { err ->
+            val msg = err.localizedMessage ?: "Could not submit withdrawal request."
+            _withdrawalValidationError.value = msg
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun adminAcceptWithdrawal(
+    requestId: String,
+    targetStatus: String = WithdrawalStatus.UNDER_REVIEW,
+    statusNote: String = ""
+  ) {
+    if (!isAdminAuthorized.value || _isBusy.value) return
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .adminAcceptWithdrawalRequest(
+            requestId = requestId,
+            targetStatus = targetStatus,
+            statusNote = statusNote
+          )
+          .onSuccess {
+            _bannerMessage.value =
+              "Request marked as ${WithdrawalStatus.displayLabel(targetStatus)}."
+          }
+          .onFailure { err ->
+            _bannerMessage.value = err.localizedMessage ?: "Failed to update request status."
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun adminSendGiftCardCode(
+    requestId: String,
+    giftCode: String,
+    statusNote: String = "",
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value || _isBusy.value) return
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .adminSendGiftCardCode(
+            requestId = requestId,
+            rawGiftCode = giftCode,
+            statusNote = statusNote
+          )
+          .onSuccess {
+            _bannerMessage.value = "Gift Card code delivered and request completed."
+            onSuccess()
+          }
+          .onFailure { err ->
+            _bannerMessage.value = err.localizedMessage ?: "Failed to deliver Gift Card code."
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun adminCompleteUpiWithdrawal(
+    requestId: String,
+    paymentReference: String = "",
+    statusNote: String = "",
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value || _isBusy.value) return
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .adminCompleteUpiWithdrawal(
+            requestId = requestId,
+            paymentReference = paymentReference,
+            statusNote = statusNote
+          )
+          .onSuccess {
+            _bannerMessage.value = "UPI payout marked as Completed."
+            onSuccess()
+          }
+          .onFailure { err ->
+            _bannerMessage.value = err.localizedMessage ?: "Failed to complete UPI payout."
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun adminRejectWithdrawalAndRefund(
+    requestId: String,
+    rejectionReason: String,
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value || _isBusy.value) return
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .adminRejectWithdrawalAndRefund(
+            requestId = requestId,
+            rejectionReason = rejectionReason
+          )
+          .onSuccess {
+            _bannerMessage.value = "Request rejected and Coins refunded once atomically."
+            onSuccess()
+          }
+          .onFailure { err ->
+            _bannerMessage.value = err.localizedMessage ?: "Failed to reject and refund request."
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun adminUpdateWithdrawalAvailability(
+    config: WithdrawalAvailabilityConfig,
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value || _isBusy.value) return
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .updateWithdrawalAvailabilityConfig(config)
+          .onSuccess {
+            _bannerMessage.value = "Withdrawal availability settings updated."
+            onSuccess()
+          }
+          .onFailure { err ->
+            _bannerMessage.value = err.localizedMessage ?: "Failed to update availability settings."
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun markAdminNotificationRead(notificationId: String) {
+    if (!isAdminAuthorized.value) return
+    viewModelScope.launch {
+      repository.markAdminNotificationRead(notificationId)
     }
   }
 
@@ -1924,8 +2095,48 @@ class TaskFlowViewModel(
   private val _openWithdrawOnWalletNavigation = MutableStateFlow(false)
   val openWithdrawOnWalletNavigation: StateFlow<Boolean> = _openWithdrawOnWalletNavigation.asStateFlow()
 
+  private val _withdrawalRoute = MutableStateFlow(WithdrawalScreenRoute.NONE)
+  val withdrawalRoute: StateFlow<WithdrawalScreenRoute> = _withdrawalRoute.asStateFlow()
+
+  private val _lastSubmittedWithdrawal = MutableStateFlow<DemoWithdrawalRequest?>(null)
+  val lastSubmittedWithdrawal: StateFlow<DemoWithdrawalRequest?> =
+    _lastSubmittedWithdrawal.asStateFlow()
+
   fun setOpenWithdrawOnWalletNavigation(open: Boolean) {
     _openWithdrawOnWalletNavigation.value = open
+    _withdrawalRoute.value =
+      if (open) WithdrawalScreenRoute.MAIN else WithdrawalScreenRoute.NONE
+  }
+
+  fun openWithdrawalMain() {
+    clearPendingWithdrawalAttempt()
+    _withdrawalValidationError.value = null
+    _activeUserTab.value = UserTab.WALLET
+    _openWithdrawOnWalletNavigation.value = true
+    _withdrawalRoute.value = WithdrawalScreenRoute.MAIN
+  }
+
+  fun openWithdrawalHistory() {
+    clearPendingWithdrawalAttempt()
+    _withdrawalValidationError.value = null
+    _activeUserTab.value = UserTab.WALLET
+    _withdrawalRoute.value = WithdrawalScreenRoute.HISTORY
+  }
+
+  fun navigateWithdrawal(route: WithdrawalScreenRoute) {
+    clearPendingWithdrawalAttempt()
+    _withdrawalValidationError.value = null
+    _withdrawalRoute.value = route
+    if (route == WithdrawalScreenRoute.NONE) {
+      _openWithdrawOnWalletNavigation.value = false
+    }
+  }
+
+  fun closeWithdrawalFlow() {
+    clearPendingWithdrawalAttempt()
+    _withdrawalValidationError.value = null
+    _withdrawalRoute.value = WithdrawalScreenRoute.NONE
+    _openWithdrawOnWalletNavigation.value = false
   }
 
   private val _isDailyCheckInScreenVisible = MutableStateFlow(false)

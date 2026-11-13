@@ -206,6 +206,115 @@ object WithdrawalMethod {
   val ALL = listOf(BANK_ACCOUNT, UPI_ID)
 }
 
+object WithdrawalMethodType {
+  const val UPI = "UPI"
+  const val AMAZON_GIFT_CARD = "AMAZON_GIFT_CARD"
+  const val GOOGLE_PLAY_GIFT_CARD = "GOOGLE_PLAY_GIFT_CARD"
+  const val FLIPKART_GIFT_CARD = "FLIPKART_GIFT_CARD"
+
+  val ALL_REDEMPTION_METHODS =
+    listOf(UPI, AMAZON_GIFT_CARD, GOOGLE_PLAY_GIFT_CARD, FLIPKART_GIFT_CARD)
+
+  val GIFT_CARD_METHODS =
+    listOf(AMAZON_GIFT_CARD, GOOGLE_PLAY_GIFT_CARD, FLIPKART_GIFT_CARD)
+
+  fun isGiftCard(method: String): Boolean =
+    method.trim().uppercase(Locale.US) in GIFT_CARD_METHODS
+
+  fun isUpi(method: String): Boolean {
+    val norm = method.trim().uppercase(Locale.US)
+    return norm == UPI || norm == "UPI ID"
+  }
+
+  fun displayLabel(method: String): String =
+    when (method.trim().uppercase(Locale.US)) {
+      UPI, "UPI ID" -> "UPI"
+      AMAZON_GIFT_CARD -> "Amazon Gift Card"
+      GOOGLE_PLAY_GIFT_CARD -> "Google Play Gift Code"
+      FLIPKART_GIFT_CARD -> "Flipkart Gift Card"
+      else -> method.ifBlank { "Withdrawal" }
+    }
+}
+
+data class WithdrawalDenomination(
+  val amountRupees: Long,
+  val amountCoins: Long
+) {
+  val amountCents: Long
+    get() = amountRupees * 100L
+}
+
+object WithdrawalCatalog {
+  val UPI_DENOMINATIONS =
+    listOf(
+      WithdrawalDenomination(amountRupees = 200L, amountCoins = 33_000L),
+      WithdrawalDenomination(amountRupees = 500L, amountCoins = 82_500L)
+    )
+
+  val GIFT_CARD_DENOMINATIONS =
+    listOf(
+      WithdrawalDenomination(amountRupees = 150L, amountCoins = 33_000L),
+      WithdrawalDenomination(amountRupees = 200L, amountCoins = 44_000L),
+      WithdrawalDenomination(amountRupees = 250L, amountCoins = 55_000L)
+    )
+
+  fun denominationsFor(method: String): List<WithdrawalDenomination> =
+    when {
+      WithdrawalMethodType.isUpi(method) -> UPI_DENOMINATIONS
+      WithdrawalMethodType.isGiftCard(method) -> GIFT_CARD_DENOMINATIONS
+      else -> emptyList()
+    }
+
+  fun resolveRequiredCoins(method: String, amountRupees: Long): Long? =
+    denominationsFor(method).firstOrNull { it.amountRupees == amountRupees }?.amountCoins
+}
+
+object WithdrawalStatus {
+  const val SUBMITTED = "SUBMITTED"
+  const val UNDER_REVIEW = "UNDER_REVIEW"
+  const val PROCESSING = "PROCESSING"
+  const val COMPLETED = "COMPLETED"
+  const val REJECTED = "REJECTED"
+  const val DELAYED = "DELAYED"
+
+  const val DELAYED_THRESHOLD_MS = 48L * 60L * 60L * 1000L
+
+  fun isTerminal(status: String): Boolean {
+    val norm = status.trim().uppercase(Locale.US)
+    return norm == COMPLETED || norm == REJECTED || norm == "APPROVED"
+  }
+
+  fun isPendingOrActive(status: String): Boolean = !isTerminal(status)
+
+  fun isDelayed(
+    status: String,
+    createdAtMillis: Long,
+    nowMillis: Long = System.currentTimeMillis()
+  ): Boolean {
+    if (isTerminal(status)) return false
+    if (status.trim().equals(DELAYED, ignoreCase = true)) return true
+    if (createdAtMillis <= 0L) return false
+    return (nowMillis - createdAtMillis) >= DELAYED_THRESHOLD_MS
+  }
+
+  fun displayLabel(
+    status: String,
+    createdAtMillis: Long = 0L,
+    nowMillis: Long = System.currentTimeMillis()
+  ): String {
+    if (isDelayed(status, createdAtMillis, nowMillis)) return "Delayed"
+    return when (status.trim().uppercase(Locale.US)) {
+      SUBMITTED -> "Submitted"
+      UNDER_REVIEW -> "Under Review"
+      PROCESSING -> "Processing"
+      COMPLETED, "APPROVED" -> "Completed"
+      REJECTED -> "Rejected"
+      "PENDING_DEMO" -> "Pending Review"
+      else -> status.replace('_', ' ').lowercase(Locale.US).replaceFirstChar { it.uppercase() }
+    }
+  }
+}
+
 object TaskCategories {
   val ALL =
     listOf(
@@ -223,6 +332,8 @@ object TransactionType {
   const val DAILY_CHECKIN = "DAILY_CHECKIN"
   const val TASK_REWARD = "TASK_REWARD"
   const val DEMO_WITHDRAWAL = "DEMO_WITHDRAWAL"
+  const val WITHDRAWAL_DEBIT = "WITHDRAWAL_DEBIT"
+  const val WITHDRAWAL_REFUND = "WITHDRAWAL_REFUND"
   const val WATCH_EARN = "WATCH_EARN"
   const val SPIN_EARN = "SPIN_EARN"
 }
@@ -440,10 +551,8 @@ data class UserProfile(
  * Returns the user's eligible withdrawable Coins (earned from approved tasks).
  * 125 Coins = ₹1 (100 paise).
  */
-fun UserProfile.getEligibleWithdrawalCoins(): Long {
-  if (eligibleCoins > 0L) return eligibleCoins
-  return centsToCoins(balanceCents)
-}
+fun UserProfile.getEligibleWithdrawalCoins(): Long =
+  maxOf(eligibleCoins, centsToCoins(balanceCents))
 
 /**
  * Returns the user's promotional Coins (earned from Spin, Watch & Earn, Daily Check-in).
@@ -607,25 +716,109 @@ fun mergeTasksWithPreservedSubmissions(
 }
 
 /**
- * Safe demo-only withdrawal request record stored in `/withdrawal_requests/{requestId}`.
- * Never stores real banking details, account numbers, IFSC codes, or UPI IDs.
- * Never deducts user wallet balance.
+ * Withdrawal & Gift Card Redemption record stored in `/withdrawal_requests/{requestId}`.
+ * Supports fixed-denomination UPI and Gift Card redemptions with immediate coin deduction,
+ * atomic single-refund on rejection, manual Admin gift code delivery, and legacy compatibility.
  */
 data class DemoWithdrawalRequest(
   @DocumentId val id: String = "",
   val requestId: String = "",
   val userId: String = "",
   val userName: String = "",
+  val amountRupees: Long = 0L,
   val amountCents: Long = 0L,
   val amountCoins: Long = 0L,
-  val method: String = WithdrawalMethod.BANK_ACCOUNT,
-  val status: String = "pending_demo",
-  val isDemo: Boolean = true,
-  @ServerTimestamp val createdAt: Timestamp? = null
+  val method: String = WithdrawalMethodType.UPI,
+  val upiId: String = "",
+  val status: String = WithdrawalStatus.SUBMITTED,
+  val statusNote: String = "",
+  val adminActionBy: String = "",
+  val paymentReference: String = "",
+  val giftCode: String = "",
+  val giftCodeHash: String = "",
+  val giftCodeAssignedAt: Timestamp? = null,
+  val coinsDeducted: Boolean = false,
+  val coinsRefunded: Boolean = false,
+  val deductedBalanceCoins: Long = 0L,
+  val deductedEligibleCoins: Long = 0L,
+  val deductedPromotionalCoins: Long = 0L,
+  val deductedBalanceCents: Long = 0L,
+  val idempotencyKey: String = "",
+  @get:PropertyName("isDemo") val isDemo: Boolean = false,
+  @ServerTimestamp val createdAt: Timestamp? = null,
+  @ServerTimestamp val updatedAt: Timestamp? = null,
+  val reviewedAt: Timestamp? = null,
+  val completedAt: Timestamp? = null,
+  val rejectedAt: Timestamp? = null
 ) {
   fun getEffectiveAmountCoins(): Long =
     if (amountCoins > 0L) amountCoins else centsToCoins(amountCents)
+
+  fun getEffectiveAmountRupees(): Long =
+    if (amountRupees > 0L) amountRupees else amountCents / 100L
+
+  fun getEffectiveMethodLabel(): String = WithdrawalMethodType.displayLabel(method)
+
+  fun isDelayedAt(nowMillis: Long = System.currentTimeMillis()): Boolean {
+    val createdMs = createdAt?.toDate()?.time ?: 0L
+    return WithdrawalStatus.isDelayed(status, createdMs, nowMillis)
+  }
+
+  fun getDisplayStatus(nowMillis: Long = System.currentTimeMillis()): String {
+    val createdMs = createdAt?.toDate()?.time ?: 0L
+    return WithdrawalStatus.displayLabel(status, createdMs, nowMillis)
+  }
 }
+
+typealias WithdrawalRequest = DemoWithdrawalRequest
+
+data class WithdrawalAvailabilityConfig(
+  val upiEnabled: Boolean = true,
+  val amazonEnabled: Boolean = true,
+  val googlePlayEnabled: Boolean = true,
+  val flipkartEnabled: Boolean = true,
+  val upiDenominationsEnabled: Map<String, Boolean> = mapOf("200" to true, "500" to true),
+  val amazonDenominationsEnabled: Map<String, Boolean> =
+    mapOf("150" to true, "200" to true, "250" to true),
+  val googlePlayDenominationsEnabled: Map<String, Boolean> =
+    mapOf("150" to true, "200" to true, "250" to true),
+  val flipkartDenominationsEnabled: Map<String, Boolean> =
+    mapOf("150" to true, "200" to true, "250" to true),
+  @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+  fun isMethodEnabled(method: String): Boolean =
+    when (method.trim().uppercase(Locale.US)) {
+      WithdrawalMethodType.UPI, "UPI ID" -> upiEnabled
+      WithdrawalMethodType.AMAZON_GIFT_CARD -> amazonEnabled
+      WithdrawalMethodType.GOOGLE_PLAY_GIFT_CARD -> googlePlayEnabled
+      WithdrawalMethodType.FLIPKART_GIFT_CARD -> flipkartEnabled
+      else -> false
+    }
+
+  fun isDenominationAvailable(method: String, amountRupees: Long): Boolean {
+    if (!isMethodEnabled(method)) return false
+    val key = amountRupees.toString()
+    return when (method.trim().uppercase(Locale.US)) {
+      WithdrawalMethodType.UPI, "UPI ID" -> upiDenominationsEnabled[key] ?: true
+      WithdrawalMethodType.AMAZON_GIFT_CARD -> amazonDenominationsEnabled[key] ?: true
+      WithdrawalMethodType.GOOGLE_PLAY_GIFT_CARD -> googlePlayDenominationsEnabled[key] ?: true
+      WithdrawalMethodType.FLIPKART_GIFT_CARD -> flipkartDenominationsEnabled[key] ?: true
+      else -> false
+    }
+  }
+}
+
+data class AdminNotificationItem(
+  @DocumentId val id: String = "",
+  val userId: String = "",
+  val userName: String = "",
+  val title: String = "",
+  val body: String = "",
+  val type: String = "WITHDRAWAL_REQUEST",
+  val referenceId: String = "",
+  val isRead: Boolean = false,
+  @ServerTimestamp val createdAt: Timestamp? = null
+)
 
 data class UserActivityItem(
   val id: String,

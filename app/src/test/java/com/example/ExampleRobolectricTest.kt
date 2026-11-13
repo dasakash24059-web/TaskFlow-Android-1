@@ -10,6 +10,8 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -30,22 +32,32 @@ import com.example.data.model.TaskStatus
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
+import com.example.data.model.WithdrawalAvailabilityConfig
 import com.example.data.model.WithdrawalMethod
+import com.example.data.model.WithdrawalMethodType
+import com.example.data.model.WithdrawalStatus
 import com.example.data.model.calculateDailyCheckInState
 import com.example.data.model.getTodayDateKey
 import com.example.data.model.getYesterdayDateKey
 import com.example.ui.admin.AdminDashboardScreen
+import com.example.ui.admin.AdminWithdrawalRequestsSection
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.TaskFlowSplashScreen
 import com.example.ui.theme.TaskFlowTheme
 import com.example.ui.user.DedicatedDailyCheckInScreen
+import com.example.ui.user.GiftCardRedemptionScreen
+import com.example.ui.user.UpiRedemptionScreen
 import com.example.ui.user.UserHomeScreen
 import com.example.ui.user.UserProfileScreen
 import com.example.ui.user.UserTaskDetailScreen
 import com.example.ui.user.UserTrackingScreen
 import com.example.ui.user.UserWalletScreen
+import com.example.ui.user.WithdrawalConfirmationScreen
+import com.example.ui.user.WithdrawalHistoryScreen
+import com.example.ui.user.WithdrawalMainScreen
 import com.example.ui.viewmodel.AdminTab
 import com.example.ui.viewmodel.UiState
+import com.example.ui.viewmodel.WithdrawalScreenRoute
 import android.os.Bundle
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialResponse
@@ -920,7 +932,7 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `UserWalletScreen shows Available Balance in INR, Minimum Withdrawal 200, no Add Money button, and validates Bank Account and UPI ID demo withdrawal requests`() {
+  fun `UserWalletScreen shows Coin Balance, Withdraw Coins button, Withdrawal History button, and opens Withdrawal flow`() {
     val userProfile =
       UserProfile(
         id = "user_wallet_1",
@@ -929,12 +941,11 @@ class ExampleRobolectricTest {
         displayName = "Rahul Sharma",
         role = "user",
         approvalStatus = "approved",
-        balanceCents = 35_000L // ₹350.00 available balance
+        balanceCents = 35_000L // 43,750 Coins
       )
 
-    var submittedAmount = ""
-    var submittedMethod = ""
-    var submittedUpi = ""
+    var openedMain = false
+    var openedHistory = false
 
     composeTestRule.setContent {
       TaskFlowTheme {
@@ -943,69 +954,254 @@ class ExampleRobolectricTest {
           tasksState = UiState.Success(emptyList()),
           withdrawalRequestsState = UiState.Success(emptyList()),
           currentUserId = "user_wallet_1",
-          onSubmitDemoWithdrawal = { amountInr, method, _, _, _, _, upiId, onSuccess ->
-            submittedAmount = amountInr
-            submittedMethod = method
-            submittedUpi = upiId
-            onSuccess()
-          }
+          onOpenWithdrawalMain = { openedMain = true },
+          onOpenWithdrawalHistory = { openedHistory = true }
         )
       }
     }
     composeTestRule.waitForIdle()
 
-    // 1. Verify Available Balance in Coins (43,750 Coins for ₹350.00), Minimum Withdrawal: 25,000 Coins, Withdraw button, and NO Add Money option
     composeTestRule.onNodeWithTag("wallet_available_balance").assertIsDisplayed().assertTextEquals("43,750 Coins")
-    composeTestRule.onNodeWithTag("wallet_min_withdrawal_text").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Minimum Withdrawal: 25,000 Coins").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("wallet_withdraw_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("wallet_withdraw_button").assertIsDisplayed().performClick()
+    assertTrue(openedMain)
+
+    composeTestRule.onNodeWithTag("wallet_view_withdrawal_history_button").assertIsDisplayed().performClick()
+    assertTrue(openedHistory)
     composeTestRule.onNodeWithText("Add Money", substring = true).assertDoesNotExist()
+  }
 
-    // 2. Tap Withdraw -> Opens Select Withdrawal Method dialog with Bank Account and UPI ID options
-    composeTestRule.onNodeWithTag("wallet_withdraw_button").performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("withdrawal_method_dialog").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Select Withdrawal Method").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("withdrawal_method_bank").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("withdrawal_method_upi").assertIsDisplayed()
+  @Test
+  fun `WithdrawalMainScreen shows 4 clean options and History without conversion rates or minimum withdrawal clutter`() {
+    var selectedRoute: WithdrawalScreenRoute? = null
+    var openedHistory = false
 
-    // Bank Account fields are displayed by default
-    composeTestRule.onNodeWithTag("bank_holder_name_input").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithTag("bank_name_input").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithTag("bank_account_number_input").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithTag("bank_ifsc_input").performScrollTo().assertIsDisplayed()
-
-    // Switch to UPI ID option -> shows UPI ID field
-    composeTestRule.onNodeWithTag("withdrawal_method_upi").performScrollTo().performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("upi_id_input").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithTag("upi_id_input").performTextInput("rahul@upi")
-
-    // 3. Enter amount below ₹200 (e.g. 150) -> prevented with clear validation message
-    composeTestRule.onNodeWithTag("withdrawal_amount_input").performScrollTo().performTextClearance()
-    composeTestRule.onNodeWithTag("withdrawal_amount_input").performTextInput("150")
-    composeTestRule.onNodeWithTag("withdrawal_submit_button").performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("withdrawal_validation_error").performScrollTo().assertIsDisplayed()
-    assertEquals("", submittedAmount)
-
-    // 4. Enter amount exceeding available balance (e.g. 500 > ₹350.00) -> prevented with clear validation message
-    composeTestRule.onNodeWithTag("withdrawal_amount_input").performScrollTo().performTextClearance()
-    composeTestRule.onNodeWithTag("withdrawal_amount_input").performTextInput("500")
-    composeTestRule.onNodeWithTag("withdrawal_submit_button").performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("withdrawal_validation_error").performScrollTo().assertIsDisplayed()
-    assertEquals("", submittedAmount)
-
-    // 5. Enter valid amount (₹250) -> submits demo withdrawal request
-    composeTestRule.onNodeWithTag("withdrawal_amount_input").performScrollTo().performTextClearance()
-    composeTestRule.onNodeWithTag("withdrawal_amount_input").performTextInput("250")
-    composeTestRule.onNodeWithTag("withdrawal_submit_button").performClick()
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        WithdrawalMainScreen(
+          totalBalanceCoins = 50_000L,
+          availability = WithdrawalAvailabilityConfig(),
+          onSelectRoute = { selectedRoute = it },
+          onOpenHistory = { openedHistory = true },
+          onBack = {}
+        )
+      }
+    }
     composeTestRule.waitForIdle()
 
-    assertEquals("250", submittedAmount)
-    assertEquals(WithdrawalMethod.UPI_ID, submittedMethod)
+    composeTestRule.onNodeWithTag("withdrawal_main_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("withdrawal_option_upi").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("withdrawal_option_amazon").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("withdrawal_option_google_play").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("withdrawal_option_flipkart").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("withdrawal_open_history_button").performScrollTo().assertIsDisplayed()
+
+    // Ensure no conversion rates, min withdrawal limits, or pending request counts appear
+    composeTestRule.onNodeWithText("125 Coins", substring = true).assertDoesNotExist()
+    composeTestRule.onNodeWithText("Minimum", substring = true).assertDoesNotExist()
+    composeTestRule.onNodeWithText("Pending", substring = true).assertDoesNotExist()
+
+    composeTestRule.onNodeWithTag("withdrawal_option_upi").performScrollTo().performClick()
+    assertEquals(WithdrawalScreenRoute.UPI, selectedRoute)
+
+    composeTestRule.onNodeWithTag("withdrawal_open_history_button").performScrollTo().performClick()
+    assertTrue(openedHistory)
+  }
+
+  @Test
+  fun `UpiRedemptionScreen enforces fixed ₹200 and ₹500 denominations, validates UPI ID, and shows insufficient balance only on submit`() {
+    var submittedRupees = 0L
+    var submittedUpi = ""
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        UpiRedemptionScreen(
+          totalBalanceCoins = 40_000L, // Enough for ₹200 (33k), NOT enough for ₹500 (82.5k)
+          availability = WithdrawalAvailabilityConfig(),
+          isBusy = false,
+          validationError = null,
+          onClearError = {},
+          onSubmit = { rupees, upi ->
+            submittedRupees = rupees
+            submittedUpi = upi
+          },
+          onBack = {}
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("upi_denom_200").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("upi_denom_500").assertIsDisplayed()
+    composeTestRule.onAllNodesWithText("33,000 Coins").onFirst().assertIsDisplayed()
+    composeTestRule.onNodeWithText("82,500 Coins").assertIsDisplayed()
+
+    // No pre-submit error shown on initial render
+    composeTestRule.onNodeWithTag("upi_validation_error").assertDoesNotExist()
+
+    // Select ₹500 (82,500 Coins) with valid UPI ID -> insufficient balance error ONLY on Submit tap
+    composeTestRule.onNodeWithTag("upi_denom_500").performClick()
+    composeTestRule.onNodeWithTag("upi_id_input").performScrollTo().performTextInput("rahul@upi")
+    composeTestRule.onNodeWithTag("upi_submit_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("upi_validation_error").performScrollTo().assertIsDisplayed()
+    assertEquals(0L, submittedRupees)
+
+    // Switch to ₹200 (33,000 Coins) -> submits cleanly
+    composeTestRule.onNodeWithTag("upi_denom_200").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("upi_submit_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(200L, submittedRupees)
     assertEquals("rahul@upi", submittedUpi)
+  }
+
+  @Test
+  fun `GiftCardRedemptionScreen displays ₹150, ₹200, ₹250 denominations without collecting email or phone`() {
+    var submittedRupees = 0L
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        GiftCardRedemptionScreen(
+          method = WithdrawalMethodType.AMAZON_GIFT_CARD,
+          totalBalanceCoins = 45_000L,
+          availability = WithdrawalAvailabilityConfig(),
+          isBusy = false,
+          validationError = null,
+          onClearError = {},
+          onSubmit = { submittedRupees = it },
+          onBack = {}
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gift_card_denom_150").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gift_card_denom_200").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gift_card_denom_250").performScrollTo().assertIsDisplayed()
+    composeTestRule.onAllNodesWithText("33,000 Coins").onFirst().assertExists()
+    composeTestRule.onNodeWithText("44,000 Coins").assertExists()
+    composeTestRule.onNodeWithText("55,000 Coins").assertExists()
+
+    // No email or phone number inputs
+    composeTestRule.onNodeWithText("Email", substring = true).assertDoesNotExist()
+    composeTestRule.onNodeWithText("Phone", substring = true).assertDoesNotExist()
+
+    composeTestRule.onNodeWithTag("gift_card_denom_200").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("gift_card_submit_button").performScrollTo().performClick()
+    assertEquals(200L, submittedRupees)
+  }
+
+  @Test
+  fun `WithdrawalConfirmationScreen and WithdrawalHistoryScreen display required copy and Gift Code reveal`() {
+    val completedGcRequest =
+      DemoWithdrawalRequest(
+        id = "wd_gc_99",
+        requestId = "wd_gc_99",
+        userId = "user_1",
+        userName = "Priya",
+        method = WithdrawalMethodType.GOOGLE_PLAY_GIFT_CARD,
+        amountRupees = 150L,
+        amountCents = 15_000L,
+        amountCoins = 33_000L,
+        status = WithdrawalStatus.COMPLETED,
+        giftCode = "GP-CODE-7788-9900"
+      )
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        WithdrawalConfirmationScreen(
+          request = completedGcRequest.copy(status = WithdrawalStatus.SUBMITTED, giftCode = ""),
+          onViewHistory = {},
+          onDone = {}
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Request Submitted Successfully!").assertIsDisplayed()
+    composeTestRule
+      .onNodeWithText(
+        "Your withdrawal request has been received. Estimated processing time: 24–48 hours."
+      )
+      .assertIsDisplayed()
+  }
+
+  @Test
+  fun `WithdrawalHistoryScreen reveals Gift Code with Copy Code button for completed gift card`() {
+    val completedGcRequest =
+      DemoWithdrawalRequest(
+        id = "wd_gc_99",
+        requestId = "wd_gc_99",
+        userId = "user_1",
+        userName = "Priya",
+        method = WithdrawalMethodType.GOOGLE_PLAY_GIFT_CARD,
+        amountRupees = 150L,
+        amountCents = 15_000L,
+        amountCoins = 33_000L,
+        status = WithdrawalStatus.COMPLETED,
+        giftCode = "GP-CODE-7788-9900"
+      )
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        WithdrawalHistoryScreen(
+          requests = listOf(completedGcRequest),
+          onBack = {}
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("withdrawal_history_card_wd_gc_99").assertIsDisplayed()
+    composeTestRule.onNodeWithText("GP-CODE-7788-9900").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("withdrawal_copy_code_wd_gc_99").assertIsDisplayed().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Code copied!").assertIsDisplayed()
+  }
+
+  @Test
+  fun `AdminWithdrawalRequestsSection opens detail modal for Gift Code delivery and Reject & Refund`() {
+    val gcRequest =
+      DemoWithdrawalRequest(
+        id = "req_gc_admin_1",
+        requestId = "req_gc_admin_1",
+        userId = "user_1",
+        userName = "Ananya",
+        method = WithdrawalMethodType.FLIPKART_GIFT_CARD,
+        amountRupees = 200L,
+        amountCents = 20_000L,
+        amountCoins = 44_000L,
+        status = WithdrawalStatus.SUBMITTED
+      )
+    var sentCode = ""
+    var acceptedStatus = ""
+    var rejectedReason = ""
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        AdminWithdrawalRequestsSection(
+          withdrawalRequests = listOf(gcRequest),
+          onAcceptRequest = { _, targetStatus, _ -> acceptedStatus = targetStatus },
+          onSendGiftCardCode = { _, code, _, _ -> sentCode = code },
+          onRejectAndRefund = { _, reason, _ -> rejectedReason = reason }
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("admin_withdrawal_card_req_gc_admin_1").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("admin_withdrawal_detail_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_wd_accept_btn").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(WithdrawalStatus.UNDER_REVIEW, acceptedStatus)
+
+    composeTestRule.onNodeWithTag("admin_wd_gift_code_input").performScrollTo().performTextInput("FK-GIFT-5544-3322")
+    composeTestRule.onNodeWithTag("admin_wd_send_code_btn").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("FK-GIFT-5544-3322", sentCode)
+
+    composeTestRule.onNodeWithTag("admin_wd_reject_reason_input").performScrollTo().performTextInput("Duplicate claim")
+    composeTestRule.onNodeWithTag("admin_wd_reject_refund_btn").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("Duplicate claim", rejectedReason)
   }
 
   @Test
@@ -1046,13 +1242,12 @@ class ExampleRobolectricTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("admin_withdrawal_requests_section").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("admin_withdrawal_card_req_demo_901").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("admin_withdrawal_user_req_demo_901").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Rahul Sharma").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("admin_withdrawal_amount_req_demo_901").assertIsDisplayed()
-    composeTestRule.onNodeWithText("₹250.00").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("admin_withdrawal_status_req_demo_901").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Demo / Pending").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_withdrawal_card_req_demo_901").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_withdrawal_user_req_demo_901", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithText("Rahul Sharma", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_withdrawal_amount_req_demo_901", useUnmergedTree = true).assertIsDisplayed().assertTextEquals("₹250.00")
+    composeTestRule.onNodeWithTag("admin_withdrawal_status_req_demo_901", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithText("Demo / Pending", useUnmergedTree = true).assertIsDisplayed()
   }
 
   @Test

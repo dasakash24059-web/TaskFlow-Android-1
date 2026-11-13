@@ -261,57 +261,100 @@
         "updatedAt"
       ]
     },
-    "DemoWithdrawalRequest": {
-      "title": "DemoWithdrawalRequest",
-      "description": "Safe demo-only withdrawal request record without banking/UPI PII or balance deduction.",
+    "WithdrawalRequest": {
+      "title": "WithdrawalRequest",
+      "description": "Fixed-denomination UPI or Gift Card withdrawal redemption request with immediate coin deduction, single atomic refund on rejection, and manual Admin fulfillment.",
       "type": "object",
       "properties": {
-        "requestId": {
-          "type": "string",
-          "description": "Unique ID of the demo withdrawal request."
-        },
-        "userId": {
-          "type": "string",
-          "description": "UID of the requesting user."
-        },
-        "userName": {
-          "type": "string",
-          "description": "Display name of the requesting user."
-        },
-        "amountCents": {
-          "type": "integer",
-          "description": "Requested demo withdrawal amount in INR paise (minimum 20000 = ₹200.00)."
-        },
+        "requestId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
         "method": {
           "type": "string",
-          "enum": ["Bank Account", "UPI ID"],
-          "description": "Selected payout method name only (no account numbers or UPI IDs stored)."
+          "enum": ["UPI", "AMAZON_GIFT_CARD", "GOOGLE_PLAY_GIFT_CARD", "FLIPKART_GIFT_CARD"]
         },
+        "amountRupees": { "type": "integer" },
+        "amountCents": { "type": "integer" },
+        "amountCoins": { "type": "integer" },
+        "upiId": { "type": "string" },
         "status": {
           "type": "string",
-          "enum": ["pending_demo"],
-          "description": "Status marking this as a demo/pending request."
+          "enum": ["SUBMITTED", "UNDER_REVIEW", "PROCESSING", "COMPLETED", "REJECTED"]
         },
-        "isDemo": {
-          "type": "boolean",
-          "description": "Always true to indicate demo/request-only mode."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp when the demo request was submitted."
-        }
+        "statusNote": { "type": "string" },
+        "adminActionBy": { "type": "string" },
+        "paymentReference": { "type": "string" },
+        "giftCode": { "type": "string" },
+        "giftCodeHash": { "type": "string" },
+        "coinsDeducted": { "type": "boolean" },
+        "coinsRefunded": { "type": "boolean" },
+        "deductedBalanceCoins": { "type": "integer" },
+        "deductedEligibleCoins": { "type": "integer" },
+        "deductedPromotionalCoins": { "type": "integer" },
+        "deductedBalanceCents": { "type": "integer" },
+        "idempotencyKey": { "type": "string" },
+        "isDemo": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
         "requestId",
         "userId",
         "userName",
-        "amountCents",
         "method",
+        "amountRupees",
+        "amountCents",
+        "amountCoins",
         "status",
-        "isDemo",
+        "coinsDeducted",
+        "coinsRefunded",
         "createdAt"
       ]
+    },
+    "UsedGiftCode": {
+      "title": "UsedGiftCode",
+      "description": "SHA-256 hash lock preventing reuse or duplicate issuance of any delivered gift card code.",
+      "type": "object",
+      "properties": {
+        "codeHash": { "type": "string" },
+        "requestId": { "type": "string" },
+        "method": { "type": "string" },
+        "amountRupees": { "type": "integer" },
+        "assignedBy": { "type": "string" },
+        "assignedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["codeHash", "requestId", "method", "amountRupees", "assignedBy", "assignedAt"]
+    },
+    "WithdrawalAvailabilityConfig": {
+      "title": "WithdrawalAvailabilityConfig",
+      "description": "Admin-controlled availability flags for UPI and Gift Card denominations.",
+      "type": "object",
+      "properties": {
+        "upiEnabled": { "type": "boolean" },
+        "amazonEnabled": { "type": "boolean" },
+        "googlePlayEnabled": { "type": "boolean" },
+        "flipkartEnabled": { "type": "boolean" },
+        "upiDenominationsEnabled": { "type": "object" },
+        "amazonDenominationsEnabled": { "type": "object" },
+        "googlePlayDenominationsEnabled": { "type": "object" },
+        "flipkartDenominationsEnabled": { "type": "object" }
+      }
+    },
+    "AdminNotification": {
+      "title": "AdminNotification",
+      "description": "Admin alert entry created when a user submits a new withdrawal or gift card request.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "type": { "type": "string" },
+        "referenceId": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "body", "referenceId", "isRead", "createdAt"]
     },
     "AdminRecord": {
       "title": "AdminRecord",
@@ -349,8 +392,20 @@
       "description": "Stores mandatory text + photo task proof submissions and their review statuses."
     },
     "/withdrawal_requests/{requestId}": {
-      "schema": { "$ref": "#/entities/DemoWithdrawalRequest" },
-      "description": "Stores safe demo-only withdrawal requests (without banking/UPI PII or balance deduction) for Admin Dashboard visibility."
+      "schema": { "$ref": "#/entities/WithdrawalRequest" },
+      "description": "Stores fixed-denomination UPI and Gift Card withdrawal redemption requests with immediate coin deduction and manual Admin fulfillment."
+    },
+    "/used_gift_codes/{codeHash}": {
+      "schema": { "$ref": "#/entities/UsedGiftCode" },
+      "description": "Prevents duplicate gift card code assignment across all requests."
+    },
+    "/app_config/{docId}": {
+      "schema": { "$ref": "#/entities/WithdrawalAvailabilityConfig" },
+      "description": "Global withdrawal denomination availability settings."
+    },
+    "/admin_notifications/{notifId}": {
+      "schema": { "$ref": "#/entities/AdminNotification" },
+      "description": "Admin withdrawal alert notifications."
     },
     "/admins/{adminId}": {
       "schema": { "$ref": "#/entities/AdminRecord" },

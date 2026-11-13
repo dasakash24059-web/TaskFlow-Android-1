@@ -257,6 +257,14 @@ service cloud.firestore {
       let oldPromo = ('promotionalCoins' in existing() && existing().promotionalCoins is int) ? existing().promotionalCoins : 0;
       let newPromo = ('promotionalCoins' in incoming() && incoming().promotionalCoins is int) ? incoming().promotionalCoins : oldPromo;
       let promoDelta = newPromo - oldPromo;
+      let oldBalanceCents = ('balanceCents' in existing() && existing().balanceCents is int) ? existing().balanceCents : 0;
+      let oldCentsCoins = int((oldBalanceCents * 125) / 100);
+      let oldEligible = ('eligibleCoins' in existing() && existing().eligibleCoins is int && existing().eligibleCoins > oldCentsCoins)
+        ? existing().eligibleCoins
+        : oldCentsCoins;
+      let oldBalanceCoins = ('balanceCoins' in existing() && existing().balanceCoins is int && existing().balanceCoins > (oldEligible + oldPromo))
+        ? existing().balanceCoins
+        : (oldEligible + oldPromo);
       return request.auth.uid == userId &&
              isApprovedUser(userId) &&
              incoming().balanceCents == existing().balanceCents &&
@@ -276,8 +284,102 @@ service cloud.firestore {
              ]) &&
              promoDelta >= 0 &&
              promoDelta <= 1000 &&
+             (
+               (!('balanceCoins' in existing()) && promoDelta == 0 && !('balanceCoins' in changedKeys())) ||
+               (('balanceCoins' in incoming()) && incoming().balanceCoins is int && incoming().balanceCoins == oldBalanceCoins + promoDelta)
+             ) &&
              (!('extraSpinVideosWatched' in incoming()) || (incoming().extraSpinVideosWatched is int && incoming().extraSpinVideosWatched >= 0 && incoming().extraSpinVideosWatched <= 2)) &&
              (!('extraSpinAvailable' in incoming()) || incoming().extraSpinAvailable is bool) &&
+             incoming().updatedAt is timestamp;
+    }
+
+    function expectedWithdrawalCoins(method, amountRupees) {
+      return (method == 'UPI' && amountRupees == 200) ? 33000 :
+             (method == 'UPI' && amountRupees == 500) ? 82500 :
+             ((method in ['AMAZON_GIFT_CARD', 'GOOGLE_PLAY_GIFT_CARD', 'FLIPKART_GIFT_CARD']) && amountRupees == 150) ? 33000 :
+             ((method in ['AMAZON_GIFT_CARD', 'GOOGLE_PLAY_GIFT_CARD', 'FLIPKART_GIFT_CARD']) && amountRupees == 200) ? 44000 :
+             ((method in ['AMAZON_GIFT_CARD', 'GOOGLE_PLAY_GIFT_CARD', 'FLIPKART_GIFT_CARD']) && amountRupees == 250) ? 55000 :
+             0;
+    }
+
+    // Approved user atomically debiting their own wallet when creating a fixed-denomination withdrawal request
+    function isAtomicWithdrawalDebitForUser(userId) {
+      let oldBalanceCents = ('balanceCents' in existing() && existing().balanceCents is int) ? existing().balanceCents : 0;
+      let oldCentsCoins = int((oldBalanceCents * 125) / 100);
+      let oldEligibleCoins = ('eligibleCoins' in existing() && existing().eligibleCoins is int && existing().eligibleCoins > oldCentsCoins)
+        ? existing().eligibleCoins
+        : oldCentsCoins;
+      let oldPromoCoins = ('promotionalCoins' in existing() && existing().promotionalCoins is int) ? existing().promotionalCoins : 0;
+      let oldBalanceCoins = ('balanceCoins' in existing() && existing().balanceCoins is int) ? existing().balanceCoins : 0;
+      let oldTotalCoins = oldBalanceCoins > (oldEligibleCoins + oldPromoCoins)
+        ? oldBalanceCoins
+        : (oldEligibleCoins + oldPromoCoins);
+      let reqId = incoming().lastWithdrawalRequestId;
+      let reqPath = /databases/$(database)/documents/withdrawal_requests/$(reqId);
+      return request.auth.uid == userId &&
+             isApprovedUser(userId) &&
+             changedKeys().hasOnly([
+               'balanceCoins',
+               'eligibleCoins',
+               'promotionalCoins',
+               'balanceCents',
+               'lastWithdrawalRequestId',
+               'updatedAt'
+             ]) &&
+             isNonEmptyString(reqId, 128) &&
+             !exists(reqPath) &&
+             existsAfter(reqPath) &&
+             getAfter(reqPath).data.userId == userId &&
+             getAfter(reqPath).data.status == 'SUBMITTED' &&
+             getAfter(reqPath).data.coinsDeducted == true &&
+             getAfter(reqPath).data.coinsRefunded == false &&
+             getAfter(reqPath).data.amountCoins > 0 &&
+             oldTotalCoins >= getAfter(reqPath).data.amountCoins &&
+             incoming().role == existing().role &&
+             incoming().approvalStatus == existing().approvalStatus &&
+             incoming().completedTasksCount == existing().completedTasksCount &&
+             incoming().balanceCoins == oldTotalCoins - getAfter(reqPath).data.amountCoins &&
+             incoming().eligibleCoins == oldEligibleCoins - getAfter(reqPath).data.deductedEligibleCoins &&
+             incoming().eligibleCoins >= 0 &&
+             incoming().promotionalCoins == oldPromoCoins - getAfter(reqPath).data.deductedPromotionalCoins &&
+             incoming().promotionalCoins >= 0 &&
+             incoming().balanceCents == oldBalanceCents - getAfter(reqPath).data.deductedBalanceCents &&
+             incoming().balanceCents >= 0 &&
+             incoming().updatedAt is timestamp;
+    }
+
+    // Admin atomically refunding deducted coins once when rejecting a non-terminal withdrawal request
+    function isAtomicAdminWithdrawalRefund(userId) {
+      let oldBalanceCents = ('balanceCents' in existing() && existing().balanceCents is int) ? existing().balanceCents : 0;
+      let oldExplicitEligible = ('eligibleCoins' in existing() && existing().eligibleCoins is int)
+        ? existing().eligibleCoins
+        : int((oldBalanceCents * 125) / 100);
+      let oldPromoCoins = ('promotionalCoins' in existing() && existing().promotionalCoins is int) ? existing().promotionalCoins : 0;
+      let oldBalanceCoins = ('balanceCoins' in existing() && existing().balanceCoins is int) ? existing().balanceCoins : 0;
+      let reqId = incoming().lastRefundedWithdrawalId;
+      let reqPath = /databases/$(database)/documents/withdrawal_requests/$(reqId);
+      return isAdmin() &&
+             changedKeys().hasOnly([
+               'balanceCoins',
+               'eligibleCoins',
+               'promotionalCoins',
+               'balanceCents',
+               'lastRefundedWithdrawalId',
+               'updatedAt'
+             ]) &&
+             isNonEmptyString(reqId, 128) &&
+             exists(reqPath) &&
+             existsAfter(reqPath) &&
+             get(reqPath).data.userId == userId &&
+             get(reqPath).data.coinsDeducted == true &&
+             get(reqPath).data.coinsRefunded == false &&
+             !(get(reqPath).data.status in ['COMPLETED', 'REJECTED', 'approved', 'rejected']) &&
+             getAfter(reqPath).data.coinsRefunded == true &&
+             getAfter(reqPath).data.status == 'REJECTED' &&
+             incoming().balanceCoins == oldBalanceCoins + get(reqPath).data.deductedBalanceCoins &&
+             incoming().eligibleCoins == oldExplicitEligible + get(reqPath).data.deductedEligibleCoins &&
+             incoming().promotionalCoins == oldPromoCoins + get(reqPath).data.deductedPromotionalCoins &&
+             incoming().balanceCents == oldBalanceCents + get(reqPath).data.deductedBalanceCents &&
              incoming().updatedAt is timestamp;
     }
 
@@ -662,46 +764,212 @@ service cloud.firestore {
     }
 
     // =========================================================================
-    // 5. DEMO WITHDRAWAL & TRANSACTION VALIDATION
+    // 5. WITHDRAWAL REDEMPTION & TRANSACTION VALIDATION
     // =========================================================================
 
-    function isValidDemoWithdrawalRequest(requestId) {
+    function isDenomFlagEnabled(mapObj, key) {
+      return !(key in mapObj) || mapObj[key] == true;
+    }
+
+    function isMethodConfigAvailable(cfg, method, amountRupees) {
+      let key = string(amountRupees);
+      return (
+        (method == 'UPI' &&
+          (!('upiEnabled' in cfg) || cfg.upiEnabled == true) &&
+          (!('upiDenominationsEnabled' in cfg) || isDenomFlagEnabled(cfg.upiDenominationsEnabled, key))) ||
+        (method == 'AMAZON_GIFT_CARD' &&
+          (!('amazonEnabled' in cfg) || cfg.amazonEnabled == true) &&
+          (!('amazonDenominationsEnabled' in cfg) || isDenomFlagEnabled(cfg.amazonDenominationsEnabled, key))) ||
+        (method == 'GOOGLE_PLAY_GIFT_CARD' &&
+          (!('googlePlayEnabled' in cfg) || cfg.googlePlayEnabled == true) &&
+          (!('googlePlayDenominationsEnabled' in cfg) || isDenomFlagEnabled(cfg.googlePlayDenominationsEnabled, key))) ||
+        (method == 'FLIPKART_GIFT_CARD' &&
+          (!('flipkartEnabled' in cfg) || cfg.flipkartEnabled == true) &&
+          (!('flipkartDenominationsEnabled' in cfg) || isDenomFlagEnabled(cfg.flipkartDenominationsEnabled, key)))
+      );
+    }
+
+    function isWithdrawalAvailable(method, amountRupees) {
+      let availPath = /databases/$(database)/documents/app_config/withdrawal_availability;
+      return !exists(availPath) || isMethodConfigAvailable(get(availPath).data, method, amountRupees);
+    }
+
+    function isValidWithdrawalBucketMath(userData, reqCoins) {
+      let oldBalanceCents = ('balanceCents' in userData && userData.balanceCents is int) ? userData.balanceCents : 0;
+      let oldCentsCoins = int((oldBalanceCents * 125) / 100);
+      let oldEligibleCoins = ('eligibleCoins' in userData && userData.eligibleCoins is int && userData.eligibleCoins > oldCentsCoins)
+        ? userData.eligibleCoins
+        : oldCentsCoins;
+      let oldPromoCoins = ('promotionalCoins' in userData && userData.promotionalCoins is int) ? userData.promotionalCoins : 0;
+      let expectedDeductEligible = oldEligibleCoins >= reqCoins ? reqCoins : oldEligibleCoins;
+      let remainingNeeded = reqCoins - expectedDeductEligible;
+      let expectedDeductPromo = oldPromoCoins >= remainingNeeded ? remainingNeeded : oldPromoCoins;
+      let expectedMaxCents = int((expectedDeductEligible * 100) / 125);
+      let expectedDeductCents = oldBalanceCents >= expectedMaxCents ? expectedMaxCents : oldBalanceCents;
+      return incoming().deductedBalanceCoins == reqCoins &&
+             incoming().deductedEligibleCoins == expectedDeductEligible &&
+             incoming().deductedPromotionalCoins == expectedDeductPromo &&
+             incoming().deductedBalanceCents == expectedDeductCents;
+    }
+
+    function isValidWithdrawalRedemptionCreate(requestId) {
       let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let reqCoins = expectedWithdrawalCoins(incoming().method, incoming().amountRupees);
+      let txPath = /databases/$(database)/documents/transactions/$('wd_debit_' + requestId);
       return isSignedIn() &&
              isApprovedUser(request.auth.uid) &&
              incoming().keys().hasOnly([
                'requestId',
                'userId',
                'userName',
+               'method',
+               'amountRupees',
                'amountCents',
                'amountCoins',
-               'method',
+               'upiId',
                'status',
+               'statusNote',
+               'adminActionBy',
+               'paymentReference',
+               'giftCode',
+               'giftCodeHash',
+               'coinsDeducted',
+               'coinsRefunded',
+               'deductedBalanceCoins',
+               'deductedEligibleCoins',
+               'deductedPromotionalCoins',
+               'deductedBalanceCents',
+               'idempotencyKey',
                'isDemo',
-               'createdAt'
+               'createdAt',
+               'updatedAt'
              ]) &&
              incoming().keys().hasAll([
                'requestId',
                'userId',
                'userName',
-               'amountCents',
                'method',
+               'amountRupees',
+               'amountCents',
+               'amountCoins',
+               'upiId',
                'status',
+               'statusNote',
+               'adminActionBy',
+               'paymentReference',
+               'giftCode',
+               'giftCodeHash',
+               'coinsDeducted',
+               'coinsRefunded',
+               'deductedBalanceCoins',
+               'deductedEligibleCoins',
+               'deductedPromotionalCoins',
+               'deductedBalanceCents',
+               'idempotencyKey',
                'isDemo',
-               'createdAt'
+               'createdAt',
+               'updatedAt'
              ]) &&
              incoming().requestId == requestId &&
              incoming().userId == request.auth.uid &&
              isNonEmptyString(incoming().userName, 100) &&
+             incoming().amountRupees is int &&
              incoming().amountCents is int &&
-             incoming().amountCents >= 20000 &&
-             incoming().amountCents <= 10000000 &&
-             incoming().amountCents <= get(userPath).data.balanceCents &&
-             getAfter(userPath).data.balanceCents == get(userPath).data.balanceCents &&
-             (incoming().method == 'Bank Account' || incoming().method == 'UPI ID') &&
-             incoming().status == 'pending_demo' &&
-             incoming().isDemo == true &&
-             incoming().createdAt is timestamp;
+             incoming().amountCoins is int &&
+             reqCoins > 0 &&
+             incoming().amountCoins == reqCoins &&
+             incoming().amountCents == incoming().amountRupees * 100 &&
+             isWithdrawalAvailable(incoming().method, incoming().amountRupees) &&
+             (
+               (incoming().method == 'UPI' && isNonEmptyString(incoming().upiId, 120) && incoming().upiId.matches('^[^\\s@]+@[^\\s@]+$')) ||
+               (incoming().method in ['AMAZON_GIFT_CARD', 'GOOGLE_PLAY_GIFT_CARD', 'FLIPKART_GIFT_CARD'] && incoming().upiId == '')
+             ) &&
+             incoming().status == 'SUBMITTED' &&
+             incoming().statusNote == '' &&
+             incoming().adminActionBy == '' &&
+             incoming().paymentReference == '' &&
+             incoming().giftCode == '' &&
+             incoming().giftCodeHash == '' &&
+             incoming().coinsDeducted == true &&
+             incoming().coinsRefunded == false &&
+             incoming().isDemo == false &&
+             isNonEmptyString(incoming().idempotencyKey, 128) &&
+             incoming().idempotencyKey == requestId &&
+             incoming().deductedBalanceCoins is int &&
+             incoming().deductedEligibleCoins is int &&
+             incoming().deductedPromotionalCoins is int &&
+             incoming().deductedBalanceCents is int &&
+             isValidWithdrawalBucketMath(get(userPath).data, reqCoins) &&
+             incoming().createdAt is timestamp &&
+             incoming().updatedAt is timestamp &&
+             existsAfter(userPath) &&
+             (!('lastWithdrawalRequestId' in get(userPath).data) || get(userPath).data.lastWithdrawalRequestId != requestId) &&
+             getAfter(userPath).data.lastWithdrawalRequestId == requestId &&
+             existsAfter(txPath);
+    }
+
+    function isValidAdminWithdrawalUpdate(requestId) {
+      let isNonTerminal = !(existing().status in ['COMPLETED', 'REJECTED', 'approved', 'rejected']);
+      let userPath = /databases/$(database)/documents/users/$(existing().userId);
+      let refundTxPath = /databases/$(database)/documents/transactions/$('wd_refund_' + requestId);
+      return isAdmin() &&
+             isNonTerminal &&
+             incoming().updatedAt is timestamp &&
+             (
+               // 1. Accept (Under Review) or Mark Processing (monotonic, no-op & coin mutation blocked)
+               (
+                 (incoming().status == 'UNDER_REVIEW' || incoming().status == 'PROCESSING') &&
+                 incoming().status != existing().status &&
+                 (existing().status != 'PROCESSING' || incoming().status == 'PROCESSING') &&
+                 changedKeys().hasOnly(['status', 'statusNote', 'adminActionBy', 'reviewedAt', 'updatedAt']) &&
+                 isOptionalString(incoming().statusNote, 500) &&
+                 isNonEmptyString(incoming().adminActionBy, 128) &&
+                 incoming().reviewedAt is timestamp
+               ) ||
+               // 2. Complete Gift Card by delivering a unique non-reusable gift code
+               (
+                 existing().method in ['AMAZON_GIFT_CARD', 'GOOGLE_PLAY_GIFT_CARD', 'FLIPKART_GIFT_CARD'] &&
+                 existing().coinsDeducted == true &&
+                 existing().coinsRefunded == false &&
+                 (!('giftCode' in existing()) || existing().giftCode == '') &&
+                 incoming().status == 'COMPLETED' &&
+                 changedKeys().hasOnly(['status', 'statusNote', 'adminActionBy', 'giftCode', 'giftCodeHash', 'giftCodeAssignedAt', 'completedAt', 'updatedAt']) &&
+                 isNonEmptyString(incoming().giftCode, 200) &&
+                 isNonEmptyString(incoming().giftCodeHash, 128) &&
+                 isOptionalString(incoming().statusNote, 500) &&
+                 isNonEmptyString(incoming().adminActionBy, 128) &&
+                 incoming().giftCodeAssignedAt is timestamp &&
+                 incoming().completedAt is timestamp &&
+                 !exists(/databases/$(database)/documents/used_gift_codes/$(incoming().giftCodeHash)) &&
+                 existsAfter(/databases/$(database)/documents/used_gift_codes/$(incoming().giftCodeHash))
+               ) ||
+               // 3. Complete UPI payout only after actual manual payment transfer
+               (
+                 (existing().method == 'UPI' || existing().method == 'UPI ID') &&
+                 existing().coinsDeducted == true &&
+                 existing().coinsRefunded == false &&
+                 incoming().status == 'COMPLETED' &&
+                 changedKeys().hasOnly(['status', 'statusNote', 'adminActionBy', 'paymentReference', 'completedAt', 'updatedAt']) &&
+                 isOptionalString(incoming().paymentReference, 120) &&
+                 isOptionalString(incoming().statusNote, 500) &&
+                 isNonEmptyString(incoming().adminActionBy, 128) &&
+                 incoming().completedAt is timestamp
+               ) ||
+               // 4. Reject & Atomically Refund Coins Once
+               (
+                 incoming().status == 'REJECTED' &&
+                 existing().coinsDeducted == true &&
+                 existing().coinsRefunded == false &&
+                 incoming().coinsRefunded == true &&
+                 changedKeys().hasOnly(['status', 'statusNote', 'adminActionBy', 'coinsRefunded', 'rejectedAt', 'updatedAt']) &&
+                 isNonEmptyString(incoming().statusNote, 500) &&
+                 isNonEmptyString(incoming().adminActionBy, 128) &&
+                 incoming().rejectedAt is timestamp &&
+                 existsAfter(userPath) &&
+                 getAfter(userPath).data.lastRefundedWithdrawalId == requestId &&
+                 existsAfter(refundTxPath)
+               )
+             );
     }
 
     function isApprovedTaskOrSubmissionForTransaction(refId, userId, amountCents) {
@@ -754,16 +1022,14 @@ service cloud.firestore {
              isApprovedTaskOrSubmissionForTransaction(incoming().referenceId, incoming().userId, incoming().amountCents);
     }
 
-    function isMatchingWithdrawalRequestAfter(reqId, userId, amountCents) {
+    function isValidWithdrawalDebitTransaction(transactionId) {
+      let reqId = incoming().referenceId;
       let reqPath = /databases/$(database)/documents/withdrawal_requests/$(reqId);
-      return existsAfter(reqPath) &&
-             getAfter(reqPath).data.userId == userId &&
-             getAfter(reqPath).data.amountCents == amountCents;
-    }
-
-    function isValidClientDemoWithdrawalTransaction() {
       return isSignedIn() &&
              isApprovedUser(request.auth.uid) &&
+             isNonEmptyString(reqId, 128) &&
+             transactionId == 'wd_debit_' + reqId &&
+             !exists(/databases/$(database)/documents/transactions/$(transactionId)) &&
              incoming().keys().hasOnly([
                'userId',
                'userName',
@@ -781,20 +1047,71 @@ service cloud.firestore {
                'type',
                'title',
                'amountCents',
+               'amountCoins',
                'status',
                'referenceId',
                'createdAt'
              ]) &&
              incoming().userId == request.auth.uid &&
-             incoming().type == 'DEMO_WITHDRAWAL' &&
-             incoming().status == 'PENDING_DEMO' &&
-             isNonEmptyString(incoming().referenceId, 128) &&
+             incoming().type == 'WITHDRAWAL_DEBIT' &&
+             incoming().status == 'DEBITED' &&
              isNonEmptyString(incoming().userName, 100) &&
              isNonEmptyString(incoming().title, 200) &&
              incoming().amountCents is int &&
-             incoming().amountCents >= 20000 &&
+             incoming().amountCoins is int &&
+             incoming().amountCoins > 0 &&
              incoming().createdAt is timestamp &&
-             isMatchingWithdrawalRequestAfter(incoming().referenceId, request.auth.uid, incoming().amountCents);
+             existsAfter(reqPath) &&
+             getAfter(reqPath).data.userId == request.auth.uid &&
+             getAfter(reqPath).data.amountCoins == incoming().amountCoins &&
+             getAfter(reqPath).data.amountCents == incoming().amountCents;
+    }
+
+    function isValidAdminWithdrawalRefundTransaction(transactionId) {
+      let reqId = incoming().referenceId;
+      let reqPath = /databases/$(database)/documents/withdrawal_requests/$(reqId);
+      return isAdmin() &&
+             isNonEmptyString(reqId, 128) &&
+             transactionId == 'wd_refund_' + reqId &&
+             !exists(/databases/$(database)/documents/transactions/$(transactionId)) &&
+             incoming().keys().hasOnly([
+               'userId',
+               'userName',
+               'type',
+               'title',
+               'amountCents',
+               'amountCoins',
+               'status',
+               'referenceId',
+               'createdAt'
+             ]) &&
+             incoming().keys().hasAll([
+               'userId',
+               'userName',
+               'type',
+               'title',
+               'amountCents',
+               'amountCoins',
+               'status',
+               'referenceId',
+               'createdAt'
+             ]) &&
+             incoming().type == 'WITHDRAWAL_REFUND' &&
+             incoming().status == 'REFUNDED' &&
+             isNonEmptyString(incoming().userId, 128) &&
+             isNonEmptyString(incoming().userName, 100) &&
+             isNonEmptyString(incoming().title, 200) &&
+             incoming().amountCents is int &&
+             incoming().amountCoins is int &&
+             incoming().amountCoins > 0 &&
+             incoming().createdAt is timestamp &&
+             exists(reqPath) &&
+             existsAfter(reqPath) &&
+             get(reqPath).data.coinsRefunded == false &&
+             getAfter(reqPath).data.coinsRefunded == true &&
+             getAfter(reqPath).data.status == 'REJECTED' &&
+             getAfter(reqPath).data.userId == incoming().userId &&
+             getAfter(reqPath).data.amountCoins == incoming().amountCoins;
     }
 
     function isValidAtomicPromotionalCoinTransaction() {
@@ -886,7 +1203,9 @@ service cloud.firestore {
         isAtomicTaskAssignmentToUser(userId) ||
         isAtomicTaskUnassignmentFromUser(userId) ||
         isAtomicTaskApprovalForUser(userId) ||
-        isAtomicPromotionalCoinOrSpinUpdate(userId)
+        isAtomicPromotionalCoinOrSpinUpdate(userId) ||
+        isAtomicWithdrawalDebitForUser(userId) ||
+        isAtomicAdminWithdrawalRefund(userId)
       );
       allow delete: if false;
 
@@ -935,8 +1254,10 @@ service cloud.firestore {
       // In-app notifications
       match /notifications/{notificationId} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow create: if isSignedIn();
-        allow update: if isSignedIn() && request.auth.uid == userId && changedKeys().hasOnly(['isRead']);
+        allow create: if isSignedIn() &&
+                      (request.auth.uid == userId || isAdmin()) &&
+                      (!('userId' in incoming()) || incoming().userId == userId);
+        allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && changedKeys().hasOnly(['isRead']);
         allow delete: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       }
     }
@@ -952,14 +1273,15 @@ service cloud.firestore {
 
     // Transactions:
     // - Task reward transactions require atomic Admin task approval.
-    // - Demo withdrawal transactions require atomic approved-user withdrawal request creation.
+    // - Withdrawal debit & refund transactions require atomic withdrawal creation / rejection.
     // - Promotional Coin transactions (DAILY_CHECKIN, WATCH_EARN, SPIN_EARN) require atomic promotionalCoins credit.
     match /transactions/{transactionId} {
       allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && (
         isValidAdminTaskRewardTransaction() ||
-        isValidClientDemoWithdrawalTransaction() ||
+        isValidWithdrawalDebitTransaction(transactionId) ||
+        isValidAdminWithdrawalRefundTransaction(transactionId) ||
         isValidAtomicPromotionalCoinTransaction()
       );
       allow update, delete: if false;
@@ -1013,8 +1335,54 @@ service cloud.firestore {
     match /withdrawal_requests/{requestId} {
       allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isValidDemoWithdrawalRequest(requestId);
+      allow create: if isValidWithdrawalRedemptionCreate(requestId);
+      allow update: if isValidAdminWithdrawalUpdate(requestId);
+      allow delete: if false;
+    }
+
+    // Unique Gift Code Lock Registry (prevents duplicate gift code issuance across all requests)
+    match /used_gift_codes/{codeHash} {
+      allow get, list: if isAdmin();
+      allow create: if isAdmin() &&
+                    !exists(/databases/$(database)/documents/used_gift_codes/$(codeHash)) &&
+                    hasExactKeys(['codeHash', 'requestId', 'method', 'amountRupees', 'assignedBy', 'assignedAt']) &&
+                    incoming().codeHash == codeHash &&
+                    isNonEmptyString(incoming().requestId, 128) &&
+                    isNonEmptyString(incoming().method, 64) &&
+                    incoming().amountRupees is int &&
+                    incoming().amountRupees > 0 &&
+                    isNonEmptyString(incoming().assignedBy, 128) &&
+                    incoming().assignedAt is timestamp &&
+                    existsAfter(/databases/$(database)/documents/withdrawal_requests/$(incoming().requestId)) &&
+                    getAfter(/databases/$(database)/documents/withdrawal_requests/$(incoming().requestId)).data.giftCodeHash == codeHash &&
+                    getAfter(/databases/$(database)/documents/withdrawal_requests/$(incoming().requestId)).data.status == 'COMPLETED';
       allow update, delete: if false;
+    }
+
+    // Global Withdrawal & Gift Card Availability Config
+    match /app_config/{docId} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin();
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // Admin Notifications Queue (notifies Admin when new withdrawal requests arrive)
+    match /admin_notifications/{notifId} {
+      allow get, list: if isAdmin();
+      allow create: if isSignedIn() &&
+                    incoming().userId == request.auth.uid &&
+                    isNonEmptyString(incoming().referenceId, 128) &&
+                    notifId == 'admin_wd_' + incoming().referenceId &&
+                    !exists(/databases/$(database)/documents/admin_notifications/$(notifId)) &&
+                    !exists(/databases/$(database)/documents/withdrawal_requests/$(incoming().referenceId)) &&
+                    isNonEmptyString(incoming().title, 160) &&
+                    isNonEmptyString(incoming().body, 600) &&
+                    incoming().isRead == false &&
+                    existsAfter(/databases/$(database)/documents/withdrawal_requests/$(incoming().referenceId)) &&
+                    getAfter(/databases/$(database)/documents/withdrawal_requests/$(incoming().referenceId)).data.userId == request.auth.uid;
+      allow update: if isAdmin() && changedKeys().hasOnly(['isRead']);
+      allow delete: if isAdmin();
     }
 
     // Client & Partner Campaigns

@@ -90,6 +90,8 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.NotificationItem
 import com.example.data.model.WatchStats
+import com.example.data.model.WithdrawalMethodType
+import com.example.data.model.getEffectiveBalanceCoins
 import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.data.repository.TaskFlowRepository
 import com.example.ui.admin.AdminDashboardScreen
@@ -101,18 +103,24 @@ import com.example.ui.components.FirebaseConfigSecurityDialog
 import com.example.ui.components.TaskFlowBrandLogo
 import com.example.ui.theme.TaskFlowTheme
 import com.example.ui.user.DedicatedDailyCheckInScreen
+import com.example.ui.user.GiftCardRedemptionScreen
 import com.example.ui.user.OfferWallScreen
 import com.example.ui.user.SpinAndEarnScreen
+import com.example.ui.user.UpiRedemptionScreen
 import com.example.ui.user.UserHomeScreen
 import com.example.ui.user.UserProfileScreen
 import com.example.ui.user.UserTaskDetailScreen
 import com.example.ui.user.UserTrackingScreen
 import com.example.ui.user.UserWalletScreen
+import com.example.ui.user.WithdrawalConfirmationScreen
+import com.example.ui.user.WithdrawalHistoryScreen
+import com.example.ui.user.WithdrawalMainScreen
 import com.example.ui.viewmodel.AdminTab
 import com.example.ui.viewmodel.ProfileSubScreen
 import com.example.ui.viewmodel.TaskFlowViewModel
 import com.example.ui.viewmodel.UiState
 import com.example.ui.viewmodel.UserTab
+import com.example.ui.viewmodel.WithdrawalScreenRoute
 import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
@@ -399,7 +407,10 @@ private fun AuthenticatedWorkspace(
   val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
   val uploadProgress by viewModel.uploadProgress.collectAsStateWithLifecycle()
   val showSecuritySheet by viewModel.showSecuritySheet.collectAsStateWithLifecycle()
-  val openWithdrawOnWalletNavigation by viewModel.openWithdrawOnWalletNavigation.collectAsStateWithLifecycle()
+  val withdrawalRoute by viewModel.withdrawalRoute.collectAsStateWithLifecycle()
+  val lastSubmittedWithdrawal by viewModel.lastSubmittedWithdrawal.collectAsStateWithLifecycle()
+  val withdrawalAvailabilityConfig by viewModel.withdrawalAvailabilityState.collectAsStateWithLifecycle()
+  val adminNotifications by viewModel.adminNotificationsState.collectAsStateWithLifecycle()
   val isDailyCheckInScreenVisible by viewModel.isDailyCheckInScreenVisible.collectAsStateWithLifecycle()
   val isSpinScreenVisible by viewModel.isSpinScreenVisible.collectAsStateWithLifecycle()
   val isOfferWallScreenVisible by viewModel.isOfferWallScreenVisible.collectAsStateWithLifecycle()
@@ -620,7 +631,10 @@ private fun AuthenticatedWorkspace(
           )
           NavigationBarItem(
             selected = activeUserTab == UserTab.WALLET,
-            onClick = { viewModel.setUserTab(UserTab.WALLET) },
+            onClick = {
+              viewModel.closeWithdrawalFlow()
+              viewModel.setUserTab(UserTab.WALLET)
+            },
             icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null) },
             label = { Text(stringResource(R.string.nav_wallet)) },
             modifier = Modifier.testTag("nav_user_wallet")
@@ -819,9 +833,11 @@ private fun AuthenticatedWorkspace(
                     leaderboardState = leaderboardUsersState,
                     onNavigateToWallet = { openWithdraw ->
                       if (openWithdraw) {
-                        viewModel.setOpenWithdrawOnWalletNavigation(true)
+                        viewModel.openWithdrawalMain()
+                      } else {
+                        viewModel.closeWithdrawalFlow()
+                        viewModel.setUserTab(UserTab.WALLET)
                       }
-                      viewModel.setUserTab(UserTab.WALLET)
                     },
                     watchStats = watchStats,
                     onClaimWatchEarn = {
@@ -867,37 +883,115 @@ private fun AuthenticatedWorkspace(
                 )
               }
               UserTab.WALLET -> {
-                UserWalletScreen(
-                  profileState = userProfileState,
-                  tasksState = userTasksState,
-                  withdrawalRequestsState = userWithdrawalRequestsState,
-                  currentUserId = user.uid,
-                  isBusy = isBusy,
-                  withdrawalValidationError = withdrawalValidationError,
-                  onClearValidationError = { viewModel.clearWithdrawalValidationError() },
-                  submissionsState = userSubmissionsState,
-                  transactionsState = userTransactionsState,
-                  onSubmitDemoWithdrawal = {
-                      amountInr,
-                      method,
-                      holderName,
-                      bankName,
-                      accountNum,
-                      ifsc,
-                      upiId,
-                      onSuccess ->
-                    viewModel.submitDemoWithdrawal(
-                      amountInrInput = amountInr,
-                      method = method,
-                      accountHolderName = holderName,
-                      bankName = bankName,
-                      accountNumber = accountNum,
-                      ifscCode = ifsc,
-                      upiId = upiId,
-                      onSuccess = onSuccess
+                val activeProfile = (userProfileState as? UiState.Success)?.data
+                val totalBalanceCoins = activeProfile?.getEffectiveBalanceCoins() ?: 0L
+                val userWithdrawals =
+                  (userWithdrawalRequestsState as? UiState.Success)?.data ?: emptyList()
+
+                when (withdrawalRoute) {
+                  WithdrawalScreenRoute.MAIN -> {
+                    WithdrawalMainScreen(
+                      totalBalanceCoins = totalBalanceCoins,
+                      availability = withdrawalAvailabilityConfig,
+                      onSelectRoute = { route -> viewModel.navigateWithdrawal(route) },
+                      onOpenHistory = { viewModel.openWithdrawalHistory() },
+                      onBack = { viewModel.closeWithdrawalFlow() }
                     )
                   }
-                )
+                  WithdrawalScreenRoute.UPI -> {
+                    UpiRedemptionScreen(
+                      totalBalanceCoins = totalBalanceCoins,
+                      availability = withdrawalAvailabilityConfig,
+                      isBusy = isBusy,
+                      validationError = withdrawalValidationError,
+                      onClearError = { viewModel.clearWithdrawalValidationError() },
+                      onSubmit = { rupees, upiId ->
+                        viewModel.submitWithdrawalRedemption(
+                          method = WithdrawalMethodType.UPI,
+                          amountRupees = rupees,
+                          upiId = upiId
+                        )
+                      },
+                      onBack = { viewModel.navigateWithdrawal(WithdrawalScreenRoute.MAIN) }
+                    )
+                  }
+                  WithdrawalScreenRoute.AMAZON_GIFT_CARD -> {
+                    GiftCardRedemptionScreen(
+                      method = WithdrawalMethodType.AMAZON_GIFT_CARD,
+                      totalBalanceCoins = totalBalanceCoins,
+                      availability = withdrawalAvailabilityConfig,
+                      isBusy = isBusy,
+                      validationError = withdrawalValidationError,
+                      onClearError = { viewModel.clearWithdrawalValidationError() },
+                      onSubmit = { rupees ->
+                        viewModel.submitWithdrawalRedemption(
+                          method = WithdrawalMethodType.AMAZON_GIFT_CARD,
+                          amountRupees = rupees
+                        )
+                      },
+                      onBack = { viewModel.navigateWithdrawal(WithdrawalScreenRoute.MAIN) }
+                    )
+                  }
+                  WithdrawalScreenRoute.GOOGLE_PLAY_GIFT_CARD -> {
+                    GiftCardRedemptionScreen(
+                      method = WithdrawalMethodType.GOOGLE_PLAY_GIFT_CARD,
+                      totalBalanceCoins = totalBalanceCoins,
+                      availability = withdrawalAvailabilityConfig,
+                      isBusy = isBusy,
+                      validationError = withdrawalValidationError,
+                      onClearError = { viewModel.clearWithdrawalValidationError() },
+                      onSubmit = { rupees ->
+                        viewModel.submitWithdrawalRedemption(
+                          method = WithdrawalMethodType.GOOGLE_PLAY_GIFT_CARD,
+                          amountRupees = rupees
+                        )
+                      },
+                      onBack = { viewModel.navigateWithdrawal(WithdrawalScreenRoute.MAIN) }
+                    )
+                  }
+                  WithdrawalScreenRoute.FLIPKART_GIFT_CARD -> {
+                    GiftCardRedemptionScreen(
+                      method = WithdrawalMethodType.FLIPKART_GIFT_CARD,
+                      totalBalanceCoins = totalBalanceCoins,
+                      availability = withdrawalAvailabilityConfig,
+                      isBusy = isBusy,
+                      validationError = withdrawalValidationError,
+                      onClearError = { viewModel.clearWithdrawalValidationError() },
+                      onSubmit = { rupees ->
+                        viewModel.submitWithdrawalRedemption(
+                          method = WithdrawalMethodType.FLIPKART_GIFT_CARD,
+                          amountRupees = rupees
+                        )
+                      },
+                      onBack = { viewModel.navigateWithdrawal(WithdrawalScreenRoute.MAIN) }
+                    )
+                  }
+                  WithdrawalScreenRoute.CONFIRMATION -> {
+                    WithdrawalConfirmationScreen(
+                      request = lastSubmittedWithdrawal,
+                      onViewHistory = { viewModel.openWithdrawalHistory() },
+                      onDone = { viewModel.closeWithdrawalFlow() }
+                    )
+                  }
+                  WithdrawalScreenRoute.HISTORY -> {
+                    WithdrawalHistoryScreen(
+                      requests = userWithdrawals,
+                      onBack = { viewModel.closeWithdrawalFlow() }
+                    )
+                  }
+                  WithdrawalScreenRoute.NONE -> {
+                    UserWalletScreen(
+                      profileState = userProfileState,
+                      tasksState = userTasksState,
+                      withdrawalRequestsState = userWithdrawalRequestsState,
+                      currentUserId = user.uid,
+                      submissionsState = userSubmissionsState,
+                      transactionsState = userTransactionsState,
+                      onOpenWithdrawalMain = { viewModel.openWithdrawalMain() },
+                      onOpenWithdrawalHistory = { viewModel.openWithdrawalHistory() }
+                    )
+                  }
+                }
               }
               UserTab.PROFILE -> {
                 UserProfileScreen(
@@ -1133,7 +1227,28 @@ private fun AuthenticatedWorkspace(
             },
             databaseId = databaseId,
             onOpenSecuritySheet = { viewModel.setShowSecuritySheet(true) },
-            onTriggerUpdateCheck = { viewModel.checkForAppUpdates(context, forceCheck = true) }
+            onTriggerUpdateCheck = { viewModel.checkForAppUpdates(context, forceCheck = true) },
+            withdrawalAvailabilityConfig = withdrawalAvailabilityConfig,
+            adminNotifications = adminNotifications,
+            isWithdrawalBusy = isBusy,
+            onAcceptWithdrawalRequest = { reqId, targetStatus, note ->
+              viewModel.adminAcceptWithdrawal(reqId, targetStatus, note)
+            },
+            onSendGiftCardCode = { reqId, giftCode, note, onSuccess ->
+              viewModel.adminSendGiftCardCode(reqId, giftCode, note, onSuccess)
+            },
+            onCompleteUpiWithdrawal = { reqId, ref, note, onSuccess ->
+              viewModel.adminCompleteUpiWithdrawal(reqId, ref, note, onSuccess)
+            },
+            onRejectWithdrawalAndRefund = { reqId, reason, onSuccess ->
+              viewModel.adminRejectWithdrawalAndRefund(reqId, reason, onSuccess)
+            },
+            onUpdateWithdrawalAvailability = { config, onSuccess ->
+              viewModel.adminUpdateWithdrawalAvailability(config, onSuccess)
+            },
+            onMarkAdminNotificationRead = { notifId ->
+              viewModel.markAdminNotificationRead(notifId)
+            }
           )
         }
       }

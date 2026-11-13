@@ -86,6 +86,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.AdminActivityLog
+import com.example.data.model.AdminNotificationItem
 import com.example.data.model.AppItem
 import com.example.data.model.CampaignItem
 import com.example.data.model.DemoWithdrawalRequest
@@ -96,6 +97,7 @@ import com.example.data.model.TaskStatus
 import com.example.data.model.TaskStep
 import com.example.data.model.TransactionRecord
 import com.example.data.model.UserProfile
+import com.example.data.model.WithdrawalAvailabilityConfig
 import com.example.data.model.WithdrawalMethod
 import com.example.data.model.centsToCoins
 import com.example.data.model.formatCoins
@@ -181,7 +183,16 @@ fun AdminDashboardScreen(
    onUpdateCampaignDetails: ((String, String, String, String, Long, Long, String, Long, String, String, String, String, String) -> Unit)? = null,
    databaseId: String = "(default)",
    onOpenSecuritySheet: () -> Unit = {},
-   onTriggerUpdateCheck: () -> Unit = {}
+   onTriggerUpdateCheck: () -> Unit = {},
+   withdrawalAvailabilityConfig: WithdrawalAvailabilityConfig = WithdrawalAvailabilityConfig(),
+   adminNotifications: List<AdminNotificationItem> = emptyList(),
+   isWithdrawalBusy: Boolean = false,
+   onAcceptWithdrawalRequest: (String, String, String) -> Unit = { _, _, _ -> },
+   onSendGiftCardCode: (String, String, String, () -> Unit) -> Unit = { _, _, _, _ -> },
+   onCompleteUpiWithdrawal: (String, String, String, () -> Unit) -> Unit = { _, _, _, _ -> },
+   onRejectWithdrawalAndRefund: (String, String, () -> Unit) -> Unit = { _, _, _ -> },
+   onUpdateWithdrawalAvailability: (WithdrawalAvailabilityConfig, () -> Unit) -> Unit = { _, _ -> },
+   onMarkAdminNotificationRead: (String) -> Unit = {}
 ) {
   if (!isAdminAuthorized) {
     UnauthorizedAdminGate(currentUserEmail = currentUserEmail)
@@ -563,7 +574,19 @@ fun AdminDashboardScreen(
               contentPadding = PaddingValues(bottom = 24.dp)
             ) {
               item {
-                AdminWithdrawalRequestsSection(withdrawalRequests = withdrawalRequests)
+                AdminWithdrawalRequestsSection(
+                  withdrawalRequests = withdrawalRequests,
+                  availabilityConfig = withdrawalAvailabilityConfig,
+                  adminNotifications = adminNotifications,
+                  transactions = transactions,
+                  isBusy = isWithdrawalBusy,
+                  onAcceptRequest = onAcceptWithdrawalRequest,
+                  onSendGiftCardCode = onSendGiftCardCode,
+                  onCompleteUpi = onCompleteUpiWithdrawal,
+                  onRejectAndRefund = onRejectWithdrawalAndRefund,
+                  onUpdateAvailability = onUpdateWithdrawalAvailability,
+                  onMarkAdminNotificationRead = onMarkAdminNotificationRead
+                )
               }
             }
           }
@@ -704,207 +727,7 @@ private fun AdminMetricCard(
   }
 }
 
-@Composable
-private fun AdminWithdrawalRequestsSection(
-  withdrawalRequests: List<DemoWithdrawalRequest>
-) {
-  var statusFilter by rememberSaveable { mutableStateOf("ALL") }
-  val pendingCount = withdrawalRequests.count { it.status.contains("pending", ignoreCase = true) }
-  val approvedCount = withdrawalRequests.count { it.status.equals("approved", ignoreCase = true) }
-  val rejectedCount = withdrawalRequests.count { it.status.equals("rejected", ignoreCase = true) }
-  val totalRequestedCents = withdrawalRequests.sumOf { it.amountCents }
-  val totalApprovedCents =
-    withdrawalRequests.filter { it.status.equals("approved", ignoreCase = true) }.sumOf { it.amountCents }
 
-  val filteredRequests =
-    remember(withdrawalRequests, statusFilter) {
-      when (statusFilter) {
-        "PENDING" -> withdrawalRequests.filter { it.status.contains("pending", ignoreCase = true) }
-        "APPROVED" -> withdrawalRequests.filter { it.status.equals("approved", ignoreCase = true) }
-        "REJECTED" -> withdrawalRequests.filter { it.status.equals("rejected", ignoreCase = true) }
-        else -> withdrawalRequests
-      }
-    }
-
-  Card(
-    modifier = Modifier.fillMaxWidth().testTag("admin_withdrawal_requests_section"),
-    shape = RoundedCornerShape(16.dp),
-    colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
-    border = BorderStroke(1.dp, AdminBorderColor),
-    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-  ) {
-    Column(
-      modifier = Modifier.fillMaxWidth().padding(16.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Text(
-          text = "Withdrawal Requests (${withdrawalRequests.size})",
-          style = MaterialTheme.typography.titleMedium,
-          color = AdminTextDark,
-          fontWeight = FontWeight.ExtraBold
-        )
-        Surface(
-          shape = RoundedCornerShape(50),
-          color = AdminBlueTint
-        ) {
-          Text(
-            text = "Demo / Request Only",
-            style = MaterialTheme.typography.labelSmall,
-            color = AdminBlueDark,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-          )
-        }
-      }
-
-      if (filteredRequests.isEmpty()) {
-        Text(
-          text = "No withdrawal requests submitted yet.",
-          style = MaterialTheme.typography.bodyMedium,
-          color = AdminTextMuted
-        )
-      } else {
-        filteredRequests.forEach { req ->
-          val reqId = req.id.ifBlank { req.requestId }
-          val dateStr =
-            req.createdAt?.toDate()?.let {
-              SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
-            } ?: "Recently submitted"
-          val coinsVal = req.getEffectiveAmountCoins()
-          Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = AdminSoftGreyBg,
-            border = BorderStroke(1.dp, AdminBorderColor),
-            modifier =
-              Modifier.fillMaxWidth()
-                .testTag("admin_withdrawal_card_$reqId")
-          ) {
-            Row(
-              modifier = Modifier.fillMaxWidth().padding(12.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-              Column(modifier = Modifier.weight(1f)) {
-                Text(
-                  text = req.userName.ifBlank { "TaskFlow User" },
-                  style = MaterialTheme.typography.titleMedium,
-                  color = AdminTextDark,
-                  fontWeight = FontWeight.Bold,
-                  modifier = Modifier.testTag("admin_withdrawal_user_$reqId")
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                  text = "Method: ${req.method} • Date: $dateStr",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = AdminTextSecondary,
-                  modifier = Modifier.testTag("admin_withdrawal_method_$reqId")
-                )
-                Text(
-                  text = "Request ID: $reqId • Coins: ${formatCoins(coinsVal)}",
-                  style = MaterialTheme.typography.labelSmall,
-                  color = AdminTextMuted
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Surface(
-                  shape = RoundedCornerShape(50),
-                  color = AdminAmberTint,
-                  modifier = Modifier.testTag("admin_withdrawal_status_$reqId")
-                ) {
-                  Text(
-                    text = "Demo / Pending",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AdminAmberWarning,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
-                  )
-                }
-              }
-              Text(
-                text = formatRewardInr(req.amountCents),
-                style = MaterialTheme.typography.titleLarge,
-                color = AdminBluePrimary,
-                fontWeight = FontWeight.ExtraBold,
-                modifier = Modifier.testTag("admin_withdrawal_amount_$reqId")
-              )
-            }
-          }
-        }
-      }
-
-      // Summary metrics for Pending, Approved, Rejected, Total Requested & Approved Amount
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-      ) {
-        Surface(
-          shape = RoundedCornerShape(10.dp),
-          color = AdminSoftGreyBg,
-          border = BorderStroke(1.dp, AdminBorderColor),
-          modifier = Modifier.weight(1f)
-        ) {
-          Column(modifier = Modifier.padding(10.dp)) {
-            Text("Total Requested", style = MaterialTheme.typography.labelSmall, color = AdminTextMuted)
-            Text(
-              text = "Req: ${formatRewardInr(totalRequestedCents)}",
-              style = MaterialTheme.typography.titleSmall,
-              color = AdminTextDark,
-              fontWeight = FontWeight.ExtraBold
-            )
-            Text(
-              text = "$pendingCount Pending • ${withdrawalRequests.size} Total",
-              style = MaterialTheme.typography.labelSmall,
-              color = AdminTextSecondary
-            )
-          }
-        }
-        Surface(
-          shape = RoundedCornerShape(10.dp),
-          color = AdminSoftGreyBg,
-          border = BorderStroke(1.dp, AdminBorderColor),
-          modifier = Modifier.weight(1f)
-        ) {
-          Column(modifier = Modifier.padding(10.dp)) {
-            Text("Total Approved", style = MaterialTheme.typography.labelSmall, color = AdminTextMuted)
-            Text(
-              text = "Appr: ${formatRewardInr(totalApprovedCents)}",
-              style = MaterialTheme.typography.titleSmall,
-              color = AdminGreenSuccess,
-              fontWeight = FontWeight.ExtraBold
-            )
-            Text(
-              text = "$approvedCount Approved • $rejectedCount Rejected",
-              style = MaterialTheme.typography.labelSmall,
-              color = AdminTextSecondary
-            )
-          }
-        }
-      }
-
-      Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-      ) {
-        listOf(
-          "ALL" to "All (${withdrawalRequests.size})",
-          "PENDING" to "Pending ($pendingCount)",
-          "APPROVED" to "Approved ($approvedCount)",
-          "REJECTED" to "Rejected ($rejectedCount)"
-        ).forEach { (key, label) ->
-          FilterChip(
-            selected = statusFilter == key,
-            onClick = { statusFilter = key },
-            label = { Text(label) }
-          )
-        }
-      }
-    }
-  }
-}
 
 @Composable
 private fun AdminTasksTabContent(

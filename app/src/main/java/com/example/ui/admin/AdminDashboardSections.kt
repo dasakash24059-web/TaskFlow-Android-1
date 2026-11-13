@@ -93,6 +93,7 @@ import com.example.data.model.TaskStatus
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
+import com.example.data.model.WithdrawalStatus
 import com.example.data.model.centsToCoins
 import com.example.data.model.coinsToCents
 import com.example.data.model.formatCoins
@@ -243,12 +244,16 @@ fun AdminControlCenterHomeScreen(
   val activeCampaignsCount =
     campaigns.count { it.status.equals("ACTIVE", ignoreCase = true) && !it.isQuotaExhausted }
   val pendingWithdrawalsCount =
-    withdrawalRequests.count { it.status.contains("pending", ignoreCase = true) }
+    withdrawalRequests.count { WithdrawalStatus.isPendingOrActive(it.status) }
   val totalDistributedCoins =
     remember(transactions, users, reviewTasks) {
       val txCoins =
         transactions
-          .filter { it.type != TransactionType.DEMO_WITHDRAWAL }
+          .filter {
+            it.type != TransactionType.DEMO_WITHDRAWAL &&
+              it.type != TransactionType.WITHDRAWAL_DEBIT &&
+              it.type != TransactionType.WITHDRAWAL_REFUND
+          }
           .sumOf { it.getEffectiveAmountCoins() }
       val userWalletCoins = users.sumOf { it.getEffectiveBalanceCoins() }
       val approvedTaskCoins =
@@ -909,13 +914,17 @@ fun AdminOverviewSection(
   val activeCampaigns =
     campaigns.count { it.status.equals("ACTIVE", ignoreCase = true) && !it.isQuotaExhausted }
   val pendingWithdrawals =
-    withdrawalRequests.count { it.status.contains("pending", ignoreCase = true) }
+    withdrawalRequests.count { WithdrawalStatus.isPendingOrActive(it.status) }
 
   val totalDistributedCoins =
     remember(transactions, users, reviewTasks) {
       val txCoins =
         transactions
-          .filter { it.type != TransactionType.DEMO_WITHDRAWAL }
+          .filter {
+            it.type != TransactionType.DEMO_WITHDRAWAL &&
+              it.type != TransactionType.WITHDRAWAL_DEBIT &&
+              it.type != TransactionType.WITHDRAWAL_REFUND
+          }
           .sumOf { it.getEffectiveAmountCoins() }
       val userWalletCoins = users.sumOf { it.getEffectiveBalanceCoins() }
       val approvedTaskCoins =
@@ -932,9 +941,17 @@ fun AdminOverviewSection(
   val pendingLiabilityCoins =
     reviewTasks.filter { it.status == TaskStatus.SUBMITTED }.sumOf { it.getEffectiveRewardCoins() }
   val pendingLiabilityCents = coinsToCents(pendingLiabilityCoins)
-  val totalRequestedWithdrawalCents = withdrawalRequests.sumOf { it.amountCents }
+  val totalRequestedWithdrawalCents =
+    withdrawalRequests.sumOf {
+      if (it.amountCents > 0L) it.amountCents else it.getEffectiveAmountRupees() * 100L
+    }
   val approvedWithdrawalCents =
-    withdrawalRequests.filter { it.status.equals("approved", ignoreCase = true) }.sumOf { it.amountCents }
+    withdrawalRequests
+      .filter {
+        it.status.equals(WithdrawalStatus.COMPLETED, ignoreCase = true) ||
+          it.status.equals("approved", ignoreCase = true)
+      }
+      .sumOf { if (it.amountCents > 0L) it.amountCents else it.getEffectiveAmountRupees() * 100L }
 
   val recentActivities =
     remember(activityLogs, reviewTasks, tasks, campaigns, transactions, users, withdrawalRequests) {
@@ -1355,7 +1372,11 @@ fun AdminCoinsRewardsSection(
   transactions: List<TransactionRecord>
 ) {
   val creditTransactions =
-    transactions.filter { it.type != TransactionType.DEMO_WITHDRAWAL }
+    transactions.filter {
+      it.type != TransactionType.DEMO_WITHDRAWAL &&
+        it.type != TransactionType.WITHDRAWAL_DEBIT &&
+        it.type != TransactionType.WITHDRAWAL_REFUND
+    }
   val approvedSubmissions =
     reviewTasks.filter { it.status == TaskStatus.APPROVED }
   val pendingSubmissions =
@@ -1694,7 +1715,11 @@ fun AdminAnalyticsReportsSection(
 
   val periodDistributedCoins =
     filteredTransactions
-      .filter { it.type != TransactionType.DEMO_WITHDRAWAL }
+      .filter {
+        it.type != TransactionType.DEMO_WITHDRAWAL &&
+          it.type != TransactionType.WITHDRAWAL_DEBIT &&
+          it.type != TransactionType.WITHDRAWAL_REFUND
+      }
       .sumOf { it.getEffectiveAmountCoins() }
       .let { txCoins ->
         val approvedSubCoins =
@@ -1704,11 +1729,14 @@ fun AdminAnalyticsReportsSection(
   val periodDistributedCents = coinsToCents(periodDistributedCoins)
 
   val pendingWithdrawalsCount =
-    withdrawalRequests.count { it.status.contains("pending", ignoreCase = true) }
+    withdrawalRequests.count { WithdrawalStatus.isPendingOrActive(it.status) }
   val approvedWithdrawalsCount =
-    withdrawalRequests.count { it.status.equals("approved", ignoreCase = true) }
+    withdrawalRequests.count {
+      it.status.equals(WithdrawalStatus.COMPLETED, ignoreCase = true) ||
+        it.status.equals("approved", ignoreCase = true)
+    }
   val rejectedWithdrawalsCount =
-    withdrawalRequests.count { it.status.equals("rejected", ignoreCase = true) }
+    withdrawalRequests.count { it.status.equals(WithdrawalStatus.REJECTED, ignoreCase = true) }
 
   LazyColumn(
     modifier = Modifier.fillMaxSize().testTag("admin_analytics_section"),
@@ -2694,12 +2722,14 @@ internal fun buildCombinedActivityEntries(
   withdrawalRequests.take(15).forEach { req ->
     val ts = req.createdAt?.toDate()?.time ?: 0L
     val reqId = req.id.ifBlank { req.requestId }
+    val rupees = req.getEffectiveAmountRupees()
     items.add(
       CombinedActivityEntry(
         id = "wd_${reqId}_${req.status}",
         category = "WITHDRAWAL",
-        title = "Withdrawal ${req.status.uppercase(Locale.US)} • ${formatRewardInr(req.amountCents)}",
-        subtitle = "User: ${req.userName.ifBlank { req.userId }} • Method: ${req.method}",
+        title = "Withdrawal ${req.getDisplayStatus()} • " +
+          if (rupees > 0L) "₹$rupees" else formatRewardInr(req.amountCents),
+        subtitle = "User: ${req.userName.ifBlank { req.userId }} • Method: ${req.getEffectiveMethodLabel()}",
         timestampMillis = ts,
         dateLabel = if (ts > 0L) fmt.format(Date(ts)) else "Recorded"
       )

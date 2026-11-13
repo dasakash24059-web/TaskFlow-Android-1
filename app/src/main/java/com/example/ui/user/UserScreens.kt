@@ -1523,15 +1523,15 @@ private fun RecentTransactionsCard(
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
               }
+              val isDebit =
+                tx.type == TransactionType.DEMO_WITHDRAWAL ||
+                  tx.type == TransactionType.WITHDRAWAL_DEBIT
+              val coinsText = formatCoins(tx.getEffectiveAmountCoins())
               Text(
-                text = if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
-                  "-${formatRewardInr(tx.amountCents)}"
-                } else {
-                  "+${formatRewardInr(tx.amountCents)}"
-                },
+                text = if (isDebit) "-$coinsText" else "+$coinsText",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
+                color = if (isDebit) {
                   Color(0xFFDC2626)
                 } else {
                   Color(0xFF16A34A)

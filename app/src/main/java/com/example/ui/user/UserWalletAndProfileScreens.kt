@@ -85,8 +85,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.DemoWithdrawalRequest
-import com.example.data.model.MIN_WITHDRAWAL_CENTS
-import com.example.data.model.MIN_WITHDRAWAL_COINS
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
@@ -94,9 +92,9 @@ import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserActivityItem
 import com.example.data.model.UserProfile
-import com.example.data.model.WithdrawalMethod
+import com.example.data.model.WithdrawalMethodType
+import com.example.data.model.WithdrawalStatus
 import com.example.data.model.centsToCoins
-import com.example.data.model.coinsToCents
 import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
 import com.example.data.model.formatVisibleUserEmail
@@ -121,11 +119,10 @@ import java.util.Locale
 import kotlin.math.roundToLong
 
 /**
- * TaskFlow Wallet Screen (Purple-and-White Design):
- * - Displays Available Balance in INR (₹).
- * - Displays only ONE main action button: `Withdraw` (No "Add Money" button anywhere).
- * - Clearly displays `Minimum Withdrawal: ₹200`.
- * - Opens `Select Withdrawal Method` dialog with `Bank Account` and `UPI ID` demo request flows.
+ * TaskFlow Wallet Screen:
+ * - Displays Available Coin Balance, Eligible Withdrawable Coins, and Promotional Coins.
+ * - Displays primary `Withdraw Coins` CTA that opens the dedicated Withdrawal & Gift Card flow,
+ *   plus a `Withdrawal History` shortcut.
  */
 @Composable
 fun UserWalletScreen(
@@ -133,25 +130,12 @@ fun UserWalletScreen(
   tasksState: UiState<List<TaskItem>>,
   withdrawalRequestsState: UiState<List<DemoWithdrawalRequest>>,
   currentUserId: String = "",
-  isBusy: Boolean = false,
-  withdrawalValidationError: String? = null,
-  onClearValidationError: () -> Unit = {},
   submissionsState: UiState<List<SubmissionItem>> = UiState.Success(emptyList()),
   transactionsState: UiState<List<TransactionRecord>> = UiState.Success(emptyList()),
-  onSubmitDemoWithdrawal: (
-    amountInr: String,
-    method: String,
-    accountHolderName: String,
-    bankName: String,
-    accountNumber: String,
-    ifscCode: String,
-    upiId: String,
-    onSuccess: () -> Unit
-  ) -> Unit = { _, _, _, _, _, _, _, _ -> },
-  initialOpenWithdraw: Boolean = false
+  onOpenWithdrawalMain: () -> Unit = {},
+  onOpenWithdrawalHistory: () -> Unit = {}
 ) {
   val profile = (profileState as? UiState.Success)?.data
-  val availableBalanceCents = profile?.balanceCents ?: 0L
   val eligibleCoins = profile?.getEligibleWithdrawalCoins() ?: 0L
   val promotionalCoins = profile?.getPromotionalBalanceCoins() ?: 0L
   val totalBalanceCoins = profile?.getEffectiveBalanceCoins() ?: 0L
@@ -177,7 +161,11 @@ fun UserWalletScreen(
     remember(approvedUserTasks, transactions, totalBalanceCoins) {
       val txEarningsCoins =
         transactions
-          .filter { it.type != TransactionType.DEMO_WITHDRAWAL }
+          .filter {
+            it.type != TransactionType.DEMO_WITHDRAWAL &&
+              it.type != TransactionType.WITHDRAWAL_DEBIT &&
+              it.type != TransactionType.WITHDRAWAL_REFUND
+          }
           .sumOf { it.getEffectiveAmountCoins() }
       if (txEarningsCoins > 0L) {
         txEarningsCoins
@@ -195,33 +183,6 @@ fun UserWalletScreen(
         }
         .sumOf { it.getEffectiveRewardCoins() }
     }
-
-  var showWithdrawMethodDialog by rememberSaveable { mutableStateOf(initialOpenWithdraw) }
-
-  if (showWithdrawMethodDialog) {
-    SelectWithdrawalMethodDialog(
-      availableBalanceCents = availableBalanceCents,
-      isBusy = isBusy,
-      externalValidationError = withdrawalValidationError,
-      onDismiss = {
-        onClearValidationError()
-        showWithdrawMethodDialog = false
-      },
-      onSubmit = { amountInr, method, holderName, bankName, accountNum, ifsc, upiId ->
-        onSubmitDemoWithdrawal(
-          amountInr,
-          method,
-          holderName,
-          bankName,
-          accountNum,
-          ifsc,
-          upiId
-        ) {
-          showWithdrawMethodDialog = false
-        }
-      }
-    )
-  }
 
   NeonBackgroundBox {
     LazyColumn(
@@ -339,31 +300,10 @@ fun UserWalletScreen(
               }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Surface(
-              shape = RoundedCornerShape(50),
-              color = Color(0xFFEEF2FF),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFC7D2FE))
-            ) {
-              Text(
-                text = "Minimum Withdrawal: 25,000 Coins",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF4338CA),
-                fontWeight = FontWeight.Bold,
-                modifier =
-                  Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
-                    .testTag("wallet_min_withdrawal_text")
-              )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             Button(
-              onClick = {
-                onClearValidationError()
-                showWithdrawMethodDialog = true
-              },
+              onClick = onOpenWithdrawalMain,
               shape = RoundedCornerShape(14.dp),
               colors =
                 ButtonDefaults.buttonColors(
@@ -384,6 +324,29 @@ fun UserWalletScreen(
               Text(
                 text = "Withdraw Coins",
                 style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+              )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+              onClick = onOpenWithdrawalHistory,
+              shape = RoundedCornerShape(14.dp),
+              modifier =
+                Modifier.fillMaxWidth()
+                  .height(48.dp)
+                  .testTag("wallet_view_withdrawal_history_button")
+            ) {
+              Icon(
+                imageVector = Icons.Default.History,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Text(
+                text = "Withdrawal History",
+                style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold
               )
             }
@@ -447,12 +410,23 @@ fun UserWalletScreen(
 
       // 3. Recent Withdrawal Requests Section (in Coins)
       item {
-        Text(
-          text = "Withdrawal Requests (${withdrawalRequests.size})",
-          style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.onBackground
-        )
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Text(
+            text = "Withdrawal Requests (${withdrawalRequests.size})",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+          )
+          if (withdrawalRequests.isNotEmpty()) {
+            TextButton(onClick = onOpenWithdrawalHistory) {
+              Text("See All", fontWeight = FontWeight.Bold)
+            }
+          }
+        }
       }
 
       if (withdrawalRequests.isEmpty()) {
@@ -479,7 +453,7 @@ fun UserWalletScreen(
               )
               Spacer(modifier = Modifier.height(4.dp))
               Text(
-                text = "Tap Withdraw Coins above to choose Bank Account or UPI ID (Minimum Withdrawal: 25,000 Coins).",
+                text = "Tap Withdraw Coins above to redeem via UPI or Gift Cards.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -493,9 +467,22 @@ fun UserWalletScreen(
             request.createdAt?.toDate()?.let {
               SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
             } ?: "Just now"
+          val statusLabel = request.getDisplayStatus()
+          val (badgeBg, badgeFg) =
+            when {
+              request.status.equals(WithdrawalStatus.COMPLETED, true) ||
+                request.status.equals("approved", true) -> Color(0xFFDCFCE7) to Color(0xFF166534)
+              request.status.equals(WithdrawalStatus.REJECTED, true) ->
+                Color(0xFFFEE2E2) to Color(0xFF991B1B)
+              request.isDelayedAt() -> Color(0xFFFEF3C7) to Color(0xFF92400E)
+              else -> Color(0xFFE0E7FF) to Color(0xFF3730A3)
+            }
+          val rupees = request.getEffectiveAmountRupees()
           Card(
             modifier =
               Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .clickable(onClick = onOpenWithdrawalHistory)
                 .testTag("user_withdrawal_request_card_${request.id.ifBlank { request.requestId }}"),
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -519,10 +506,10 @@ fun UserWalletScreen(
                   Box(contentAlignment = Alignment.Center) {
                     Icon(
                       imageVector =
-                        if (request.method == WithdrawalMethod.UPI_ID) {
-                          Icons.Default.QrCode2
-                        } else {
-                          Icons.Default.AccountBalance
+                        when {
+                          WithdrawalMethodType.isUpi(request.method) -> Icons.Default.QrCode2
+                          WithdrawalMethodType.isGiftCard(request.method) -> Icons.Default.CardGiftcard
+                          else -> Icons.Default.AccountBalance
                         },
                       contentDescription = null,
                       tint = MaterialTheme.colorScheme.primary,
@@ -532,7 +519,12 @@ fun UserWalletScreen(
                 }
                 Column {
                   Text(
-                    text = "${request.method} Withdrawal",
+                    text =
+                      if (rupees > 0L) {
+                        "${request.getEffectiveMethodLabel()} • ₹$rupees"
+                      } else {
+                        request.getEffectiveMethodLabel()
+                      },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                   )
@@ -544,12 +536,12 @@ fun UserWalletScreen(
                   Spacer(modifier = Modifier.height(4.dp))
                   Surface(
                     shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.secondaryContainer
+                    color = badgeBg
                   ) {
                     Text(
-                      text = "Pending Review",
+                      text = statusLabel,
                       style = MaterialTheme.typography.labelSmall,
-                      color = MaterialTheme.colorScheme.onSecondaryContainer,
+                      color = badgeFg,
                       fontWeight = FontWeight.Bold,
                       modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
                     )
@@ -685,9 +677,12 @@ fun UserWalletScreen(
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
               }
+              val isDebitTx =
+                tx.type == TransactionType.DEMO_WITHDRAWAL ||
+                  tx.type == TransactionType.WITHDRAWAL_DEBIT
               Text(
                 text =
-                  if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
+                  if (isDebitTx) {
                     "-${formatCoins(txCoins)}"
                   } else {
                     "+${formatCoins(txCoins)}"
@@ -695,7 +690,7 @@ fun UserWalletScreen(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.ExtraBold,
                 color =
-                  if (tx.type == TransactionType.DEMO_WITHDRAWAL) {
+                  if (isDebitTx) {
                     Color(0xFFDC2626)
                   } else {
                     Color(0xFF16A34A)
@@ -709,351 +704,7 @@ fun UserWalletScreen(
   }
 }
 
-@Composable
-fun SelectWithdrawalMethodDialog(
-  availableBalanceCents: Long,
-  isBusy: Boolean,
-  externalValidationError: String?,
-  onDismiss: () -> Unit,
-  onSubmit: (
-    amountInr: String,
-    method: String,
-    accountHolderName: String,
-    bankName: String,
-    accountNumber: String,
-    ifscCode: String,
-    upiId: String
-  ) -> Unit
-) {
-  var selectedMethod by rememberSaveable { mutableStateOf(WithdrawalMethod.BANK_ACCOUNT) }
-  var accountHolderName by rememberSaveable { mutableStateOf("") }
-  var bankName by rememberSaveable { mutableStateOf("") }
-  var accountNumber by rememberSaveable { mutableStateOf("") }
-  var ifscCode by rememberSaveable { mutableStateOf("") }
-  var upiId by rememberSaveable { mutableStateOf("") }
-  var amountInput by rememberSaveable { mutableStateOf("25000") }
-  var localValidationError by rememberSaveable { mutableStateOf<String?>(null) }
 
-  val availableEligibleCoins = centsToCoins(availableBalanceCents)
-  val displayedError = localValidationError ?: externalValidationError
-
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    modifier = Modifier.testTag("withdrawal_method_dialog"),
-    title = {
-      Column {
-        Text(
-          text = "Select Withdrawal Method",
-          style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold
-        )
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-          text =
-            "Eligible Balance: ${formatCoins(availableEligibleCoins)} • Minimum Withdrawal: 25,000 Coins",
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.primary
-        )
-      }
-    },
-    text = {
-      Column(
-        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-      ) {
-        WithdrawalMethodOptionCard(
-          title = "Bank Account",
-          subtitle = "NEFT / IMPS Bank Transfer",
-          icon = Icons.Default.AccountBalance,
-          selected = selectedMethod == WithdrawalMethod.BANK_ACCOUNT,
-          onClick = {
-            selectedMethod = WithdrawalMethod.BANK_ACCOUNT
-            localValidationError = null
-          },
-          testTag = "withdrawal_method_bank"
-        )
-
-        WithdrawalMethodOptionCard(
-          title = "UPI ID",
-          subtitle = "Instant UPI Transfer",
-          icon = Icons.Default.QrCode2,
-          selected = selectedMethod == WithdrawalMethod.UPI_ID,
-          onClick = {
-            selectedMethod = WithdrawalMethod.UPI_ID
-            localValidationError = null
-          },
-          testTag = "withdrawal_method_upi"
-        )
-
-        if (selectedMethod == WithdrawalMethod.BANK_ACCOUNT) {
-          Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-            modifier = Modifier.fillMaxWidth().testTag("bank_account_form_section")
-          ) {
-            Column(
-              modifier = Modifier.padding(14.dp),
-              verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-              Text(
-                text = "BANK ACCOUNT DETAILS",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
-              )
-              OutlinedTextField(
-                value = accountHolderName,
-                onValueChange = {
-                  accountHolderName = it
-                  localValidationError = null
-                },
-                label = { Text("Account Holder Name") },
-                placeholder = { Text("e.g., Rahul Sharma") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("bank_holder_name_input")
-              )
-              OutlinedTextField(
-                value = bankName,
-                onValueChange = {
-                  bankName = it
-                  localValidationError = null
-                },
-                label = { Text("Bank Name") },
-                placeholder = { Text("e.g., State Bank of India") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("bank_name_input")
-              )
-              OutlinedTextField(
-                value = accountNumber,
-                onValueChange = {
-                  accountNumber = it
-                  localValidationError = null
-                },
-                label = { Text("Account Number") },
-                placeholder = { Text("Enter account number") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("bank_account_number_input")
-              )
-              OutlinedTextField(
-                value = ifscCode,
-                onValueChange = {
-                  ifscCode = it.uppercase(Locale.US)
-                  localValidationError = null
-                },
-                label = { Text("IFSC Code") },
-                placeholder = { Text("e.g., SBIN0001234") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("bank_ifsc_input")
-              )
-            }
-          }
-        } else {
-          Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-            modifier = Modifier.fillMaxWidth().testTag("upi_id_form_section")
-          ) {
-            Column(
-              modifier = Modifier.padding(14.dp),
-              verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-              Text(
-                text = "UPI ID DETAILS",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
-              )
-              OutlinedTextField(
-                value = upiId,
-                onValueChange = {
-                  upiId = it
-                  localValidationError = null
-                },
-                label = { Text("UPI ID") },
-                placeholder = { Text("e.g., username@upi") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("upi_id_input")
-              )
-            }
-          }
-        }
-
-        // Withdrawal Amount Input (Coins)
-        OutlinedTextField(
-          value = amountInput,
-          onValueChange = {
-            amountInput = it
-            localValidationError = null
-          },
-          label = { Text("Withdrawal Amount (Coins)") },
-          placeholder = { Text("Minimum 25,000 Coins") },
-          singleLine = true,
-          supportingText = {
-            Text(
-              "Minimum Withdrawal: 25,000 Coins • Eligible: ${formatCoins(availableEligibleCoins)}"
-            )
-          },
-          modifier = Modifier.fillMaxWidth().testTag("withdrawal_amount_input")
-        )
-
-        if (!displayedError.isNullOrBlank()) {
-          Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.errorContainer,
-            modifier = Modifier.fillMaxWidth().testTag("withdrawal_validation_error")
-          ) {
-            Row(
-              modifier = Modifier.padding(12.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-              Icon(
-                imageVector = Icons.Default.ErrorOutline,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.size(18.dp)
-              )
-              Text(
-                text = displayedError,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                fontWeight = FontWeight.SemiBold
-              )
-            }
-          }
-        }
-      }
-    },
-    confirmButton = {
-      Button(
-        onClick = {
-          val cleaned = amountInput.trim().replace(",", "")
-          val parsedValue = cleaned.toDoubleOrNull()
-          // Support both Coin input (>= 25,000 Coins) and legacy test values (e.g. 200..1000)
-          val amountCents =
-            when {
-              parsedValue == null || parsedValue <= 0.0 -> 0L
-              parsedValue >= MIN_WITHDRAWAL_COINS.toDouble() ->
-                coinsToCents(parsedValue.roundToLong())
-              parsedValue in 200.0..2000.0 -> (parsedValue * 100.0).roundToLong()
-              else -> coinsToCents(parsedValue.roundToLong())
-            }
-          val requestedCoins = centsToCoins(amountCents)
-          when {
-            selectedMethod == WithdrawalMethod.BANK_ACCOUNT &&
-              (accountHolderName.isBlank() ||
-                bankName.isBlank() ||
-                accountNumber.isBlank() ||
-                ifscCode.isBlank()) -> {
-              localValidationError =
-                "Please complete Account Holder Name, Bank Name, Account Number, and IFSC Code."
-            }
-            selectedMethod == WithdrawalMethod.UPI_ID &&
-              (upiId.isBlank() || !upiId.contains("@")) -> {
-              localValidationError = "Please enter a valid UPI ID (e.g., name@upi)."
-            }
-            parsedValue == null || parsedValue <= 0.0 -> {
-              localValidationError = "Please enter a valid withdrawal amount in Coins."
-            }
-            amountCents < MIN_WITHDRAWAL_CENTS -> {
-              localValidationError =
-                "Minimum withdrawal amount is 25,000 Coins. Please enter 25,000 Coins or more."
-            }
-            amountCents > availableBalanceCents -> {
-              localValidationError =
-                "Amount (${formatCoins(requestedCoins)}) exceeds your eligible withdrawable balance (${formatCoins(availableEligibleCoins)})."
-            }
-            else -> {
-              localValidationError = null
-              onSubmit(
-                amountInput.trim(),
-                selectedMethod,
-                accountHolderName.trim(),
-                bankName.trim(),
-                accountNumber.trim(),
-                ifscCode.trim(),
-                upiId.trim()
-              )
-            }
-          }
-        },
-        enabled = !isBusy,
-        modifier = Modifier.testTag("withdrawal_submit_button")
-      ) {
-        Text("Submit")
-      }
-    },
-    dismissButton = {
-      TextButton(
-        onClick = onDismiss,
-        modifier = Modifier.testTag("withdrawal_cancel_button")
-      ) {
-        Text("Cancel")
-      }
-    }
-  )
-}
-
-@Composable
-private fun WithdrawalMethodOptionCard(
-  title: String,
-  subtitle: String,
-  icon: ImageVector,
-  selected: Boolean,
-  onClick: () -> Unit,
-  testTag: String
-) {
-  Surface(
-    shape = RoundedCornerShape(14.dp),
-    color =
-      if (selected) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
-      } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-      },
-    modifier =
-      Modifier.fillMaxWidth()
-        .clip(RoundedCornerShape(14.dp))
-        .border(
-          width = if (selected) 1.5.dp else 1.dp,
-          color =
-            if (selected) {
-              MaterialTheme.colorScheme.primary
-            } else {
-              MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-            },
-          shape = RoundedCornerShape(14.dp)
-        )
-        .clickable(onClick = onClick)
-        .testTag(testTag)
-  ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-      Icon(
-        imageVector = icon,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.size(24.dp)
-      )
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = title,
-          style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold
-        )
-        Text(
-          text = subtitle,
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-      }
-      RadioButton(selected = selected, onClick = onClick)
-    }
-  }
-}
 
 /**
  * Redesigned Profile Screen (`UserProfileScreen`):
@@ -2052,16 +1703,17 @@ fun UserActivityScreen(
         }
       }
 
-      // 3. Real demo withdrawal request events
+      // 3. Real withdrawal & redemption events
       withdrawalRequests.forEach { req ->
         val reqMillis = (req.createdAt?.seconds ?: 0L) * 1000L
+        val rupees = req.getEffectiveAmountRupees()
         list.add(
           UserActivityItem(
             id = "withdrawal_${req.id.ifBlank { req.requestId }}",
-            title = "Withdrawal Request (${req.method})",
-            subtitle = "Demo / Pending request submitted for Admin review",
-            amountText = formatRewardInr(req.amountCents),
-            statusLabel = "Demo / Pending",
+            title = "Withdrawal (${req.getEffectiveMethodLabel()})",
+            subtitle = req.statusNote.ifBlank { "Status: ${req.getDisplayStatus()}" },
+            amountText = if (rupees > 0L) "₹$rupees" else formatRewardInr(req.amountCents),
+            statusLabel = req.getDisplayStatus(),
             timestampMillis = reqMillis
           )
         )
