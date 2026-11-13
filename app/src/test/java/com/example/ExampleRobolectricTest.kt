@@ -303,7 +303,9 @@ class ExampleRobolectricTest {
         id = "task_active_1",
         title = "Install Active App",
         appName = "Active Companion",
-        description = "Full description that should not clutter the compact card",
+        description = "Short task summary on compact card",
+        instructions = "Detailed step-by-step instructions shown only on Task Detail screen",
+        requiredProof = "Detailed proof requirements shown only on Task Detail screen",
         category = "App Install",
         rewardCents = 4000L,
         status = TaskStatus.PENDING,
@@ -340,14 +342,16 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("task_card_task_active_1").assertIsDisplayed()
     composeTestRule.onNodeWithText("Install Active App").assertIsDisplayed()
     composeTestRule.onNodeWithText("Active Companion").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Short task summary on compact card").assertIsDisplayed()
     composeTestRule.onNodeWithText("₹40.00").assertIsDisplayed()
     composeTestRule.onNodeWithTag("start_or_view_task_button_task_active_1").assertIsDisplayed().performClick()
     assertEquals("task_active_1", openedTaskId)
 
     // Deactivated pending task is excluded from Available Tasks list
     composeTestRule.onNodeWithTag("task_card_task_deactivated_2").assertDoesNotExist()
-    // Full description and submission form are NOT shown on the task list
-    composeTestRule.onNodeWithText("Full description that should not clutter the compact card").assertDoesNotExist()
+    // Full instructions, required proof, and submission form are NOT shown on the compact task list
+    composeTestRule.onNodeWithText("Detailed step-by-step instructions shown only on Task Detail screen").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Detailed proof requirements shown only on Task Detail screen").assertDoesNotExist()
     composeTestRule.onNodeWithTag("submit_proof_modal").assertDoesNotExist()
   }
 

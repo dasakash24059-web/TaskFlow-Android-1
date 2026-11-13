@@ -1295,7 +1295,9 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
 
       // Step 1: Admin bootstraps and creates an active pooled task (reward: 1200 paise = ₹12.00)
       val adminUid = signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
-      android.util.Log.d("TestDebug", "adminUid: '$adminUid'")
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.ensureUserProfile(adminUid, BOOTSTRAPPED_ADMIN_EMAIL, "Admin").getOrThrow()
+      }
       val taskCreation =
         withTimeout(DEFAULT_TIMEOUT_MS) {
           repository.createTask(
