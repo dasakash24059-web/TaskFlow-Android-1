@@ -336,6 +336,9 @@ object TransactionType {
   const val WITHDRAWAL_REFUND = "WITHDRAWAL_REFUND"
   const val WATCH_EARN = "WATCH_EARN"
   const val SPIN_EARN = "SPIN_EARN"
+  const val TELEGRAM_JOIN = "TELEGRAM_JOIN"
+  const val PROMO_CODE = "PROMO_CODE"
+  const val ADMIN_MANUAL_BONUS = "ADMIN_MANUAL_BONUS"
 }
 
 data class TransactionRecord(
@@ -542,6 +545,9 @@ data class UserProfile(
   val lastFreeSpinAt: Timestamp? = null,
   val extraSpinVideosWatched: Long = 0L,
   val extraSpinAvailable: Boolean = false,
+  val telegramJoinedVerified: Boolean = false,
+  val telegramRewardClaimed: Boolean = false,
+  val telegramUserId: String = "",
   @ServerTimestamp val lastCheckInTimestamp: Timestamp? = null,
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
@@ -936,7 +942,8 @@ data class NotificationItem(
   val userId: String = "",
   val title: String = "",
   val body: String = "",
-  val type: String = "INFO", // REWARD, TASK, DAILY_CHECKIN, SYSTEM
+  val type: String = "INFO", // REWARD, TASK, TASK_REWARD, DAILY_CHECKIN, TELEGRAM_REWARD, PROMO_CODE_REWARD, ADMIN_BONUS, SYSTEM
+  val rewardCoins: Long = 0L,
   val isRead: Boolean = false,
   val referenceId: String = "",
   @ServerTimestamp val createdAt: Timestamp? = null
@@ -984,5 +991,134 @@ data class AdminActivityLog(
   val timestampMillis: Long = 0L,
   @ServerTimestamp val createdAt: Timestamp? = null
 )
+
+// =========================================================================
+// REWARDS SYSTEM MODELS (TELEGRAM JOIN, DAILY PROMO CODES, MANUAL BONUS)
+// =========================================================================
+
+object NotificationRewardType {
+  const val TELEGRAM_REWARD = "TELEGRAM_REWARD"
+  const val PROMO_CODE_REWARD = "PROMO_CODE_REWARD"
+  const val ADMIN_BONUS = "ADMIN_BONUS"
+  const val TASK_REWARD = "TASK_REWARD"
+}
+
+data class TelegramJoinConfig(
+  val channelUrl: String = "",
+  val channelChatId: String = "",
+  val botToken: String = "",
+  val rewardCoins: Long = 0L,
+  @get:PropertyName("isActive") val isActive: Boolean = false,
+  val updatedBy: String = "",
+  @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+  fun isValidAndActive(): Boolean =
+    isActive && rewardCoins > 0L && channelUrl.trim().startsWith("https://", ignoreCase = true)
+}
+
+data class TelegramUserRewardState(
+  val userId: String = "",
+  val telegramUserId: String = "",
+  val isMembershipVerified: Boolean = false,
+  val isClaimed: Boolean = false,
+  val claimedCoins: Long = 0L,
+  val statusMessage: String = "",
+  val errorMessage: String? = null
+) {
+  /**
+   * Determines whether the Telegram Join Reward card should be visible inside Daily Rewards:
+   * Visible to new and existing users ONLY when the admin task is active (`config.isValidAndActive()`)
+   * AND the user has NOT yet claimed it (`!isClaimed`).
+   * Once claimed, it is permanently hidden for that user.
+   */
+  fun shouldShowInDailyRewards(config: TelegramJoinConfig): Boolean =
+    config.isValidAndActive() && !isClaimed
+}
+
+object PromoCodeStatus {
+  const val ACTIVE = "ACTIVE"
+  const val INACTIVE = "INACTIVE"
+  const val EXHAUSTED = "EXHAUSTED"
+  const val EXPIRED = "EXPIRED"
+}
+
+data class PromoCodeItem(
+  @DocumentId val id: String = "",
+  val code: String = "",
+  val rewardCoins: Long = 0L,
+  val maxSlots: Long = 1L,
+  val usedSlots: Long = 0L,
+  val expiresAtMillis: Long = 0L,
+  val expiresAtLabel: String = "",
+  @get:PropertyName("isActive") val isActive: Boolean = true,
+  val status: String = PromoCodeStatus.ACTIVE,
+  val createdBy: String = "",
+  @ServerTimestamp val createdAt: Timestamp? = null,
+  @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+  val remainingSlots: Long
+    get() = (maxSlots - usedSlots).coerceAtLeast(0L)
+
+  val isExhausted: Boolean
+    get() = maxSlots <= 0L || usedSlots >= maxSlots || status.equals(PromoCodeStatus.EXHAUSTED, ignoreCase = true)
+
+  fun isExpired(nowMillis: Long = System.currentTimeMillis()): Boolean =
+    (expiresAtMillis in 1..nowMillis) || status.equals(PromoCodeStatus.EXPIRED, ignoreCase = true)
+
+  fun effectiveStatus(nowMillis: Long = System.currentTimeMillis()): String =
+    when {
+      isExhausted -> PromoCodeStatus.EXHAUSTED
+      isExpired(nowMillis) -> PromoCodeStatus.EXPIRED
+      !isActive || status.equals(PromoCodeStatus.INACTIVE, ignoreCase = true) -> PromoCodeStatus.INACTIVE
+      else -> PromoCodeStatus.ACTIVE
+    }
+
+  fun isRedeemable(nowMillis: Long = System.currentTimeMillis()): Boolean =
+    isActive &&
+      rewardCoins > 0L &&
+      maxSlots > 0L &&
+      usedSlots < maxSlots &&
+      !isExhausted &&
+      !isExpired(nowMillis)
+}
+
+data class PromoRedemptionRecord(
+  @DocumentId val id: String = "",
+  val promoId: String = "",
+  val code: String = "",
+  val userId: String = "",
+  val userName: String = "",
+  val rewardCoins: Long = 0L,
+  @ServerTimestamp val redeemedAt: Timestamp? = null
+)
+
+data class PromoRedemptionUiState(
+  val codeInput: String = "",
+  val isRedeeming: Boolean = false,
+  val lastRedeemedCode: String = "",
+  val lastCreditedCoins: Long = 0L,
+  val successMessage: String? = null,
+  val errorMessage: String? = null
+)
+
+data class ManualBonusRecord(
+  @DocumentId val id: String = "",
+  val targetUserId: String = "",
+  val targetUserName: String = "",
+  val targetUserEmail: String = "",
+  val adminId: String = "",
+  val adminEmail: String = "",
+  val amountCoins: Long = 0L,
+  val reason: String = "",
+  val idempotencyKey: String = "",
+  @ServerTimestamp val createdAt: Timestamp? = null
+)
+
+/**
+ * Normalize a promo code string to uppercase trimmed format.
+ */
+fun normalizePromoCode(rawCode: String): String =
+  rawCode.trim().uppercase(Locale.US)
+
 
 

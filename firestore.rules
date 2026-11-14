@@ -304,6 +304,112 @@ service cloud.firestore {
              incoming().updatedAt is timestamp;
     }
 
+    // Approved user updating Telegram membership verification state on their profile (no coin change)
+    function isValidOwnerTelegramVerificationUpdate(userId) {
+      return request.auth.uid == userId &&
+             isApprovedUser(userId) &&
+             changedKeys().hasOnly(['telegramJoinedVerified', 'telegramUserId', 'updatedAt']) &&
+             incoming().telegramJoinedVerified == true &&
+             isNonEmptyString(incoming().telegramUserId, 64) &&
+             incoming().balanceCents == existing().balanceCents &&
+             incoming().role == existing().role &&
+             incoming().approvalStatus == existing().approvalStatus &&
+             incoming().updatedAt is timestamp;
+    }
+
+    // Approved user atomically claiming one-time Telegram Join Reward after membership verification
+    function isAtomicTelegramRewardClaimForUser(userId) {
+      let cfgPath = /databases/$(database)/documents/app_config/telegram_join_config;
+      let statePath = /databases/$(database)/documents/users/$(userId)/telegram_reward/status;
+      let oldPromo = ('promotionalCoins' in existing() && existing().promotionalCoins is int) ? existing().promotionalCoins : 0;
+      let oldBalanceCents = ('balanceCents' in existing() && existing().balanceCents is int) ? existing().balanceCents : 0;
+      let oldCentsCoins = int((oldBalanceCents * 125) / 100);
+      let oldEligible = ('eligibleCoins' in existing() && existing().eligibleCoins is int && existing().eligibleCoins > oldCentsCoins)
+        ? existing().eligibleCoins
+        : oldCentsCoins;
+      let oldBalanceCoins = ('balanceCoins' in existing() && existing().balanceCoins is int && existing().balanceCoins > (oldEligible + oldPromo))
+        ? existing().balanceCoins
+        : (oldEligible + oldPromo);
+      let rewardCoins = exists(cfgPath) ? get(cfgPath).data.rewardCoins : 0;
+      return request.auth.uid == userId &&
+             isApprovedUser(userId) &&
+             exists(cfgPath) &&
+             get(cfgPath).data.isActive == true &&
+             rewardCoins is int &&
+             rewardCoins > 0 &&
+             (!('telegramRewardClaimed' in existing()) || existing().telegramRewardClaimed != true) &&
+             (!exists(statePath) || !('isClaimed' in get(statePath).data) || get(statePath).data.isClaimed != true) &&
+             existsAfter(statePath) &&
+             getAfter(statePath).data.isMembershipVerified == true &&
+             getAfter(statePath).data.isClaimed == true &&
+             getAfter(statePath).data.rewardCoinsClaimed == rewardCoins &&
+             changedKeys().hasOnly([
+               'promotionalCoins',
+               'balanceCoins',
+               'telegramJoinedVerified',
+               'telegramRewardClaimed',
+               'telegramUserId',
+               'updatedAt'
+             ]) &&
+             incoming().telegramJoinedVerified == true &&
+             incoming().telegramRewardClaimed == true &&
+             incoming().promotionalCoins == oldPromo + rewardCoins &&
+             incoming().balanceCoins == oldBalanceCoins + rewardCoins &&
+             incoming().balanceCents == existing().balanceCents &&
+             incoming().role == existing().role &&
+             incoming().approvalStatus == existing().approvalStatus &&
+             incoming().updatedAt is timestamp;
+    }
+
+    // Approved user atomically redeeming a valid, active, non-exhausted Promo Code once
+    function isAtomicPromoCodeRedemptionForUser(userId) {
+      let oldPromo = ('promotionalCoins' in existing() && existing().promotionalCoins is int) ? existing().promotionalCoins : 0;
+      let newPromo = ('promotionalCoins' in incoming() && incoming().promotionalCoins is int) ? incoming().promotionalCoins : oldPromo;
+      let promoDelta = newPromo - oldPromo;
+      let oldBalanceCents = ('balanceCents' in existing() && existing().balanceCents is int) ? existing().balanceCents : 0;
+      let oldCentsCoins = int((oldBalanceCents * 125) / 100);
+      let oldEligible = ('eligibleCoins' in existing() && existing().eligibleCoins is int && existing().eligibleCoins > oldCentsCoins)
+        ? existing().eligibleCoins
+        : oldCentsCoins;
+      let oldBalanceCoins = ('balanceCoins' in existing() && existing().balanceCoins is int && existing().balanceCoins > (oldEligible + oldPromo))
+        ? existing().balanceCoins
+        : (oldEligible + oldPromo);
+      return request.auth.uid == userId &&
+             isApprovedUser(userId) &&
+             changedKeys().hasOnly(['promotionalCoins', 'balanceCoins', 'updatedAt']) &&
+             promoDelta > 0 &&
+             promoDelta <= 1000000 &&
+             incoming().balanceCoins == oldBalanceCoins + promoDelta &&
+             incoming().balanceCents == existing().balanceCents &&
+             incoming().role == existing().role &&
+             incoming().approvalStatus == existing().approvalStatus &&
+             incoming().updatedAt is timestamp;
+    }
+
+    // Admin atomically crediting a custom Manual Bonus to a user's wallet while preserving existing balance
+    function isAtomicAdminManualBonusForUser(userId) {
+      let oldPromo = ('promotionalCoins' in existing() && existing().promotionalCoins is int) ? existing().promotionalCoins : 0;
+      let newPromo = ('promotionalCoins' in incoming() && incoming().promotionalCoins is int) ? incoming().promotionalCoins : oldPromo;
+      let bonusDelta = newPromo - oldPromo;
+      let oldBalanceCents = ('balanceCents' in existing() && existing().balanceCents is int) ? existing().balanceCents : 0;
+      let oldCentsCoins = int((oldBalanceCents * 125) / 100);
+      let oldEligible = ('eligibleCoins' in existing() && existing().eligibleCoins is int && existing().eligibleCoins > oldCentsCoins)
+        ? existing().eligibleCoins
+        : oldCentsCoins;
+      let oldBalanceCoins = ('balanceCoins' in existing() && existing().balanceCoins is int && existing().balanceCoins > (oldEligible + oldPromo))
+        ? existing().balanceCoins
+        : (oldEligible + oldPromo);
+      return isAdmin() &&
+             changedKeys().hasOnly(['promotionalCoins', 'balanceCoins', 'updatedAt']) &&
+             bonusDelta > 0 &&
+             bonusDelta <= 10000000 &&
+             incoming().balanceCoins == oldBalanceCoins + bonusDelta &&
+             incoming().balanceCents == existing().balanceCents &&
+             incoming().role == existing().role &&
+             incoming().approvalStatus == existing().approvalStatus &&
+             incoming().updatedAt is timestamp;
+    }
+
     function expectedWithdrawalCoins(method, amountRupees) {
       return (method == 'UPI' && amountRupees == 200) ? 33000 :
              (method == 'UPI' && amountRupees == 500) ? 82500 :
@@ -1196,6 +1302,65 @@ service cloud.firestore {
              getAfter(userPath).data.promotionalCoins == oldPromo + incoming().amountCoins;
     }
 
+    function isValidTelegramJoinTransaction(transactionId) {
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let cfgPath = /databases/$(database)/documents/app_config/telegram_join_config;
+      let statePath = /databases/$(database)/documents/users/$(request.auth.uid)/telegram_reward/status;
+      return isSignedIn() &&
+             isApprovedUser(request.auth.uid) &&
+             transactionId == 'tg_join_' + request.auth.uid &&
+             !exists(/databases/$(database)/documents/transactions/$(transactionId)) &&
+             exists(cfgPath) &&
+             get(cfgPath).data.isActive == true &&
+             incoming().userId == request.auth.uid &&
+             incoming().type == 'TELEGRAM_JOIN' &&
+             incoming().status == 'CREDITED' &&
+             incoming().amountCoins is int &&
+             incoming().amountCoins > 0 &&
+             incoming().amountCoins == get(cfgPath).data.rewardCoins &&
+             existsAfter(statePath) &&
+             getAfter(statePath).data.isClaimed == true &&
+             existsAfter(userPath);
+    }
+
+    function isValidPromoCodeTransaction(transactionId) {
+      let promoId = incoming().referenceId;
+      let promoPath = /databases/$(database)/documents/promo_codes/$(promoId);
+      let redemptionPath = /databases/$(database)/documents/promo_codes/$(promoId)/redemptions/$(request.auth.uid);
+      return isSignedIn() &&
+             isApprovedUser(request.auth.uid) &&
+             isNonEmptyString(promoId, 64) &&
+             transactionId == 'promo_' + promoId + '_' + request.auth.uid &&
+             !exists(/databases/$(database)/documents/transactions/$(transactionId)) &&
+             exists(promoPath) &&
+             get(promoPath).data.isActive == true &&
+             !exists(redemptionPath) &&
+             existsAfter(redemptionPath) &&
+             incoming().userId == request.auth.uid &&
+             incoming().type == 'PROMO_CODE' &&
+             incoming().status == 'CREDITED' &&
+             incoming().amountCoins is int &&
+             incoming().amountCoins > 0 &&
+             incoming().amountCoins == get(promoPath).data.rewardCoins;
+    }
+
+    function isValidAdminManualBonusTransaction(transactionId) {
+      let bonusId = incoming().referenceId;
+      let bonusPath = /databases/$(database)/documents/manual_bonuses/$(bonusId);
+      return isAdmin() &&
+             isNonEmptyString(bonusId, 128) &&
+             transactionId == 'tx_' + bonusId &&
+             !exists(/databases/$(database)/documents/transactions/$(transactionId)) &&
+             !exists(bonusPath) &&
+             existsAfter(bonusPath) &&
+             incoming().type == 'ADMIN_MANUAL_BONUS' &&
+             incoming().status == 'CREDITED' &&
+             incoming().amountCoins is int &&
+             incoming().amountCoins > 0 &&
+             getAfter(bonusPath).data.amountCoins == incoming().amountCoins &&
+             getAfter(bonusPath).data.userId == incoming().userId;
+    }
+
     function isValidAdminDoc(adminId) {
       return hasExactKeys(['userId', 'email', 'createdAt']) &&
              incoming().userId == adminId &&
@@ -1240,7 +1405,9 @@ service cloud.firestore {
             ('displayName' in changedKeys() && isValidOwnerDisplayNameUpdate(userId)) ||
             ('role' in changedKeys() && isBootstrapAdminSelfInit(userId)) ||
             ('lastWithdrawalRequestId' in changedKeys() && isAtomicWithdrawalDebitForUser(userId)) ||
-            (!('balanceCents' in changedKeys()) && !('role' in changedKeys()) && !('lastWithdrawalRequestId' in changedKeys()) && isAtomicPromotionalCoinOrSpinUpdate(userId))
+            ('telegramRewardClaimed' in changedKeys() && isAtomicTelegramRewardClaimForUser(userId)) ||
+            ('telegramJoinedVerified' in changedKeys() && !('telegramRewardClaimed' in changedKeys()) && isValidOwnerTelegramVerificationUpdate(userId)) ||
+            (!('balanceCents' in changedKeys()) && !('role' in changedKeys()) && !('lastWithdrawalRequestId' in changedKeys()) && !('telegramRewardClaimed' in changedKeys()) && (isAtomicPromotionalCoinOrSpinUpdate(userId) || isAtomicPromoCodeRedemptionForUser(userId)))
           )
         ) || (
           isAdmin() && (
@@ -1248,11 +1415,18 @@ service cloud.firestore {
             ('displayName' in changedKeys() && isValidAdminDisplayNameUpdate()) ||
             ('assignedTaskId' in changedKeys() && !('balanceCents' in changedKeys()) && (isAtomicTaskAssignmentToUser(userId) || isAtomicTaskUnassignmentFromUser(userId))) ||
             ('balanceCents' in changedKeys() && 'assignedTaskId' in changedKeys() && isAtomicTaskApprovalForUser(userId)) ||
-            ('lastRefundedWithdrawalId' in changedKeys() && isAtomicAdminWithdrawalRefund(userId))
+            ('lastRefundedWithdrawalId' in changedKeys() && isAtomicAdminWithdrawalRefund(userId)) ||
+            ('promotionalCoins' in changedKeys() && !('balanceCents' in changedKeys()) && isAtomicAdminManualBonusForUser(userId))
           )
         )
       );
       allow delete: if false;
+
+      // One-time Telegram Join Reward membership & claim state (managed securely via Cloud Functions)
+      match /telegram_reward/{docId} {
+        allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create, update, delete: if isAdmin();
+      }
 
       // Daily check-in records: only allowed when atomically paired with a promotionalCoins update
       match /check_ins/{dateKey} {
@@ -1327,7 +1501,10 @@ service cloud.firestore {
         isValidAdminTaskRewardTransaction() ||
         isValidWithdrawalDebitTransaction(transactionId) ||
         isValidAdminWithdrawalRefundTransaction(transactionId) ||
-        isValidAtomicPromotionalCoinTransaction()
+        isValidAtomicPromotionalCoinTransaction() ||
+        isValidTelegramJoinTransaction(transactionId) ||
+        isValidPromoCodeTransaction(transactionId) ||
+        isValidAdminManualBonusTransaction(transactionId)
       );
       allow update, delete: if false;
     }
@@ -1450,6 +1627,66 @@ service cloud.firestore {
                     request.resource.data.createdAt is timestamp;
       allow update: if isAdmin();
       allow delete: if isAdmin();
+    }
+
+    // Promo Codes & Atomic Per-User Redemptions
+    match /promo_codes/{promoId} {
+      allow get, list: if isSignedIn();
+      allow create: if isAdmin() &&
+                    isNonEmptyString(incoming().code, 32) &&
+                    incoming().rewardCoins is int &&
+                    incoming().rewardCoins > 0 &&
+                    incoming().maxSlots is int &&
+                    incoming().maxSlots >= 1 &&
+                    incoming().usedSlots == 0;
+      allow update: if isAdmin() || (
+        isSignedIn() &&
+        isApprovedUser(request.auth.uid) &&
+        existing().isActive == true &&
+        changedKeys().hasOnly(['usedSlots', 'status', 'updatedAt']) &&
+        incoming().code == existing().code &&
+        incoming().rewardCoins == existing().rewardCoins &&
+        incoming().maxSlots == existing().maxSlots &&
+        incoming().usedSlots == existing().usedSlots + 1 &&
+        incoming().usedSlots <= existing().maxSlots &&
+        !exists(/databases/$(database)/documents/promo_codes/$(promoId)/redemptions/$(request.auth.uid)) &&
+        existsAfter(/databases/$(database)/documents/promo_codes/$(promoId)/redemptions/$(request.auth.uid))
+      );
+      allow delete: if isAdmin();
+
+      match /redemptions/{userId} {
+        allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create: if isSignedIn() &&
+                      request.auth.uid == userId &&
+                      isApprovedUser(userId) &&
+                      !exists(/databases/$(database)/documents/promo_codes/$(promoId)/redemptions/$(userId)) &&
+                      incoming().promoId == promoId &&
+                      incoming().userId == userId &&
+                      incoming().rewardCoins == get(/databases/$(database)/documents/promo_codes/$(promoId)).data.rewardCoins;
+        allow update, delete: if false;
+      }
+    }
+
+    match /promo_redemptions/{redemptionId} {
+      allow get: if isSignedIn() && (isAdmin() || resource == null || resource.data.userId == request.auth.uid);
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+                    isApprovedUser(request.auth.uid) &&
+                    !exists(/databases/$(database)/documents/promo_redemptions/$(redemptionId)) &&
+                    incoming().userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Admin Manual Bonus Credit Audit Trail
+    match /manual_bonuses/{bonusId} {
+      allow get, list: if isAdmin();
+      allow create: if isAdmin() &&
+                    !exists(/databases/$(database)/documents/manual_bonuses/$(bonusId)) &&
+                    isNonEmptyString(incoming().userId, 128) &&
+                    incoming().amountCoins is int &&
+                    incoming().amountCoins > 0 &&
+                    isNonEmptyString(incoming().creditedByAdminId, 128);
+      allow update, delete: if false;
     }
 
     // Default deny for all other paths

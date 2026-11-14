@@ -54,11 +54,31 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.material.icons.filled.CardGiftcard
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ConfirmationNumber
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DailyCheckInState
+import com.example.data.model.PromoRedemptionUiState
+import com.example.data.model.TelegramJoinConfig
+import com.example.data.model.TelegramUserRewardState
 import com.example.data.model.formatCoins
 import com.example.ui.components.NeonBackgroundBox
 import com.example.ui.components.NeonGlassCard
+import com.example.ui.components.TaskFlowBrandLogo
 import java.util.Calendar
 import java.util.Locale
 
@@ -73,9 +93,16 @@ fun DedicatedDailyCheckInScreen(
   approvedEarningsCents: Long = 0L,
   onClaimDay: (Int) -> Unit,
   onBack: () -> Unit,
-  isBusy: Boolean = false
+  isBusy: Boolean = false,
+  telegramConfig: TelegramJoinConfig = TelegramJoinConfig(),
+  telegramRewardState: TelegramUserRewardState = TelegramUserRewardState(),
+  onJoinTelegramChannel: ((String) -> Unit)? = null,
+  onVerifyTelegramMembership: (String) -> Unit = {},
+  onClaimTelegramReward: () -> Unit = {},
+  onOpenPromoCodeScreen: () -> Unit = {}
 ) {
   BackHandler(onBack = onBack)
+  val context = LocalContext.current
 
   val timeRemainingToTomorrow = remember {
     val now = System.currentTimeMillis()
@@ -296,6 +323,38 @@ fun DedicatedDailyCheckInScreen(
             }
           }
         }
+      }
+
+      // 1B. Telegram Join Reward (Visible ONLY when active and NOT yet claimed by this user)
+      if (telegramRewardState.shouldShowInDailyRewards(telegramConfig)) {
+        item {
+          TelegramJoinRewardDailyCard(
+            config = telegramConfig,
+            rewardState = telegramRewardState,
+            isBusy = isBusy,
+            onOpenTelegramUrl = { url ->
+              if (onJoinTelegramChannel != null) {
+                onJoinTelegramChannel(url)
+              } else {
+                runCatching {
+                  val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                  }
+                  context.startActivity(intent)
+                }
+              }
+            },
+            onVerifyMembership = onVerifyTelegramMembership,
+            onClaimReward = onClaimTelegramReward
+          )
+        }
+      }
+
+      // 1C. Daily Promo Code Entry Card inside Daily Rewards
+      item {
+        DailyPromoCodeEntryCard(
+          onOpenPromoCodeScreen = onOpenPromoCodeScreen
+        )
       }
 
       // 2. Legend Row (Claimed / Today / Locked)
@@ -622,4 +681,446 @@ fun DailyCheckInPendingDialog(
       }
     }
   )
+}
+
+@Composable
+fun TelegramJoinRewardDailyCard(
+  config: TelegramJoinConfig,
+  rewardState: TelegramUserRewardState,
+  isBusy: Boolean,
+  onOpenTelegramUrl: (String) -> Unit,
+  onVerifyMembership: (String) -> Unit,
+  onClaimReward: () -> Unit
+) {
+  var telegramUserIdInput by rememberSaveable(rewardState.telegramUserId) {
+    mutableStateOf(rewardState.telegramUserId)
+  }
+
+  NeonGlassCard(
+    shape = RoundedCornerShape(18.dp),
+    borderColor = Color(0xFF0284C7).copy(alpha = 0.45f),
+    backgroundColor = MaterialTheme.colorScheme.surface,
+    modifier = Modifier.fillMaxWidth().testTag("daily_rewards_telegram_join_card")
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+          modifier = Modifier.weight(1f)
+        ) {
+          Surface(
+            shape = CircleShape,
+            color = Color(0xFFE0F2FE),
+            modifier = Modifier.size(40.dp)
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Default.Send,
+                contentDescription = "Telegram",
+                tint = Color(0xFF0284C7),
+                modifier = Modifier.size(20.dp)
+              )
+            }
+          }
+          Column {
+            Text(
+              text = "Telegram Join Reward",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+              text = "One-time channel membership bonus",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
+        Surface(
+          shape = RoundedCornerShape(50),
+          color = Color(0xFFECFDF5),
+          border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981))
+        ) {
+          Text(
+            text = "+${formatCoins(config.rewardCoins)}",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF047857),
+            modifier =
+              Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                .testTag("daily_rewards_telegram_reward_badge")
+          )
+        }
+      }
+
+      // Step 1: Join Telegram button
+      OutlinedButton(
+        onClick = { onOpenTelegramUrl(config.channelUrl) },
+        enabled = !isBusy,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().height(46.dp).testTag("daily_rewards_join_telegram_button")
+      ) {
+        Icon(
+          imageVector = Icons.Default.OpenInNew,
+          contentDescription = null,
+          tint = Color(0xFF0284C7),
+          modifier = Modifier.size(18.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+          text = "Join Telegram",
+          fontWeight = FontWeight.SemiBold,
+          color = Color(0xFF0284C7)
+        )
+      }
+
+      // Step 2: Verify membership via Telegram Bot API
+      if (!rewardState.isMembershipVerified) {
+        OutlinedTextField(
+          value = telegramUserIdInput,
+          onValueChange = { telegramUserIdInput = it.filter { ch -> ch.isDigit() } },
+          label = { Text("Telegram User ID") },
+          placeholder = { Text("Enter your numeric Telegram ID") },
+          singleLine = true,
+          modifier = Modifier.fillMaxWidth().testTag("daily_rewards_telegram_user_id_input")
+        )
+
+        Button(
+          onClick = { onVerifyMembership(telegramUserIdInput) },
+          enabled = !isBusy && telegramUserIdInput.isNotBlank(),
+          shape = RoundedCornerShape(12.dp),
+          colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+          modifier =
+            Modifier.fillMaxWidth()
+              .height(46.dp)
+              .testTag("daily_rewards_verify_telegram_button")
+        ) {
+          Icon(
+            imageVector = Icons.Default.VerifiedUser,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Verify Membership", fontWeight = FontWeight.Bold)
+        }
+      } else {
+        // Step 3: Show Claim ONLY after successful membership verification
+        Surface(
+          shape = RoundedCornerShape(10.dp),
+          color = Color(0xFFECFDF5),
+          border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981)),
+          modifier = Modifier.fillMaxWidth()
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Icon(
+              imageVector = Icons.Default.CheckCircle,
+              contentDescription = null,
+              tint = Color(0xFF059669),
+              modifier = Modifier.size(18.dp)
+            )
+            Text(
+              text = "Telegram channel membership verified!",
+              style = MaterialTheme.typography.bodySmall,
+              color = Color(0xFF065F46),
+              fontWeight = FontWeight.SemiBold
+            )
+          }
+        }
+
+        Button(
+          onClick = onClaimReward,
+          enabled = !isBusy && !rewardState.isClaimed,
+          shape = RoundedCornerShape(12.dp),
+          colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+          modifier =
+            Modifier.fillMaxWidth()
+              .height(48.dp)
+              .testTag("daily_rewards_claim_telegram_button")
+        ) {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Text(
+            text = "Claim +${formatCoins(config.rewardCoins)}",
+            fontWeight = FontWeight.Bold
+          )
+        }
+      }
+
+      if (!rewardState.errorMessage.isNullOrBlank()) {
+        Text(
+          text = rewardState.errorMessage,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.error,
+          modifier = Modifier.testTag("daily_rewards_telegram_error_text")
+        )
+      }
+    }
+  }
+}
+
+@Composable
+fun DailyPromoCodeEntryCard(
+  onOpenPromoCodeScreen: () -> Unit
+) {
+  NeonGlassCard(
+    shape = RoundedCornerShape(18.dp),
+    borderColor = Color(0xFF1E3A8A).copy(alpha = 0.35f),
+    backgroundColor = MaterialTheme.colorScheme.surface,
+    modifier =
+      Modifier.fillMaxWidth()
+        .clickable(onClick = onOpenPromoCodeScreen)
+        .testTag("daily_rewards_promo_code_card")
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.weight(1f)
+      ) {
+        Surface(
+          shape = CircleShape,
+          color = Color(0xFFDBEAFE),
+          modifier = Modifier.size(40.dp)
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.Default.ConfirmationNumber,
+              contentDescription = "Daily Promo Code",
+              tint = Color(0xFF1E3A8A),
+              modifier = Modifier.size(20.dp)
+            )
+          }
+        }
+        Column {
+          Text(
+            text = "Daily Promo Code",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+          )
+          Text(
+            text = "Redeem valid promo codes for instant wallet Coins",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+        }
+      }
+      Button(
+        onClick = onOpenPromoCodeScreen,
+        shape = RoundedCornerShape(10.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E3A8A)),
+        modifier = Modifier.testTag("daily_rewards_open_promo_code_button")
+      ) {
+        Text("Redeem", fontWeight = FontWeight.SemiBold)
+      }
+    }
+  }
+}
+
+/**
+ * Dedicated Promo Code Redemption Screen opened from Daily Rewards.
+ */
+@Composable
+fun PromoCodeRedemptionScreen(
+  uiState: PromoRedemptionUiState,
+  onRedeemCode: (String) -> Unit,
+  onClearFeedback: () -> Unit = {},
+  onBack: () -> Unit
+) {
+  BackHandler(onBack = onBack)
+  var codeText by rememberSaveable { mutableStateOf(uiState.codeInput) }
+
+  NeonBackgroundBox {
+    Column(
+      modifier =
+        Modifier.fillMaxSize()
+          .padding(horizontal = 16.dp, vertical = 14.dp)
+          .testTag("promo_code_redemption_screen"),
+      verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        IconButton(
+          onClick = onBack,
+          modifier =
+            Modifier.clip(CircleShape)
+              .background(MaterialTheme.colorScheme.surface)
+              .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+              .testTag("promo_code_back_button")
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "Back to Daily Rewards",
+            tint = MaterialTheme.colorScheme.onSurface
+          )
+        }
+        TaskFlowBrandLogo(size = 30.dp)
+        Text(
+          text = "Daily Promo Code",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onBackground
+        )
+      }
+
+      NeonGlassCard(
+        shape = RoundedCornerShape(20.dp),
+        borderColor = Color(0xFFCBD5E1),
+        backgroundColor = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth()
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(18.dp),
+          verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+          ) {
+            Surface(
+              shape = CircleShape,
+              color = Color(0xFFDBEAFE),
+              modifier = Modifier.size(42.dp)
+            ) {
+              Box(contentAlignment = Alignment.Center) {
+                Icon(
+                  imageVector = Icons.Default.CardGiftcard,
+                  contentDescription = null,
+                  tint = Color(0xFF1E3A8A),
+                  modifier = Modifier.size(22.dp)
+                )
+              }
+            }
+            Column {
+              Text(
+                text = "Enter Promo Code",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+              )
+              Text(
+                text = "Coins are credited directly to your TaskFlow Wallet",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+          }
+
+          OutlinedTextField(
+            value = codeText,
+            onValueChange = {
+              codeText = it.uppercase(Locale.US)
+              onClearFeedback()
+            },
+            label = { Text("Promo Code") },
+            placeholder = { Text("Enter promo code") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("promo_code_input_field")
+          )
+
+          Button(
+            onClick = { onRedeemCode(codeText.trim()) },
+            enabled = !uiState.isRedeeming && codeText.isNotBlank(),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E3A8A)),
+            modifier =
+              Modifier.fillMaxWidth()
+                .height(48.dp)
+                .testTag("promo_code_redeem_button")
+          ) {
+            if (uiState.isRedeeming) {
+              CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = Color.White
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Text("Redeeming...", fontWeight = FontWeight.Bold)
+            } else {
+              Text("Redeem", fontWeight = FontWeight.Bold)
+            }
+          }
+
+          if (!uiState.successMessage.isNullOrBlank()) {
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = Color(0xFFECFDF5),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981)),
+              modifier = Modifier.fillMaxWidth().testTag("promo_code_success_message")
+            ) {
+              Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Default.CheckCircle,
+                  contentDescription = null,
+                  tint = Color(0xFF059669),
+                  modifier = Modifier.size(20.dp)
+                )
+                Text(
+                  text = uiState.successMessage,
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = Color(0xFF065F46),
+                  fontWeight = FontWeight.SemiBold
+                )
+              }
+            }
+          }
+
+          if (!uiState.errorMessage.isNullOrBlank()) {
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = Color(0xFFFEF2F2),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444)),
+              modifier = Modifier.fillMaxWidth().testTag("promo_code_error_message")
+            ) {
+              Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Default.ErrorOutline,
+                  contentDescription = null,
+                  tint = Color(0xFFDC2626),
+                  modifier = Modifier.size(20.dp)
+                )
+                Text(
+                  text = uiState.errorMessage,
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = Color(0xFF991B1B),
+                  fontWeight = FontWeight.SemiBold
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }

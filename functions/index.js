@@ -43,6 +43,39 @@ try {
 // Production deployments MUST configure UNITY_S2S_SECRET (or UNITY_ADS_SECRET).
 const unityS2SSecret = defineSecret("UNITY_S2S_SECRET");
 const unityAdsSecret = defineSecret("UNITY_ADS_SECRET");
+const telegramBotToken = defineSecret("TELEGRAM_BOT_TOKEN");
+
+function resolveTelegramBotToken() {
+  const envToken = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  if (envToken) return envToken;
+  try {
+    const val = (telegramBotToken.value() || "").trim();
+    if (val) return val;
+  } catch (_) {}
+  return "";
+}
+
+const https = require("https");
+
+function callTelegramGetChatMember(botToken, chatId, userId) {
+  return new Promise((resolve, reject) => {
+    const url = `https://api.telegram.org/bot${encodeURIComponent(botToken)}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(userId)}`;
+    https.get(url, (res) => {
+      let data = "";
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const json = JSON.parse(data);
+          resolve(json);
+        } catch (e) {
+          reject(new Error("Failed to parse Telegram API response"));
+        }
+      });
+    }).on("error", (err) => {
+      reject(err);
+    });
+  });
+}
 
 const DAILY_VIDEO_LIMIT = 25;
 const DAILY_EARN_LIMIT_COINS = 5000;
@@ -863,6 +896,220 @@ exports.claimSpinReward = onCall(async (request) => {
       });
   });
   return { success: true, rewardCoins };
+});
+
+exports.verifyTelegramMembership = onCall({ secrets: [telegramBotToken] }, async (request) => {
+  if (!request.auth || !request.auth.uid) {
+    throw new HttpsError("unauthenticated", "User must be logged in.");
+  }
+  const userId = request.auth.uid;
+  const telegramUserId = String(request.data?.telegramUserId || "").trim();
+
+  if (!telegramUserId || !/^\d+$/.test(telegramUserId)) {
+    throw new HttpsError("invalid-argument", "Please enter a valid numeric Telegram User ID.");
+  }
+
+  const configSnap = await db.collection("app_config").doc("telegram_join_config").get();
+  if (!configSnap.exists) {
+    throw new HttpsError("not-found", "Telegram Join config not found.");
+  }
+  const config = configSnap.data() || {};
+  if (config.isActive !== true) {
+    throw new HttpsError("failed-precondition", "Telegram Join Reward is currently inactive.");
+  }
+
+  const channelChatId = String(config.channelChatId || "").trim();
+  if (!channelChatId) {
+    throw new HttpsError("failed-precondition", "Telegram channel identifier is not configured.");
+  }
+
+  const botToken = resolveTelegramBotToken();
+  if (!botToken) {
+    throw new HttpsError("internal", "Telegram Bot Token is not configured on server.");
+  }
+
+  const bindingRef = db.collection("telegram_bindings").doc(telegramUserId);
+  const bindingSnap = await bindingRef.get();
+  if (bindingSnap.exists) {
+    const boundUid = bindingSnap.data().userId;
+    if (boundUid && boundUid !== userId) {
+      throw new HttpsError("already-exists", "This Telegram ID is already linked to another TaskFlow account.");
+    }
+  }
+
+  const userRef = db.collection("users").doc(userId);
+  const userSnap = await userRef.get();
+  if (!userSnap.exists) {
+    throw new HttpsError("not-found", "User profile not found.");
+  }
+  const userData = userSnap.data() || {};
+  if (userData.telegramRewardClaimed === true) {
+    throw new HttpsError("already-exists", "You have already claimed the Telegram Join Reward.");
+  }
+
+  let tgRes;
+  try {
+    tgRes = await callTelegramGetChatMember(botToken, channelChatId, telegramUserId);
+  } catch (err) {
+    throw new HttpsError("internal", "Failed to communicate with Telegram API: " + err.message);
+  }
+
+  if (!tgRes || !tgRes.ok || !tgRes.result) {
+    throw new HttpsError("permission-denied", "Telegram membership verification failed. Please join the channel first.");
+  }
+
+  const status = tgRes.result.status;
+  const validStatuses = ["member", "administrator", "creator"];
+  const isRestrictedMember = status === "restricted" && tgRes.result.is_member === true;
+
+  if (!validStatuses.includes(status) && !isRestrictedMember) {
+    throw new HttpsError("permission-denied", "You are not a member of the Telegram channel yet.");
+  }
+
+  const statusDocRef = userRef.collection("telegram_reward").doc("status");
+  const batch = db.batch();
+
+  batch.set(statusDocRef, {
+    userId,
+    telegramUserId,
+    isMembershipVerified: true,
+    isClaimed: false,
+    rewardCoinsClaimed: Number(config.rewardCoins || 0),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  }, { merge: true });
+
+  batch.set(bindingRef, {
+    userId,
+    telegramUserId,
+    verifiedAt: admin.firestore.FieldValue.serverTimestamp()
+  }, { merge: true });
+
+  batch.update(userRef, {
+    telegramJoinedVerified: true,
+    telegramUserId,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  await batch.commit();
+
+  return { success: true, isMember: true, telegramUserId };
+});
+
+exports.claimTelegramJoinReward = onCall({ secrets: [telegramBotToken] }, async (request) => {
+  if (!request.auth || !request.auth.uid) {
+    throw new HttpsError("unauthenticated", "User must be logged in.");
+  }
+  const userId = request.auth.uid;
+  const userRef = db.collection("users").doc(userId);
+  const statusDocRef = userRef.collection("telegram_reward").doc("status");
+  const configRef = db.collection("app_config").doc("telegram_join_config");
+  const txRef = db.collection("transactions").doc(`tg_join_${userId}`);
+  const notifRef = userRef.collection("notifications").doc(`notif_tg_join_${userId}`);
+  const leaderboardRef = db.collection("leaderboard").doc(userId);
+
+  return await db.runTransaction(async (transaction) => {
+    const configSnap = await transaction.get(configRef);
+    if (!configSnap.exists) {
+      throw new HttpsError("not-found", "Telegram Join configuration not found.");
+    }
+    const config = configSnap.data() || {};
+    if (config.isActive !== true) {
+      throw new HttpsError("failed-precondition", "Telegram Join Reward is currently inactive.");
+    }
+    const rewardCoins = Number(config.rewardCoins || 0);
+    if (rewardCoins <= 0) {
+      throw new HttpsError("invalid-argument", "Invalid reward configuration.");
+    }
+
+    const userSnap = await transaction.get(userRef);
+    if (!userSnap.exists) {
+      throw new HttpsError("not-found", "User profile not found.");
+    }
+    const userData = userSnap.data() || {};
+    if (userData.approvalStatus !== "approved") {
+      throw new HttpsError("permission-denied", "Account must be approved before claiming rewards.");
+    }
+    if (userData.telegramRewardClaimed === true) {
+      throw new HttpsError("already-exists", "You have already claimed the Telegram Join Reward.");
+    }
+
+    const statusSnap = await transaction.get(statusDocRef);
+    const statusData = statusSnap.exists ? statusSnap.data() || {} : {};
+    const isVerified = statusData.isMembershipVerified === true || userData.telegramJoinedVerified === true;
+    if (!isVerified || statusData.isClaimed === true) {
+      throw new HttpsError("failed-precondition", "Membership verification required before claiming.");
+    }
+
+    const existingTx = await transaction.get(txRef);
+    if (existingTx.exists) {
+      throw new HttpsError("already-exists", "Reward already claimed.");
+    }
+
+    const oldPromo = Number(userData.promotionalCoins || 0);
+    const oldBalanceCents = Number(userData.balanceCents || 0);
+    const oldEligible = Math.max(Number(userData.eligibleCoins || 0), Math.floor((oldBalanceCents * 125) / 100));
+    const oldBalanceCoins = Math.max(Number(userData.balanceCoins || 0), oldEligible + oldPromo);
+    const newPromo = oldPromo + rewardCoins;
+    const newBalanceCoins = oldBalanceCoins + rewardCoins;
+    const displayName = String(userData.displayName || "TaskFlow Member").trim() || "TaskFlow Member";
+    const telegramUserId = String(statusData.telegramUserId || userData.telegramUserId || "").trim();
+
+    transaction.update(userRef, {
+      promotionalCoins: newPromo,
+      balanceCoins: newBalanceCoins,
+      telegramJoinedVerified: true,
+      telegramRewardClaimed: true,
+      telegramUserId,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    transaction.set(statusDocRef, {
+      userId,
+      telegramUserId,
+      isMembershipVerified: true,
+      isClaimed: true,
+      rewardCoinsClaimed: rewardCoins,
+      claimedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    transaction.set(leaderboardRef, {
+      userId,
+      displayName,
+      balanceCoins: newBalanceCoins,
+      approvalStatus: "approved",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    transaction.set(txRef, {
+      userId,
+      userName: displayName,
+      type: "TELEGRAM_JOIN",
+      title: `Telegram Join Reward (+${rewardCoins} Coins)`,
+      amountCoins: rewardCoins,
+      amountCents: Math.floor((rewardCoins * 100) / 125),
+      status: "CREDITED",
+      referenceId: `tg_join_${userId}`,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    transaction.set(notifRef, {
+      userId,
+      title: "Telegram Join Reward Credited 🎉",
+      message: `You earned +${rewardCoins} coins for joining our official Telegram channel!`,
+      type: "TELEGRAM_REWARD",
+      rewardCoins,
+      referenceId: `tg_join_${userId}`,
+      isRead: false,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    return {
+      success: true,
+      rewardCoins,
+      newBalanceCoins
+    };
+  });
 });
 
 exports._verifyUnityS2SSignature = verifyUnityS2SSignature;

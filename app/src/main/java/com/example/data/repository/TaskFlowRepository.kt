@@ -13,8 +13,13 @@ import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.CampaignItem
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DemoWithdrawalRequest
+import com.example.data.model.ManualBonusRecord
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
 import com.example.data.model.NotificationItem
+import com.example.data.model.NotificationRewardType
+import com.example.data.model.PromoCodeItem
+import com.example.data.model.PromoCodeStatus
+import com.example.data.model.PromoRedemptionRecord
 import com.example.data.model.SpinSessionOutcome
 import com.example.data.model.SpinWheelConstants
 import com.example.data.model.SubmissionItem
@@ -22,6 +27,8 @@ import com.example.data.model.SupportTicket
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TaskStep
+import com.example.data.model.TelegramJoinConfig
+import com.example.data.model.TelegramUserRewardState
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
@@ -39,6 +46,7 @@ import com.example.data.model.formatRewardInr
 import com.example.data.model.getTodayDateKey
 import com.example.data.model.isValidImageUrlOrDataUri
 import com.example.data.model.isValidTaskUrl
+import com.example.data.model.normalizePromoCode
 import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
@@ -74,6 +82,88 @@ fun interface ProofPhotoUploader {
     imageUri: Uri,
     onProgress: (Int) -> Unit
   ): UploadedProofPhoto
+}
+
+/**
+ * Verifies actual Telegram channel membership using the Telegram Bot API (`getChatMember`),
+ * where the configured bot has channel administrator permissions.
+ */
+fun interface TelegramMembershipVerifier {
+  suspend fun verifyChannelMembership(
+    botToken: String,
+    channelChatId: String,
+    telegramUserId: String
+  ): Boolean
+}
+
+class HttpTelegramBotMembershipVerifier : TelegramMembershipVerifier {
+  override suspend fun verifyChannelMembership(
+    botToken: String,
+    channelChatId: String,
+    telegramUserId: String
+  ): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    val cleanToken = botToken.trim()
+    val cleanChatId = channelChatId.trim()
+    val cleanUserId = telegramUserId.trim()
+    if (cleanToken.isEmpty() || cleanChatId.isEmpty() || cleanUserId.isEmpty()) {
+      return@withContext false
+    }
+    if (!cleanUserId.all { it.isDigit() }) {
+      return@withContext false
+    }
+    runCatching {
+      val encodedChatId = java.net.URLEncoder.encode(cleanChatId, "UTF-8")
+      val encodedUserId = java.net.URLEncoder.encode(cleanUserId, "UTF-8")
+      val endpoint =
+        java.net.URL("https://api.telegram.org/bot$cleanToken/getChatMember?chat_id=$encodedChatId&user_id=$encodedUserId")
+      val conn = (endpoint.openConnection() as java.net.HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = 8_000
+        readTimeout = 8_000
+      }
+      try {
+        val code = conn.responseCode
+        if (code !in 200..299) return@runCatching false
+        val body = conn.inputStream.bufferedReader().use { it.readText() }
+        parseTelegramChatMemberResponse(body)
+      } finally {
+        conn.disconnect()
+      }
+    }.getOrDefault(false)
+  }
+
+  companion object {
+    internal fun parseTelegramChatMemberResponse(jsonBody: String): Boolean {
+      val compact = jsonBody.replace("\\s+".toRegex(), "")
+      if (!compact.contains("\"ok\":true", ignoreCase = true)) return false
+      val activeStatuses = listOf(
+        "\"status\":\"member\"",
+        "\"status\":\"administrator\"",
+        "\"status\":\"creator\""
+      )
+      if (activeStatuses.any { compact.contains(it, ignoreCase = true) }) {
+        return true
+      }
+      if (
+        compact.contains("\"status\":\"restricted\"", ignoreCase = true) &&
+          compact.contains("\"is_member\":true", ignoreCase = true)
+      ) {
+        return true
+      }
+      return false
+    }
+
+    internal fun resolveChannelChatId(channelChatId: String, channelUrl: String): String {
+      val explicit = channelChatId.trim()
+      if (explicit.isNotEmpty()) {
+        return if (explicit.startsWith("@") || explicit.startsWith("-")) explicit else "@$explicit"
+      }
+      val url = channelUrl.trim()
+      val regex = Regex("^https?://(?:t\\.me|telegram\\.me)/([A-Za-z0-9_]{4,64})/?$", RegexOption.IGNORE_CASE)
+      val handle = regex.find(url)?.groupValues?.getOrNull(1).orEmpty()
+      return if (handle.isNotEmpty()) "@$handle" else ""
+    }
+  }
 }
 
 data class CreatedRewardSession(
@@ -933,7 +1023,9 @@ class TaskFlowRepository(
   private val authProvider: () -> FirebaseAuth = { Firebase.auth },
   private val photoUploader: ProofPhotoUploader = FirebaseStorageProofUploader(),
   private val rewardFunctionsClient: RewardCloudFunctionsClient =
-    FirebaseRewardCloudFunctionsClient(firestore)
+    FirebaseRewardCloudFunctionsClient(firestore),
+  private val telegramMembershipVerifier: TelegramMembershipVerifier =
+    HttpTelegramBotMembershipVerifier()
 ) {
   private val usersCollection = firestore.collection("users")
   private val leaderboardCollection = firestore.collection("leaderboard")
@@ -949,6 +1041,10 @@ class TaskFlowRepository(
   private val usedGiftCodesCollection = firestore.collection("used_gift_codes")
   private val appConfigCollection = firestore.collection("app_config")
   private val withdrawalAvailabilityDoc = appConfigCollection.document("withdrawal_availability")
+  private val telegramJoinConfigDoc = appConfigCollection.document("telegram_join_config")
+  private val promoCodesCollection = firestore.collection("promo_codes")
+  private val promoRedemptionsCollection = firestore.collection("promo_redemptions")
+  private val manualBonusesCollection = firestore.collection("manual_bonuses")
   private val adminNotificationsCollection = firestore.collection("admin_notifications")
 
   internal fun hashGiftCode(rawCode: String): String {
@@ -2093,6 +2189,41 @@ class TaskFlowRepository(
     }
 
     batch.commit().await()
+
+    // Create deterministic notification in existing Notification Bell after wallet credit succeeds
+    if (approve && submittingUserId.isNotBlank()) {
+      runCatching {
+        val taskTitle =
+          (latestSubSnap.getString("taskTitle")
+              ?: latestTaskSnap.getString("title")
+              ?: task.title)
+            .ifEmpty { "Task" }
+        val creditedCoins =
+          latestSubSnap.getLong("rewardCoins")?.takeIf { it > 0L }
+            ?: latestTaskSnap.getLong("rewardCoins")?.takeIf { it > 0L }
+            ?: centsToCoins(rewardCents).takeIf { it > 0L }
+            ?: rewardCents
+        val notifRef =
+          usersCollection
+            .document(submittingUserId)
+            .collection("notifications")
+            .document("notif_task_${submissionRef.id}")
+        notifRef
+          .set(
+            mapOf(
+              "userId" to submittingUserId,
+              "title" to "Task Reward Credited",
+              "body" to "Your submission for '${taskTitle.take(60)}' was approved! +${formatCoins(creditedCoins)} credited to your wallet.",
+              "type" to NotificationRewardType.TASK_REWARD,
+              "rewardCoins" to creditedCoins,
+              "referenceId" to submissionRef.id,
+              "isRead" to false,
+              "createdAt" to FieldValue.serverTimestamp()
+            )
+          )
+          .await()
+      }
+    }
 
     // Update task/campaign quota and auto-close if quota is exhausted (outside atomic reward batch so firestore.rules atomic task approval check remains 100% intact)
     if (approve) {
@@ -3780,5 +3911,673 @@ class TaskFlowRepository(
       "updatedAt" to FieldValue.serverTimestamp()
     )
     docRef.set(data, SetOptions.merge()).await()
+  }
+
+  // =========================================================================
+  // FEATURE 1: TELEGRAM JOIN REWARD
+  // =========================================================================
+
+  private fun DocumentSnapshot.toTelegramJoinConfig(): TelegramJoinConfig {
+    if (!exists()) return TelegramJoinConfig()
+    return TelegramJoinConfig(
+      channelUrl = getString("channelUrl")?.trim().orEmpty(),
+      channelChatId = getString("channelChatId")?.trim().orEmpty(),
+      rewardCoins = getLong("rewardCoins") ?: 0L,
+      isActive = getBoolean("isActive") ?: false,
+      updatedBy = getString("updatedBy")?.trim().orEmpty(),
+      updatedAt = getTimestamp("updatedAt")
+    )
+  }
+
+  fun observeTelegramJoinConfig(): Flow<TelegramJoinConfig> = callbackFlow {
+    val listener =
+      telegramJoinConfigDoc.addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          trySend(TelegramJoinConfig())
+          return@addSnapshotListener
+        }
+        trySend(snapshot?.toTelegramJoinConfig() ?: TelegramJoinConfig())
+      }
+    awaitClose { listener.remove() }
+  }
+
+  suspend fun getTelegramJoinConfig(): Result<TelegramJoinConfig> = runCatching {
+    val snap = telegramJoinConfigDoc.get().await()
+    snap.toTelegramJoinConfig()
+  }
+
+  suspend fun updateTelegramJoinConfig(
+    channelUrl: String,
+    channelChatId: String = "",
+    rewardCoins: Long,
+    isActive: Boolean
+  ): Result<TelegramJoinConfig> = runCatching {
+    val authUser = authProvider().currentUser ?: error("Admin sign-in required.")
+    val adminUid = authUser.uid.trim()
+    val adminEmail = authUser.email?.trim().orEmpty()
+    require(adminUid.isNotBlank()) { "Admin sign-in required." }
+    val isAuthorized = checkAndEnsureAdminAuthorization(adminUid, adminEmail)
+    check(isAuthorized) { "Only authorized administrators can configure Telegram Join Reward settings." }
+
+    val cleanedUrl = channelUrl.trim()
+    require(cleanedUrl.isNotEmpty() && isValidTaskUrl(cleanedUrl)) {
+      "Please enter a valid HTTPS Telegram channel URL (e.g., https://t.me/yourchannel)."
+    }
+    require(rewardCoins in 1L..10_000_000L) {
+      "Telegram reward amount must be greater than 0 Coins."
+    }
+    val resolvedChatId = channelChatId.trim().ifBlank { cleanedUrl.substringAfterLast("/").trim() }
+
+    val payload =
+      mapOf(
+        "channelUrl" to cleanedUrl,
+        "channelChatId" to resolvedChatId,
+        "rewardCoins" to rewardCoins,
+        "isActive" to isActive,
+        "updatedBy" to adminUid,
+        "updatedAt" to FieldValue.serverTimestamp()
+      )
+    telegramJoinConfigDoc.set(payload).await()
+
+    recordAdminActivity(
+      actionType = "REWARD",
+      title = "Updated Telegram Join Reward",
+      details = "URL: $cleanedUrl • Reward: ${formatCoins(rewardCoins)} • Active: $isActive",
+      targetId = "telegram_join_config"
+    )
+
+    TelegramJoinConfig(
+      channelUrl = cleanedUrl,
+      channelChatId = resolvedChatId,
+      rewardCoins = rewardCoins,
+      isActive = isActive,
+      updatedBy = adminUid
+    )
+  }
+
+  fun observeTelegramUserRewardState(userId: String): Flow<TelegramUserRewardState> = callbackFlow {
+    if (userId.isBlank()) {
+      trySend(TelegramUserRewardState())
+      close()
+      return@callbackFlow
+    }
+    val statusDocRef = usersCollection.document(userId).collection("telegram_reward").document("status")
+    val listener =
+      statusDocRef.addSnapshotListener { snapshot, error ->
+        if (error != null || snapshot == null || !snapshot.exists()) {
+          trySend(TelegramUserRewardState(userId = userId))
+          return@addSnapshotListener
+        }
+        trySend(
+          TelegramUserRewardState(
+            userId = userId,
+            telegramUserId = snapshot.getString("telegramUserId").orEmpty(),
+            isMembershipVerified = snapshot.getBoolean("isMembershipVerified") ?: false,
+            isClaimed = snapshot.getBoolean("isClaimed") ?: false,
+            claimedCoins = snapshot.getLong("rewardCoinsClaimed") ?: 0L
+          )
+        )
+      }
+    awaitClose { listener.remove() }
+  }
+
+  suspend fun verifyTelegramMembership(
+    userId: String,
+    telegramUserId: String
+  ): Result<Boolean> = runCatching {
+    require(userId.isNotBlank()) { "Sign-in required." }
+    val authUid = authProvider().currentUser?.uid?.trim().orEmpty()
+    check(authUid == userId) { "Authenticated user mismatch." }
+    val cleanedTgUserId = telegramUserId.trim()
+    require(cleanedTgUserId.isNotEmpty() && cleanedTgUserId.all { it.isDigit() }) {
+      "Please enter your numeric Telegram User ID to verify channel membership."
+    }
+
+    val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+    val data = mapOf<String, Any>("telegramUserId" to cleanedTgUserId)
+    val result = functions
+      .getHttpsCallable("verifyTelegramMembership")
+      .call(data)
+      .await()
+
+    val resultMap = result.data as? Map<*, *>
+    val success = resultMap?.get("success") == true
+    check(success) { "Telegram membership verification failed." }
+    true
+  }
+
+  suspend fun claimTelegramJoinReward(
+    userId: String,
+    userName: String
+  ): Result<Long> = runCatching {
+    require(userId.isNotBlank()) { "Sign-in required." }
+    val authUid = authProvider().currentUser?.uid?.trim().orEmpty()
+    check(authUid == userId) { "Authenticated user mismatch." }
+
+    val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+    val result = functions
+      .getHttpsCallable("claimTelegramJoinReward")
+      .call(emptyMap<String, Any>())
+      .await()
+
+    val resultMap = result.data as? Map<*, *>
+    val success = resultMap?.get("success") == true
+    val rewardCoins = (resultMap?.get("rewardCoins") as? Number)?.toLong() ?: 0L
+    check(success && rewardCoins > 0L) { "Failed to claim Telegram Join Reward." }
+    rewardCoins
+  }
+
+  // =========================================================================
+  // FEATURE 2: DAILY PROMO CODE SYSTEM
+  // =========================================================================
+
+  private fun DocumentSnapshot.toPromoCodeItem(): PromoCodeItem? {
+    if (!exists()) return null
+    val code = getString("code")?.trim().orEmpty()
+    if (code.isEmpty()) return null
+    val rewardCoins = getLong("rewardCoins") ?: 0L
+    val maxSlots = getLong("maxSlots") ?: 1L
+    val usedSlots = getLong("usedSlots") ?: 0L
+    val expiresAtMillis = getLong("expiresAtMillis") ?: 0L
+    val expiresAtLabel = getString("expiresAtLabel").orEmpty()
+    val explicitActive = getBoolean("isActive") ?: true
+    val rawStatus = getString("status") ?: PromoCodeStatus.ACTIVE
+    return PromoCodeItem(
+      id = id,
+      code = code,
+      rewardCoins = rewardCoins,
+      maxSlots = maxSlots,
+      usedSlots = usedSlots,
+      expiresAtMillis = expiresAtMillis,
+      expiresAtLabel = expiresAtLabel,
+      isActive = explicitActive,
+      status = rawStatus,
+      createdBy = getString("createdBy").orEmpty(),
+      createdAt = getTimestamp("createdAt"),
+      updatedAt = getTimestamp("updatedAt")
+    )
+  }
+
+  fun observePromoCodes(isAdminAuthorized: Boolean = true): Flow<List<PromoCodeItem>> =
+    callbackFlow {
+      if (!isAdminAuthorized) {
+        trySend(emptyList())
+        awaitClose {}
+        return@callbackFlow
+      }
+      val listener =
+        promoCodesCollection.addSnapshotListener { snapshot, error ->
+          if (error != null) {
+            trySend(emptyList())
+            return@addSnapshotListener
+          }
+          val list =
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toPromoCodeItem() }
+              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+              ?: emptyList()
+          trySend(list)
+        }
+      awaitClose { listener.remove() }
+    }
+
+  suspend fun getPromoCodes(): Result<List<PromoCodeItem>> = runCatching {
+    val snap = promoCodesCollection.get().await()
+    snap.documents
+      .mapNotNull { it.toPromoCodeItem() }
+      .sortedByDescending { it.createdAt?.seconds ?: 0L }
+  }
+
+  /**
+   * Creates an independent Promo Code in `/promo_codes/{normalizedCode}`.
+   * Creating a new code never deactivates or overwrites previous codes.
+   */
+  suspend fun createPromoCode(
+    rawCode: String,
+    rewardCoins: Long,
+    maxSlots: Long,
+    expiresAtMillis: Long,
+    expiresAtLabel: String = "",
+    isActive: Boolean = true,
+    nowMillis: Long = System.currentTimeMillis()
+  ): Result<PromoCodeItem> = runCatching {
+    val authUser = authProvider().currentUser ?: error("Admin sign-in required.")
+    val adminUid = authUser.uid.trim()
+    val adminEmail = authUser.email?.trim().orEmpty()
+    require(adminUid.isNotBlank()) { "Admin sign-in required." }
+    val isAuthorized = checkAndEnsureAdminAuthorization(adminUid, adminEmail)
+    check(isAuthorized) { "Only authorized administrators can create promo codes." }
+
+    val normalized = normalizePromoCode(rawCode)
+    require(normalized.length in 3..40 && normalized.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
+      "Promo code must be 3–40 characters (letters, numbers, '-' or '_')."
+    }
+    require(rewardCoins in 1L..10_000_000L) {
+      "Coin reward amount must be greater than 0 Coins."
+    }
+    require(maxSlots in 1L..1_000_000L) {
+      "Maximum redemption slots must be at least 1."
+    }
+    require(expiresAtMillis > nowMillis) {
+      "Expiry date and time must be in the future."
+    }
+
+    val promoRef = promoCodesCollection.document(normalized)
+    val createdItem =
+      firestore.runTransaction { transaction ->
+        val existing = transaction.get(promoRef)
+        check(!existing.exists()) {
+          "Promo code '$normalized' already exists. Please choose a unique code."
+        }
+        val initialStatus = if (isActive) PromoCodeStatus.ACTIVE else PromoCodeStatus.INACTIVE
+        val payload =
+          mapOf(
+            "code" to normalized,
+            "rewardCoins" to rewardCoins,
+            "maxSlots" to maxSlots,
+            "usedSlots" to 0L,
+            "expiresAtMillis" to expiresAtMillis,
+            "expiresAtLabel" to expiresAtLabel.trim(),
+            "isActive" to isActive,
+            "status" to initialStatus,
+            "createdBy" to adminUid,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        transaction.set(promoRef, payload)
+        PromoCodeItem(
+          id = normalized,
+          code = normalized,
+          rewardCoins = rewardCoins,
+          maxSlots = maxSlots,
+          usedSlots = 0L,
+          expiresAtMillis = expiresAtMillis,
+          expiresAtLabel = expiresAtLabel.trim(),
+          isActive = isActive,
+          status = initialStatus,
+          createdBy = adminUid
+        )
+      }.await()
+
+    recordAdminActivity(
+      actionType = "REWARD",
+      title = "Created Promo Code: $normalized",
+      details = "Reward: ${formatCoins(rewardCoins)} • Max Slots: $maxSlots • Expires: ${expiresAtLabel.ifBlank { expiresAtMillis.toString() }}",
+      targetId = normalized
+    )
+
+    createdItem
+  }
+
+  suspend fun setPromoCodeActiveStatus(
+    promoId: String,
+    isActive: Boolean
+  ): Result<Unit> = runCatching {
+    val authUser = authProvider().currentUser ?: error("Admin sign-in required.")
+    val adminUid = authUser.uid.trim()
+    val adminEmail = authUser.email?.trim().orEmpty()
+    require(adminUid.isNotBlank()) { "Admin sign-in required." }
+    val isAuthorized = checkAndEnsureAdminAuthorization(adminUid, adminEmail)
+    check(isAuthorized) { "Only authorized administrators can modify promo codes." }
+
+    val cleanedId = promoId.trim()
+    require(cleanedId.isNotBlank()) { "promoId must not be blank." }
+    val promoRef = promoCodesCollection.document(cleanedId)
+    firestore.runTransaction { transaction ->
+      val snap = transaction.get(promoRef)
+      check(snap.exists()) { "Promo code '$cleanedId' not found." }
+      val maxSlots = snap.getLong("maxSlots") ?: 1L
+      val usedSlots = snap.getLong("usedSlots") ?: 0L
+      val nextStatus =
+        when {
+          usedSlots >= maxSlots -> PromoCodeStatus.EXHAUSTED
+          isActive -> PromoCodeStatus.ACTIVE
+          else -> PromoCodeStatus.INACTIVE
+        }
+      transaction.update(
+        promoRef,
+        mapOf(
+          "isActive" to isActive,
+          "status" to nextStatus,
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
+      )
+    }.await()
+  }
+
+  /**
+   * Atomically redeems a Promo Code for [userId].
+   * Enforces all 9 Promo Code Redemption Rules:
+   * - Independent codes; multiple different codes redeemable on the same day; no daily limit.
+   * - Each user can redeem each individual promo code only once.
+   * - Invalid, inactive, expired, or exhausted codes never credit coins.
+   * - Automatically transitions code to EXHAUSTED when usedSlots reaches maxSlots.
+   * - Credits user's existing Wallet, records TransactionRecord, and sends NotificationItem atomically.
+   */
+  suspend fun redeemPromoCode(
+    userId: String,
+    userName: String,
+    rawCode: String,
+    nowMillis: Long = System.currentTimeMillis()
+  ): Result<PromoRedemptionRecord> = runCatching {
+    require(userId.isNotBlank()) { "Sign-in required to redeem promo codes." }
+    val authUid = authProvider().currentUser?.uid?.trim().orEmpty()
+    check(authUid == userId) { "Authenticated user mismatch." }
+
+    val normalized = normalizePromoCode(rawCode)
+    require(normalized.isNotEmpty()) { "Please enter a promo code." }
+
+    val promoRef = promoCodesCollection.document(normalized)
+    val redemptionId = "${normalized}_$userId"
+    val redemptionRef = promoRedemptionsCollection.document(redemptionId)
+    val subRedemptionRef = promoRef.collection("redemptions").document(userId)
+    val userRef = usersCollection.document(userId)
+    val txId = "promo_${normalized}_$userId"
+    val txRef = transactionsCollection.document(txId)
+    val notifRef = userRef.collection("notifications").document("notif_$txId")
+
+    firestore.runTransaction { transaction ->
+      val promoSnap = transaction.get(promoRef)
+      check(promoSnap.exists()) { "Invalid promo code. Please check the code and try again." }
+
+      val promo = promoSnap.toPromoCodeItem()
+        ?: throw IllegalStateException("Invalid promo code.")
+
+      val existingRedemption = transaction.get(redemptionRef)
+      val existingSubRedemption = transaction.get(subRedemptionRef)
+      if (existingRedemption.exists() || existingSubRedemption.exists()) {
+        throw IllegalStateException("You have already redeemed promo code '$normalized'.")
+      }
+
+      if (!promo.isActive || promo.status.equals(PromoCodeStatus.INACTIVE, ignoreCase = true)) {
+        throw IllegalStateException("This promo code is currently inactive.")
+      }
+      if (promo.isExpired(nowMillis)) {
+        throw IllegalStateException("This promo code has expired.")
+      }
+      if (promo.isExhausted || promo.usedSlots >= promo.maxSlots) {
+        throw IllegalStateException("This promo code has reached its maximum redemption limit.")
+      }
+      val rewardCoins = promo.rewardCoins
+      check(rewardCoins > 0L) { "Invalid promo code reward amount." }
+
+      val userSnap = transaction.get(userRef)
+      check(userSnap.exists()) { "User profile not found." }
+      val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
+      check(approvalStatus == "approved") {
+        "Your account must be approved before redeeming promo codes."
+      }
+
+      val newUsedSlots = promo.usedSlots + 1L
+      val newPromoStatus =
+        if (newUsedSlots >= promo.maxSlots) PromoCodeStatus.EXHAUSTED else PromoCodeStatus.ACTIVE
+
+      val oldPromoCoins = userSnap.getLong("promotionalCoins") ?: 0L
+      val oldBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+      val oldEligibleCoins = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(oldBalanceCents))
+      val oldBalanceCoins = maxOf(userSnap.getLong("balanceCoins") ?: 0L, oldEligibleCoins + oldPromoCoins)
+      val newPromoCoins = oldPromoCoins + rewardCoins
+      val newBalanceCoins = oldBalanceCoins + rewardCoins
+      val resolvedName =
+        (userSnap.getString("displayName") ?: userName).trim().ifEmpty { "TaskFlow Member" }
+
+      transaction.update(
+        promoRef,
+        mapOf(
+          "usedSlots" to newUsedSlots,
+          "status" to newPromoStatus,
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
+      )
+
+      val redemptionPayload =
+        mapOf(
+          "promoId" to normalized,
+          "code" to normalized,
+          "userId" to userId,
+          "userName" to resolvedName,
+          "rewardCoins" to rewardCoins,
+          "redeemedAt" to FieldValue.serverTimestamp()
+        )
+      transaction.set(redemptionRef, redemptionPayload)
+      transaction.set(subRedemptionRef, redemptionPayload)
+
+      transaction.update(
+        userRef,
+        mapOf(
+          "promotionalCoins" to newPromoCoins,
+          "balanceCoins" to newBalanceCoins,
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
+      )
+
+      transaction.set(
+        txRef,
+        mapOf(
+          "userId" to userId,
+          "userName" to resolvedName,
+          "type" to TransactionType.PROMO_CODE,
+          "title" to "Promo Code Redeemed ($normalized)",
+          "amountCents" to coinsToCents(rewardCoins),
+          "amountCoins" to rewardCoins,
+          "status" to "CREDITED",
+          "referenceId" to redemptionId,
+          "createdAt" to FieldValue.serverTimestamp()
+        )
+      )
+
+      transaction.set(
+        notifRef,
+        mapOf(
+          "userId" to userId,
+          "title" to "Promo Code Reward Credited",
+          "body" to "Promo code '$normalized' redeemed! +${formatCoins(rewardCoins)} added to your wallet.",
+          "type" to NotificationRewardType.PROMO_CODE_REWARD,
+          "rewardCoins" to rewardCoins,
+          "referenceId" to redemptionId,
+          "isRead" to false,
+          "createdAt" to FieldValue.serverTimestamp()
+        )
+      )
+
+      PromoRedemptionRecord(
+        id = redemptionId,
+        promoId = normalized,
+        code = normalized,
+        userId = userId,
+        userName = resolvedName,
+        rewardCoins = rewardCoins
+      )
+    }.await()
+  }
+
+  // =========================================================================
+  // FEATURE 3: ADMIN MANUAL BONUS CREDIT
+  // =========================================================================
+
+  /**
+   * Filters a list of registered users by User ID or email (and optionally display name).
+   */
+  fun filterUsersByIdOrEmail(
+    users: List<UserProfile>,
+    rawQuery: String
+  ): List<UserProfile> {
+    val query = rawQuery.trim().lowercase(Locale.US)
+    if (query.isEmpty()) return users
+    return users.filter { user ->
+      val uid = user.userId.ifBlank { user.id }.lowercase(Locale.US)
+      val docId = user.id.lowercase(Locale.US)
+      val email = user.email.lowercase(Locale.US)
+      val name = user.displayName.lowercase(Locale.US)
+      uid.contains(query) || docId.contains(query) || email.contains(query) || name.contains(query)
+    }
+  }
+
+  fun observeManualBonuses(isAdminAuthorized: Boolean): Flow<List<ManualBonusRecord>> =
+    callbackFlow {
+      if (!isAdminAuthorized) {
+        trySend(emptyList())
+        awaitClose {}
+        return@callbackFlow
+      }
+      val listener =
+        manualBonusesCollection.addSnapshotListener { snapshot, error ->
+          if (error != null) {
+            trySend(emptyList())
+            return@addSnapshotListener
+          }
+          val list =
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toObject(ManualBonusRecord::class.java) }
+              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+              ?: emptyList()
+          trySend(list)
+        }
+      awaitClose { listener.remove() }
+    }
+
+  /**
+   * Credits a custom manual bonus to any registered user's existing Wallet atomically.
+   * - Preserves the user's existing wallet balance and adds [amountCoins].
+   * - Records a `TransactionType.ADMIN_MANUAL_BONUS` transaction, `/manual_bonuses/{idempotencyKey}` audit record,
+   *   and a single notification in the user's existing Notification Bell (`NotificationRewardType.ADMIN_BONUS`).
+   * - Prevents duplicate credit on repeated button clicks via [idempotencyKey].
+   * - Strictly restricted to authorized admins.
+   */
+  suspend fun creditAdminManualBonus(
+    targetUserId: String,
+    amountCoins: Long,
+    reason: String = "",
+    idempotencyKey: String = UUID.randomUUID().toString().replace("-", "")
+  ): Result<ManualBonusRecord> = runCatching {
+    val authUser = authProvider().currentUser ?: error("Admin sign-in required.")
+    val adminUid = authUser.uid.trim()
+    val adminEmail = authUser.email?.trim().orEmpty()
+    require(adminUid.isNotBlank()) { "Admin sign-in required." }
+    val isAuthorized = checkAndEnsureAdminAuthorization(adminUid, adminEmail)
+    check(isAuthorized) { "Only authorized administrators can credit manual bonuses." }
+
+    val cleanTargetUid = targetUserId.trim()
+    require(cleanTargetUid.isNotBlank()) { "Please select a target user." }
+    require(amountCoins in 1L..10_000_000L) {
+      "Manual bonus amount must be greater than 0 Coins."
+    }
+    val cleanKey = idempotencyKey.trim()
+    require(cleanKey.isNotBlank() && cleanKey.length <= 128) {
+      "Valid idempotency key is required."
+    }
+    val cleanedReason = reason.trim().take(500)
+
+    val userRef = usersCollection.document(cleanTargetUid)
+    val bonusRef = manualBonusesCollection.document(cleanKey)
+    val txId = "bonus_$cleanKey"
+    val txRef = transactionsCollection.document(txId)
+    val notifRef = userRef.collection("notifications").document("notif_$txId")
+
+    val record =
+      firestore.runTransaction { transaction ->
+        val existingBonus = transaction.get(bonusRef)
+        check(!existingBonus.exists()) {
+          "This manual bonus has already been credited (duplicate request prevented)."
+        }
+        val existingTx = transaction.get(txRef)
+        check(!existingTx.exists()) {
+          "This manual bonus transaction has already been recorded."
+        }
+
+        val userSnap = transaction.get(userRef)
+        check(userSnap.exists()) { "Selected user profile not found." }
+
+        val oldBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+        val oldEligibleCoins =
+          maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(oldBalanceCents))
+        val oldPromoCoins = userSnap.getLong("promotionalCoins") ?: 0L
+        val oldBalanceCoins =
+          maxOf(userSnap.getLong("balanceCoins") ?: 0L, oldEligibleCoins + oldPromoCoins)
+
+        val newPromoCoins = oldPromoCoins + amountCoins
+        val newBalanceCoins = oldBalanceCoins + amountCoins
+
+        val targetName =
+          (userSnap.getString("displayName") ?: "TaskFlow Member").trim().ifEmpty { "TaskFlow Member" }
+        val targetEmail = userSnap.getString("email")?.trim().orEmpty()
+        val displayReason = cleanedReason.ifEmpty { "Special Admin Bonus" }
+
+        transaction.update(
+          userRef,
+          mapOf(
+            "promotionalCoins" to newPromoCoins,
+            "balanceCoins" to newBalanceCoins,
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        transaction.set(
+          bonusRef,
+          mapOf(
+            "targetUserId" to cleanTargetUid,
+            "targetUserName" to targetName,
+            "targetUserEmail" to targetEmail,
+            "adminId" to adminUid,
+            "adminEmail" to adminEmail,
+            "amountCoins" to amountCoins,
+            "reason" to displayReason,
+            "idempotencyKey" to cleanKey,
+            "createdAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        transaction.set(
+          txRef,
+          mapOf(
+            "userId" to cleanTargetUid,
+            "userName" to targetName,
+            "type" to TransactionType.ADMIN_MANUAL_BONUS,
+            "title" to "Admin Bonus: ${displayReason.take(80)}",
+            "amountCents" to coinsToCents(amountCoins),
+            "amountCoins" to amountCoins,
+            "status" to "CREDITED",
+            "referenceId" to cleanKey,
+            "createdAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        transaction.set(
+          notifRef,
+          mapOf(
+            "userId" to cleanTargetUid,
+            "title" to "Admin Bonus Credited",
+            "body" to "You received +${formatCoins(amountCoins)} from Admin! Reason: $displayReason",
+            "type" to NotificationRewardType.ADMIN_BONUS,
+            "rewardCoins" to amountCoins,
+            "referenceId" to cleanKey,
+            "isRead" to false,
+            "createdAt" to FieldValue.serverTimestamp()
+          )
+        )
+
+        ManualBonusRecord(
+          id = cleanKey,
+          targetUserId = cleanTargetUid,
+          targetUserName = targetName,
+          targetUserEmail = targetEmail,
+          adminId = adminUid,
+          adminEmail = adminEmail,
+          amountCoins = amountCoins,
+          reason = displayReason,
+          idempotencyKey = cleanKey
+        )
+      }.await()
+
+    recordAdminActivity(
+      actionType = "REWARD",
+      title = "Credited Manual Bonus (+${formatCoins(amountCoins)})",
+      details = "User: ${record.targetUserName} (${record.targetUserId}) • Reason: ${record.reason}",
+      targetId = cleanKey
+    )
+
+    record
   }
 }

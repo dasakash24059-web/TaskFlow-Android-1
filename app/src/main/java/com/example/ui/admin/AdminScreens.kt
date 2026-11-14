@@ -100,11 +100,14 @@ import com.example.data.model.AdminNotificationItem
 import com.example.data.model.AppItem
 import com.example.data.model.CampaignItem
 import com.example.data.model.DemoWithdrawalRequest
+import com.example.data.model.ManualBonusRecord
+import com.example.data.model.PromoCodeItem
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskCategories
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TaskStep
+import com.example.data.model.TelegramJoinConfig
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
@@ -118,6 +121,7 @@ import com.example.data.model.getEffectiveBalanceCoins
 import com.example.data.model.isValidImageUrlOrDataUri
 import com.example.data.model.isValidTaskUrl
 import com.example.data.repository.encodeGalleryImageAsDataUri
+import com.example.ui.components.TaskFlowBrandLogo
 import com.example.ui.components.AppIconThumbnail
 import com.example.ui.components.ClickableTaskLinkCard
 import com.example.ui.components.FullSizeImageDialog
@@ -204,7 +208,14 @@ fun AdminDashboardScreen(
    onCompleteUpiWithdrawal: (String, String, String, () -> Unit) -> Unit = { _, _, _, _ -> },
    onRejectWithdrawalAndRefund: (String, String, () -> Unit) -> Unit = { _, _, _ -> },
    onUpdateWithdrawalAvailability: (WithdrawalAvailabilityConfig, () -> Unit) -> Unit = { _, _ -> },
-   onMarkAdminNotificationRead: (String) -> Unit = {}
+   onMarkAdminNotificationRead: (String) -> Unit = {},
+   telegramJoinConfig: TelegramJoinConfig = TelegramJoinConfig(),
+   promoCodes: List<PromoCodeItem> = emptyList(),
+   manualBonuses: List<ManualBonusRecord> = emptyList(),
+   onSaveTelegramConfig: (String, String, Long, Boolean) -> Unit = { _, _, _, _ -> },
+   onCreatePromoCode: (String, Long, Long, Long, String, Boolean) -> Unit = { _, _, _, _, _, _ -> },
+   onTogglePromoCodeActive: (String, Boolean) -> Unit = { _, _ -> },
+   onCreditManualBonus: (String, Long, String) -> Unit = { _, _, _ -> }
 ) {
   if (!isAdminAuthorized) {
     UnauthorizedAdminGate(currentUserEmail = currentUserEmail)
@@ -474,20 +485,7 @@ fun AdminDashboardScreen(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-              Surface(
-                shape = CircleShape,
-                color = Color.White.copy(alpha = 0.18f),
-                modifier = Modifier.size(40.dp)
-              ) {
-                Box(contentAlignment = Alignment.Center) {
-                  Icon(
-                    imageVector = Icons.Default.AdminPanelSettings,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(22.dp)
-                  )
-                }
-              }
+              TaskFlowBrandLogo(size = 40.dp)
               Column {
                 Text(
                   text = "TaskFlow Admin",
@@ -737,7 +735,14 @@ fun AdminDashboardScreen(
             AdminCoinsRewardsSection(
               users = registeredUsers,
               reviewTasks = mergedReviewTasks,
-              transactions = transactions
+              transactions = transactions,
+              telegramConfig = telegramJoinConfig,
+              promoCodes = promoCodes,
+              manualBonuses = manualBonuses,
+              onSaveTelegramConfig = onSaveTelegramConfig,
+              onCreatePromoCode = onCreatePromoCode,
+              onTogglePromoCodeActive = onTogglePromoCodeActive,
+              onCreditManualBonus = onCreditManualBonus
             )
           }
           AdminTab.ANALYTICS -> {

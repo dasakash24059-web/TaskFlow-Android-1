@@ -33,14 +33,18 @@ import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ConfirmationNumber
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Task
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
@@ -89,8 +93,10 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.NotificationItem
+import com.example.data.model.NotificationRewardType
 import com.example.data.model.WatchStats
 import com.example.data.model.WithdrawalMethodType
+import com.example.data.model.formatCoins
 import com.example.data.model.getEffectiveBalanceCoins
 import com.example.data.model.mergeTasksWithPreservedSubmissions
 import com.example.data.repository.TaskFlowRepository
@@ -105,6 +111,7 @@ import com.example.ui.theme.TaskFlowTheme
 import com.example.ui.user.DedicatedDailyCheckInScreen
 import com.example.ui.user.GiftCardRedemptionScreen
 import com.example.ui.user.OfferWallScreen
+import com.example.ui.user.PromoCodeRedemptionScreen
 import com.example.ui.user.SpinAndEarnScreen
 import com.example.ui.user.UpiRedemptionScreen
 import com.example.ui.user.UserHomeScreen
@@ -421,13 +428,19 @@ private fun AuthenticatedWorkspace(
   val userNotifications by viewModel.userNotificationsState.collectAsStateWithLifecycle()
   val showNotificationDialog by viewModel.showNotificationDialog.collectAsStateWithLifecycle()
   val showSupportTicketDialog by viewModel.showSupportTicketDialog.collectAsStateWithLifecycle()
+  val telegramJoinConfig by viewModel.telegramJoinConfigState.collectAsStateWithLifecycle()
+  val telegramUserRewardState by viewModel.telegramUserRewardState.collectAsStateWithLifecycle()
+  val promoCodes by viewModel.promoCodesState.collectAsStateWithLifecycle()
+  val manualBonuses by viewModel.manualBonusesState.collectAsStateWithLifecycle()
+  val promoRedemptionUiState by viewModel.promoRedemptionUiState.collectAsStateWithLifecycle()
+  val isPromoCodeScreenVisible by viewModel.isPromoCodeScreenVisible.collectAsStateWithLifecycle()
 
   BackHandler(
     enabled =
       selectedTaskId != null ||
         (activePortal == PortalLoginTarget.USER_APP &&
           activeUserTab == UserTab.HOME &&
-          (isDailyCheckInScreenVisible || isSpinScreenVisible || isOfferWallScreenVisible)) ||
+          (isPromoCodeScreenVisible || isDailyCheckInScreenVisible || isSpinScreenVisible || isOfferWallScreenVisible)) ||
         (activePortal == PortalLoginTarget.USER_APP &&
           activeUserTab == UserTab.PROFILE &&
           profileSubScreen != ProfileSubScreen.MAIN) ||
@@ -436,6 +449,10 @@ private fun AuthenticatedWorkspace(
   ) {
     when {
       selectedTaskId != null -> viewModel.selectTask(null)
+      activePortal == PortalLoginTarget.USER_APP &&
+        activeUserTab == UserTab.HOME &&
+        isPromoCodeScreenVisible ->
+        viewModel.setPromoCodeScreenVisible(false)
       activePortal == PortalLoginTarget.USER_APP &&
         activeUserTab == UserTab.HOME &&
         isDailyCheckInScreenVisible ->
@@ -737,7 +754,14 @@ private fun AuthenticatedWorkspace(
           } else {
             when (activeUserTab) {
               UserTab.HOME -> {
-                if (isDailyCheckInScreenVisible) {
+                if (isPromoCodeScreenVisible) {
+                  PromoCodeRedemptionScreen(
+                    uiState = promoRedemptionUiState,
+                    onRedeemCode = { rawCode -> viewModel.redeemPromoCode(rawCode) },
+                    onClearFeedback = { viewModel.clearPromoRedemptionFeedback() },
+                    onBack = { viewModel.setPromoCodeScreenVisible(false) }
+                  )
+                } else if (isDailyCheckInScreenVisible) {
                   DedicatedDailyCheckInScreen(
                     dailyCheckInState = dailyCheckInState,
                     approvedEarningsCents = viewModel.getApprovedTaskEarningsCents(),
@@ -754,7 +778,18 @@ private fun AuthenticatedWorkspace(
                       viewModel.claimDailyCheckIn(day = day, activity = activity)
                     },
                     onBack = { viewModel.setDailyCheckInScreenVisible(false) },
-                    isBusy = isBusy
+                    isBusy = isBusy,
+                    telegramConfig = telegramJoinConfig,
+                    telegramRewardState = telegramUserRewardState,
+                    onVerifyTelegramMembership = { telegramUserId ->
+                      viewModel.verifyTelegramMembership(telegramUserId)
+                    },
+                    onClaimTelegramReward = {
+                      viewModel.claimTelegramJoinReward()
+                    },
+                    onOpenPromoCodeScreen = {
+                      viewModel.setPromoCodeScreenVisible(true)
+                    }
                   )
                 } else if (isSpinScreenVisible) {
                   SpinAndEarnScreen(
@@ -1257,6 +1292,37 @@ private fun AuthenticatedWorkspace(
             },
             onMarkAdminNotificationRead = { notifId ->
               viewModel.markAdminNotificationRead(notifId)
+            },
+            telegramJoinConfig = telegramJoinConfig,
+            promoCodes = promoCodes,
+            manualBonuses = manualBonuses,
+            onSaveTelegramConfig = { channelUrl, channelChatId, rewardCoins, isActive ->
+              viewModel.adminUpdateTelegramJoinConfig(
+                channelUrl = channelUrl,
+                channelChatId = channelChatId,
+                                rewardCoins = rewardCoins,
+                isActive = isActive
+              )
+            },
+            onCreatePromoCode = { rawCode, rewardCoins, maxSlots, expiresAtMillis, expiresAtLabel, isActive ->
+              viewModel.adminCreatePromoCode(
+                rawCode = rawCode,
+                rewardCoins = rewardCoins,
+                maxSlots = maxSlots,
+                expiresAtMillis = expiresAtMillis,
+                expiresAtLabel = expiresAtLabel,
+                isActive = isActive
+              )
+            },
+            onTogglePromoCodeActive = { promoId, isActive ->
+              viewModel.adminTogglePromoCodeActive(promoId, isActive)
+            },
+            onCreditManualBonus = { targetUserId, amountCoins, reason ->
+              viewModel.adminCreditManualBonus(
+                targetUserId = targetUserId,
+                amountCoins = amountCoins,
+                reason = reason
+              )
             }
           )
         }
@@ -1303,7 +1369,7 @@ fun NotificationListDialog(
           )
           Spacer(modifier = Modifier.height(4.dp))
           Text(
-            text = "You will receive updates when tasks are reviewed or check-ins are credited.",
+            text = "You will receive updates when tasks, Telegram rewards, promo codes, or bonuses are credited.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1311,17 +1377,42 @@ fun NotificationListDialog(
         }
       } else {
         LazyColumn(
-          modifier = Modifier.fillMaxWidth().height(320.dp),
+          modifier = Modifier.fillMaxWidth().height(340.dp).testTag("notification_bell_list"),
           verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
           items(notifications, key = { it.id }) { item ->
+            val iconVector =
+              when (item.type) {
+                NotificationRewardType.TELEGRAM_REWARD -> Icons.Default.Send
+                NotificationRewardType.PROMO_CODE_REWARD -> Icons.Default.ConfirmationNumber
+                NotificationRewardType.ADMIN_BONUS -> Icons.Default.CardGiftcard
+                NotificationRewardType.TASK_REWARD -> Icons.Default.CheckCircle
+                "WITHDRAWAL" -> Icons.Default.Payment
+                else -> Icons.Default.MonetizationOn
+              }
+            val timestampLabel =
+              remember(item.createdAt) {
+                val ts = item.createdAt
+                if (ts == null) {
+                  "Just now"
+                } else {
+                  java.text.SimpleDateFormat("dd MMM yyyy, hh:mm a", java.util.Locale.US)
+                    .format(java.util.Date(ts.seconds * 1000L))
+                }
+              }
+
             Card(
-              modifier = Modifier.fillMaxWidth(),
+              modifier = Modifier.fillMaxWidth().testTag("notification_item_${item.id}"),
               shape = RoundedCornerShape(12.dp),
-              colors = CardDefaults.cardColors(
-                containerColor = if (item.isRead) MaterialTheme.colorScheme.surface
-                else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-              )
+              colors =
+                CardDefaults.cardColors(
+                  containerColor =
+                    if (item.isRead) {
+                      MaterialTheme.colorScheme.surface
+                    } else {
+                      MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    }
+                )
             ) {
               Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
                 Row(
@@ -1329,26 +1420,96 @@ fun NotificationListDialog(
                   horizontalArrangement = Arrangement.SpaceBetween,
                   verticalAlignment = Alignment.CenterVertically
                 ) {
-                  Text(
-                    text = item.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
-                  )
-                  if (!item.isRead) {
-                    TextButton(
-                      onClick = { onMarkRead(item.id) },
-                      modifier = Modifier.height(28.dp)
+                  Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                  ) {
+                    Icon(
+                      imageVector = iconVector,
+                      contentDescription = item.type.ifBlank { "Notification" },
+                      tint = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                      text = item.title,
+                      style = MaterialTheme.typography.titleSmall,
+                      fontWeight = FontWeight.Bold
+                    )
+                  }
+                  if (item.rewardCoins > 0L) {
+                    Surface(
+                      shape = RoundedCornerShape(50),
+                      color = MaterialTheme.colorScheme.primaryContainer
                     ) {
-                      Text("Mark read", style = MaterialTheme.typography.labelSmall)
+                      Text(
+                        text = "+${formatCoins(item.rewardCoins)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier =
+                          Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            .testTag("notification_coins_${item.id}")
+                      )
                     }
                   }
                 }
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
                   text = item.body,
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                  ) {
+                    Text(
+                      text = timestampLabel,
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                      modifier = Modifier.testTag("notification_timestamp_${item.id}")
+                    )
+                    Surface(
+                      shape = RoundedCornerShape(50),
+                      color =
+                        if (item.isRead) {
+                          MaterialTheme.colorScheme.surfaceVariant
+                        } else {
+                          MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        }
+                    ) {
+                      Text(
+                        text = if (item.isRead) "Read" else "Unread",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color =
+                          if (item.isRead) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                          } else {
+                            MaterialTheme.colorScheme.primary
+                          },
+                        modifier =
+                          Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            .testTag("notification_status_${item.id}")
+                      )
+                    }
+                  }
+                  if (!item.isRead) {
+                    TextButton(
+                      onClick = { onMarkRead(item.id) },
+                      modifier = Modifier.height(28.dp).testTag("notif_mark_read_${item.id}")
+                    ) {
+                      Text("Mark read", style = MaterialTheme.typography.labelSmall)
+                    }
+                  }
+                }
               }
             }
           }
@@ -1356,7 +1517,10 @@ fun NotificationListDialog(
       }
     },
     confirmButton = {
-      TextButton(onClick = onDismiss) {
+      TextButton(
+        onClick = onDismiss,
+        modifier = Modifier.testTag("notification_dialog_close_button")
+      ) {
         Text("Close")
       }
     }

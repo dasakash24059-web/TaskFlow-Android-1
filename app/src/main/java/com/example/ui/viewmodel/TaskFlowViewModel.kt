@@ -12,9 +12,13 @@ import com.example.data.model.CampaignItem
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DailyCheckInState
 import com.example.data.model.DemoWithdrawalRequest
+import com.example.data.model.ManualBonusRecord
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
 import com.example.data.model.MIN_WITHDRAWAL_COINS
 import com.example.data.model.NotificationItem
+import com.example.data.model.PromoCodeItem
+import com.example.data.model.PromoRedemptionRecord
+import com.example.data.model.PromoRedemptionUiState
 import com.example.data.model.SpinEarnUiState
 import com.example.data.model.SpinSessionOutcome
 import com.example.data.model.SpinWheelConstants
@@ -25,6 +29,8 @@ import com.example.data.model.SupportTicket
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TaskStep
+import com.example.data.model.TelegramJoinConfig
+import com.example.data.model.TelegramUserRewardState
 import com.example.data.model.TransactionRecord
 import com.example.data.model.UserProfile
 import com.example.data.model.UserTaskProgress
@@ -2324,6 +2330,404 @@ class TaskFlowViewModel(
         .onFailure { err ->
           _bannerMessage.value = err.localizedMessage ?: "Failed to update ticket."
         }
+    }
+  }
+
+  // ==========================================
+  // TELEGRAM JOIN REWARD, PROMO CODES & MANUAL BONUS
+  // ==========================================
+
+  val telegramJoinConfigState: StateFlow<TelegramJoinConfig> =
+    repository
+      .observeTelegramJoinConfig()
+      .catch { emit(TelegramJoinConfig()) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TelegramJoinConfig())
+
+  private val _telegramUserRewardOverride = MutableStateFlow<TelegramUserRewardState?>(null)
+
+  val telegramUserRewardState: StateFlow<TelegramUserRewardState> =
+    kotlinx.coroutines.flow.combine(
+      repository.observeTelegramUserRewardState(currentUserId).catch { emit(TelegramUserRewardState(userId = currentUserId)) },
+      userProfileState,
+      _telegramUserRewardOverride
+    ) { docState, profileUiState, overrideState ->
+      val profile = (profileUiState as? UiState.Success)?.data
+      val profileClaimed = profile?.telegramRewardClaimed ?: false
+      val profileVerified = profile?.telegramJoinedVerified ?: false
+      val mergedClaimed = docState.isClaimed || profileClaimed || (overrideState?.isClaimed == true)
+      val mergedVerified = docState.isMembershipVerified || profileVerified || (overrideState?.isMembershipVerified == true)
+      TelegramUserRewardState(
+        userId = currentUserId,
+        telegramUserId = overrideState?.telegramUserId?.ifBlank { docState.telegramUserId }
+          ?: docState.telegramUserId.ifBlank { profile?.telegramUserId.orEmpty() },
+        isMembershipVerified = mergedVerified,
+        isClaimed = mergedClaimed,
+        claimedCoins = maxOf(docState.claimedCoins, overrideState?.claimedCoins ?: 0L),
+        statusMessage = overrideState?.statusMessage ?: docState.statusMessage,
+        errorMessage = overrideState?.errorMessage ?: docState.errorMessage
+      )
+    }.stateIn(
+      viewModelScope,
+      SharingStarted.WhileSubscribed(5_000),
+      TelegramUserRewardState(userId = currentUserId)
+    )
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  val promoCodesState: StateFlow<List<PromoCodeItem>> =
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        repository.observePromoCodes(authorized)
+      }
+      .catch { emit(emptyList()) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  val manualBonusesState: StateFlow<List<ManualBonusRecord>> =
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        repository.observeManualBonuses(authorized)
+      }
+      .catch { emit(emptyList()) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+  private val _promoRedemptionUiState = MutableStateFlow(PromoRedemptionUiState())
+  val promoRedemptionUiState: StateFlow<PromoRedemptionUiState> = _promoRedemptionUiState.asStateFlow()
+
+  private val _isPromoCodeScreenVisible = MutableStateFlow(false)
+  val isPromoCodeScreenVisible: StateFlow<Boolean> = _isPromoCodeScreenVisible.asStateFlow()
+
+  fun setPromoCodeScreenVisible(visible: Boolean) {
+    _isPromoCodeScreenVisible.value = visible
+    if (!visible) {
+      clearPromoRedemptionFeedback()
+    }
+  }
+
+  fun clearPromoRedemptionFeedback() {
+    _promoRedemptionUiState.value =
+      _promoRedemptionUiState.value.copy(
+        successMessage = null,
+        errorMessage = null
+      )
+  }
+
+  fun verifyTelegramMembership(
+    telegramUserId: String,
+    onSuccess: () -> Unit = {}
+  ) {
+    if (_isBusy.value) return
+    val cleanedTgId = telegramUserId.trim()
+    if (cleanedTgId.isEmpty() || !cleanedTgId.all { it.isDigit() }) {
+      val msg = "Please enter your numeric Telegram User ID to verify channel membership."
+      _telegramUserRewardOverride.value =
+        (telegramUserRewardState.value).copy(errorMessage = msg, statusMessage = "")
+      _bannerMessage.value = msg
+      return
+    }
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .verifyTelegramMembership(currentUserId, cleanedTgId)
+          .onSuccess {
+            val msg = "Telegram membership verified! You can now claim your reward."
+            _telegramUserRewardOverride.value =
+              telegramUserRewardState.value.copy(
+                telegramUserId = cleanedTgId,
+                isMembershipVerified = true,
+                statusMessage = msg,
+                errorMessage = null
+              )
+            _bannerMessage.value = msg
+            onSuccess()
+          }
+          .onFailure { err ->
+            val msg =
+              err.localizedMessage
+                ?: "Telegram membership verification failed. Please join the channel first."
+            _telegramUserRewardOverride.value =
+              telegramUserRewardState.value.copy(
+                telegramUserId = cleanedTgId,
+                isMembershipVerified = false,
+                statusMessage = "",
+                errorMessage = msg
+              )
+            _bannerMessage.value = msg
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun claimTelegramJoinReward(onSuccess: (Long) -> Unit = {}) {
+    if (_isBusy.value) return
+    val currentTgState = telegramUserRewardState.value
+    if (currentTgState.isClaimed) {
+      _bannerMessage.value = "You have already claimed the Telegram Join Reward."
+      return
+    }
+    if (!currentTgState.isMembershipVerified) {
+      val msg = "Please join the Telegram channel and verify your membership before claiming."
+      _telegramUserRewardOverride.value = currentTgState.copy(errorMessage = msg)
+      _bannerMessage.value = msg
+      return
+    }
+    val profile = (userProfileState.value as? UiState.Success)?.data
+    val resolvedName =
+      profile?.displayName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
+
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .claimTelegramJoinReward(currentUserId, resolvedName)
+          .onSuccess { creditedCoins ->
+            _telegramUserRewardOverride.value =
+              currentTgState.copy(
+                isMembershipVerified = true,
+                isClaimed = true,
+                claimedCoins = creditedCoins,
+                statusMessage = "Success! +${formatCoins(creditedCoins)} credited to your wallet.",
+                errorMessage = null
+              )
+            _bannerMessage.value =
+              "Telegram Join Reward claimed! +${formatCoins(creditedCoins)} added to your wallet."
+            onSuccess(creditedCoins)
+          }
+          .onFailure { err ->
+            val msg = err.localizedMessage ?: "Failed to claim Telegram Join Reward."
+            _telegramUserRewardOverride.value = currentTgState.copy(errorMessage = msg)
+            _bannerMessage.value = msg
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun redeemPromoCode(
+    rawCode: String,
+    onSuccess: (PromoRedemptionRecord) -> Unit = {}
+  ) {
+    if (_isBusy.value || _promoRedemptionUiState.value.isRedeeming) return
+    val cleaned = rawCode.trim()
+    if (cleaned.isEmpty()) {
+      _promoRedemptionUiState.value =
+        PromoRedemptionUiState(
+          codeInput = rawCode,
+          isRedeeming = false,
+          errorMessage = "Please enter a promo code."
+        )
+      return
+    }
+    val profile = (userProfileState.value as? UiState.Success)?.data
+    val resolvedName =
+      profile?.displayName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
+
+    _isBusy.value = true
+    _promoRedemptionUiState.value =
+      PromoRedemptionUiState(
+        codeInput = cleaned,
+        isRedeeming = true,
+        successMessage = null,
+        errorMessage = null
+      )
+    viewModelScope.launch {
+      try {
+        repository
+          .redeemPromoCode(
+            userId = currentUserId,
+            userName = resolvedName,
+            rawCode = cleaned
+          )
+          .onSuccess { record ->
+            val msg =
+              "Promo code '${record.code}' redeemed! +${formatCoins(record.rewardCoins)} credited to your wallet."
+            _promoRedemptionUiState.value =
+              PromoRedemptionUiState(
+                codeInput = "",
+                isRedeeming = false,
+                lastRedeemedCode = record.code,
+                lastCreditedCoins = record.rewardCoins,
+                successMessage = msg,
+                errorMessage = null
+              )
+            _bannerMessage.value = msg
+            onSuccess(record)
+          }
+          .onFailure { err ->
+            val msg = err.localizedMessage ?: "Invalid or expired promo code."
+            _promoRedemptionUiState.value =
+              PromoRedemptionUiState(
+                codeInput = cleaned,
+                isRedeeming = false,
+                successMessage = null,
+                errorMessage = msg
+              )
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun adminUpdateTelegramJoinConfig(
+    channelUrl: String,
+    channelChatId: String = "",
+    rewardCoins: Long,
+    isActive: Boolean,
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value) {
+      _bannerMessage.value = "Only authorized administrators can update Telegram reward settings."
+      return
+    }
+    if (_isBusy.value) return
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .updateTelegramJoinConfig(
+            channelUrl = channelUrl,
+            channelChatId = channelChatId,
+            rewardCoins = rewardCoins,
+            isActive = isActive
+          )
+          .onSuccess { cfg ->
+            _bannerMessage.value =
+              "Telegram Join Task saved (${formatCoins(cfg.rewardCoins)}, ${if (cfg.isActive) "Active" else "Inactive"})."
+            onSuccess()
+          }
+          .onFailure { err ->
+            _bannerMessage.value =
+              err.localizedMessage ?: "Failed to update Telegram Join Task settings."
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun adminCreatePromoCode(
+    rawCode: String,
+    rewardCoins: Long,
+    maxSlots: Long,
+    expiresAtMillis: Long,
+    expiresAtLabel: String = "",
+    isActive: Boolean = true,
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value) {
+      _bannerMessage.value = "Only authorized administrators can create promo codes."
+      return
+    }
+    if (_isBusy.value) return
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .createPromoCode(
+            rawCode = rawCode,
+            rewardCoins = rewardCoins,
+            maxSlots = maxSlots,
+            expiresAtMillis = expiresAtMillis,
+            expiresAtLabel = expiresAtLabel,
+            isActive = isActive
+          )
+          .onSuccess { created ->
+            _bannerMessage.value =
+              "Promo code '${created.code}' created (+${formatCoins(created.rewardCoins)}, ${created.maxSlots} slots)."
+            onSuccess()
+          }
+          .onFailure { err ->
+            _bannerMessage.value = err.localizedMessage ?: "Failed to create promo code."
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun adminTogglePromoCodeActive(promoId: String, isActive: Boolean) {
+    if (!isAdminAuthorized.value || _isBusy.value) return
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .setPromoCodeActiveStatus(promoId, isActive)
+          .onSuccess {
+            _bannerMessage.value =
+              "Promo code '$promoId' marked as ${if (isActive) "Active" else "Inactive"}."
+          }
+          .onFailure { err ->
+            _bannerMessage.value = err.localizedMessage ?: "Failed to update promo code status."
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  private var pendingManualBonusSignature: String? = null
+  private var pendingManualBonusKey: String? = null
+
+  fun adminCreditManualBonus(
+    targetUserId: String,
+    amountCoins: Long,
+    reason: String = "",
+    explicitIdempotencyKey: String? = null,
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value) {
+      _bannerMessage.value = "Only authorized administrators can send manual bonuses."
+      return
+    }
+    if (_isBusy.value) return
+    val cleanTarget = targetUserId.trim()
+    if (cleanTarget.isEmpty()) {
+      _bannerMessage.value = "Please select a registered user."
+      return
+    }
+    if (amountCoins <= 0L) {
+      _bannerMessage.value = "Please enter a valid bonus amount greater than 0 Coins."
+      return
+    }
+    val signature = "$currentUserId|$cleanTarget|$amountCoins|${reason.trim()}"
+    val resolvedKey =
+      explicitIdempotencyKey?.trim()?.takeIf { it.isNotEmpty() }
+        ?: if (pendingManualBonusSignature == signature && !pendingManualBonusKey.isNullOrBlank()) {
+          pendingManualBonusKey!!
+        } else {
+          UUID.randomUUID().toString().replace("-", "").also { generated ->
+            pendingManualBonusSignature = signature
+            pendingManualBonusKey = generated
+          }
+        }
+
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .creditAdminManualBonus(
+            targetUserId = cleanTarget,
+            amountCoins = amountCoins,
+            reason = reason,
+            idempotencyKey = resolvedKey
+          )
+          .onSuccess { record ->
+            pendingManualBonusSignature = null
+            pendingManualBonusKey = null
+            _bannerMessage.value =
+              "Credited +${formatCoins(record.amountCoins)} manual bonus to ${record.targetUserName}!"
+            onSuccess()
+          }
+          .onFailure { err ->
+            _bannerMessage.value = err.localizedMessage ?: "Failed to credit manual bonus."
+          }
+      } finally {
+        _isBusy.value = false
+      }
     }
   }
 }

@@ -88,13 +88,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.CardGiftcard
+import androidx.compose.material.icons.filled.ConfirmationNumber
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material3.OutlinedTextField
 import com.example.BuildConfig
 import com.example.data.model.AdminActivityLog
 import com.example.data.model.COINS_PER_RUPEE
 import com.example.data.model.CampaignItem
 import com.example.data.model.DemoWithdrawalRequest
+import com.example.data.model.ManualBonusRecord
+import com.example.data.model.PromoCodeItem
+import com.example.data.model.PromoCodeStatus
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
+import com.example.data.model.TelegramJoinConfig
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
@@ -104,6 +113,7 @@ import com.example.data.model.coinsToCents
 import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
 import com.example.data.model.formatVisibleUserEmail
+import com.example.ui.components.TaskFlowBrandLogo
 import com.example.data.model.getEffectiveBalanceCoins
 import com.example.ui.theme.AppThemeMode
 import com.example.ui.theme.ThemePreferences
@@ -351,6 +361,7 @@ fun AdminControlCenterHomeScreen(
                   modifier = Modifier.size(20.dp)
                 )
               }
+              TaskFlowBrandLogo(size = 34.dp)
               Column(modifier = Modifier.weight(1f)) {
                 Text(
                   text = "Admin Control Center",
@@ -1367,7 +1378,15 @@ internal fun OverviewMetricTile(
 fun AdminCoinsRewardsSection(
   users: List<UserProfile>,
   reviewTasks: List<TaskItem>,
-  transactions: List<TransactionRecord>
+  transactions: List<TransactionRecord>,
+  telegramConfig: TelegramJoinConfig = TelegramJoinConfig(),
+  promoCodes: List<PromoCodeItem> = emptyList(),
+  manualBonuses: List<ManualBonusRecord> = emptyList(),
+  isBusy: Boolean = false,
+  onSaveTelegramConfig: (channelUrl: String, channelChatId: String, rewardCoins: Long, isActive: Boolean) -> Unit = { _, _, _, _ -> },
+  onCreatePromoCode: (code: String, rewardCoins: Long, maxSlots: Long, expiresAtMillis: Long, expiresAtLabel: String, isActive: Boolean) -> Unit = { _, _, _, _, _, _ -> },
+  onTogglePromoCodeActive: (promoId: String, isActive: Boolean) -> Unit = { _, _ -> },
+  onCreditManualBonus: (targetUserId: String, amountCoins: Long, reason: String) -> Unit = { _, _, _ -> }
 ) {
   val creditTransactions =
     transactions.filter {
@@ -1402,6 +1421,35 @@ fun AdminCoinsRewardsSection(
     verticalArrangement = Arrangement.spacedBy(12.dp),
     contentPadding = PaddingValues(bottom = 48.dp)
   ) {
+    // 0A. FEATURE 1: Telegram Join Task Management
+    item {
+      AdminTelegramJoinManagementCard(
+        config = telegramConfig,
+        isBusy = isBusy,
+        onSave = onSaveTelegramConfig
+      )
+    }
+
+    // 0B. FEATURE 2: Daily Promo Code Manager
+    item {
+      AdminPromoCodeManagerCard(
+        promoCodes = promoCodes,
+        isBusy = isBusy,
+        onCreatePromoCode = onCreatePromoCode,
+        onTogglePromoCodeActive = onTogglePromoCodeActive
+      )
+    }
+
+    // 0C. FEATURE 3: Admin Manual Bonus Credit
+    item {
+      AdminManualBonusCreditCard(
+        users = users,
+        manualBonuses = manualBonuses,
+        isBusy = isBusy,
+        onCreditBonus = onCreditManualBonus
+      )
+    }
+
     // 1. Conversion Standard & Reward Rules Card
     item {
       Card(
@@ -1610,6 +1658,651 @@ fun AdminCoinsRewardsSection(
             Text(
               text = "+${formatCoins(txCoins)} (${formatRewardInr(txCents)})",
               style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.Bold,
+              color = AdminGreenSuccess
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+fun AdminTelegramJoinManagementCard(
+  config: TelegramJoinConfig,
+  isBusy: Boolean = false,
+  onSave: (channelUrl: String, channelChatId: String, rewardCoins: Long, isActive: Boolean) -> Unit
+) {
+  var channelUrl by rememberSaveable(config.channelUrl) { mutableStateOf(config.channelUrl) }
+  var channelChatId by rememberSaveable(config.channelChatId) { mutableStateOf(config.channelChatId) }
+  var rewardCoinsText by rememberSaveable(config.rewardCoins) {
+    mutableStateOf(if (config.rewardCoins > 0L) config.rewardCoins.toString() else "")
+  }
+  var isActive by rememberSaveable(config.isActive) { mutableStateOf(config.isActive) }
+  var validationError by remember { mutableStateOf<String?>(null) }
+
+  Card(
+    modifier = Modifier.fillMaxWidth().testTag("admin_telegram_join_management_card"),
+    shape = RoundedCornerShape(16.dp),
+    colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+    border = BorderStroke(1.dp, AdminBorderColor)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Icon(
+            imageVector = Icons.Default.Send,
+            contentDescription = null,
+            tint = AdminBluePrimary
+          )
+          Text(
+            text = "Telegram Join Task Management",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = AdminTextDark
+          )
+        }
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+          Text(
+            text = if (isActive) "Active" else "Inactive",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = if (isActive) AdminGreenSuccess else AdminTextMuted
+          )
+          Switch(
+            checked = isActive,
+            onCheckedChange = { isActive = it },
+            colors = SwitchDefaults.colors(checkedTrackColor = AdminBluePrimary),
+            modifier = Modifier.testTag("admin_telegram_active_switch")
+          )
+        }
+      }
+
+      OutlinedTextField(
+        value = channelUrl,
+        onValueChange = {
+          channelUrl = it
+          validationError = null
+        },
+        label = { Text("Telegram Channel URL") },
+        placeholder = { Text("https://t.me/yourchannel") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().testTag("admin_telegram_url_input")
+      )
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        OutlinedTextField(
+          value = rewardCoinsText,
+          onValueChange = {
+            rewardCoinsText = it.filter { ch -> ch.isDigit() }
+            validationError = null
+          },
+          label = { Text("Custom Reward (Coins)") },
+          placeholder = { Text("Enter any coin amount") },
+          singleLine = true,
+          modifier = Modifier.weight(1f).testTag("admin_telegram_reward_coins_input")
+        )
+        OutlinedTextField(
+          value = channelChatId,
+          onValueChange = {
+            channelChatId = it
+            validationError = null
+          },
+          label = { Text("Channel Chat ID") },
+          placeholder = { Text("@yourchannel") },
+          singleLine = true,
+          modifier = Modifier.weight(1f).testTag("admin_telegram_chat_id_input")
+        )
+      }
+
+      if (!validationError.isNullOrBlank()) {
+        Text(
+          text = validationError!!,
+          style = MaterialTheme.typography.bodySmall,
+          color = AdminRedDanger,
+          modifier = Modifier.testTag("admin_telegram_validation_error")
+        )
+      }
+
+      Button(
+        onClick = {
+          val parsedCoins = rewardCoinsText.trim().toLongOrNull() ?: 0L
+          if (channelUrl.trim().isEmpty() || !channelUrl.trim().startsWith("https://", ignoreCase = true)) {
+            validationError = "Enter a valid HTTPS Telegram channel URL."
+            return@Button
+          }
+          if (parsedCoins <= 0L) {
+            validationError = "Enter a custom reward amount greater than 0 Coins."
+            return@Button
+          }
+          validationError = null
+          onSave(channelUrl.trim(), channelChatId.trim(), parsedCoins, isActive)
+        },
+        enabled = !isBusy,
+        shape = RoundedCornerShape(10.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = AdminBluePrimary),
+        modifier = Modifier.fillMaxWidth().testTag("admin_telegram_save_button")
+      ) {
+        Text("Save Telegram Task", fontWeight = FontWeight.Bold)
+      }
+    }
+  }
+}
+
+@Composable
+fun AdminPromoCodeManagerCard(
+  promoCodes: List<PromoCodeItem>,
+  isBusy: Boolean = false,
+  onCreatePromoCode: (code: String, rewardCoins: Long, maxSlots: Long, expiresAtMillis: Long, expiresAtLabel: String, isActive: Boolean) -> Unit,
+  onTogglePromoCodeActive: (promoId: String, isActive: Boolean) -> Unit
+) {
+  var codeText by rememberSaveable { mutableStateOf("") }
+  var rewardCoinsText by rememberSaveable { mutableStateOf("") }
+  var maxSlotsText by rememberSaveable { mutableStateOf("") }
+  val defaultExpiryLabel = remember {
+    val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+    fmt.format(java.util.Date(System.currentTimeMillis() + 24L * 60L * 60L * 1000L))
+  }
+  var expiryDateTimeText by rememberSaveable { mutableStateOf(defaultExpiryLabel) }
+  var isActive by rememberSaveable { mutableStateOf(true) }
+  var validationError by remember { mutableStateOf<String?>(null) }
+
+  Card(
+    modifier = Modifier.fillMaxWidth().testTag("admin_promo_code_manager_card"),
+    shape = RoundedCornerShape(16.dp),
+    colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+    border = BorderStroke(1.dp, AdminBorderColor)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Icon(
+            imageVector = Icons.Default.ConfirmationNumber,
+            contentDescription = null,
+            tint = AdminBluePrimary
+          )
+          Text(
+            text = "Promo Code Manager (${promoCodes.size})",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = AdminTextDark
+          )
+        }
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+          Text(
+            text = if (isActive) "Active" else "Inactive",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (isActive) AdminGreenSuccess else AdminTextMuted
+          )
+          Switch(
+            checked = isActive,
+            onCheckedChange = { isActive = it },
+            colors = SwitchDefaults.colors(checkedTrackColor = AdminBluePrimary),
+            modifier = Modifier.testTag("admin_promo_active_switch")
+          )
+        }
+      }
+
+      OutlinedTextField(
+        value = codeText,
+        onValueChange = {
+          codeText = it.uppercase(Locale.US)
+          validationError = null
+        },
+        label = { Text("Promo Code") },
+        placeholder = { Text("Enter custom promo code") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().testTag("admin_promo_code_text_input")
+      )
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        OutlinedTextField(
+          value = rewardCoinsText,
+          onValueChange = {
+            rewardCoinsText = it.filter { ch -> ch.isDigit() }
+            validationError = null
+          },
+          label = { Text("Coin Reward") },
+          placeholder = { Text("Custom Coins") },
+          singleLine = true,
+          modifier = Modifier.weight(1f).testTag("admin_promo_reward_coins_input")
+        )
+        OutlinedTextField(
+          value = maxSlotsText,
+          onValueChange = {
+            maxSlotsText = it.filter { ch -> ch.isDigit() }
+            validationError = null
+          },
+          label = { Text("Max Slots") },
+          placeholder = { Text("Maximum users") },
+          singleLine = true,
+          modifier = Modifier.weight(1f).testTag("admin_promo_max_slots_input")
+        )
+      }
+
+      OutlinedTextField(
+        value = expiryDateTimeText,
+        onValueChange = {
+          expiryDateTimeText = it
+          validationError = null
+        },
+        label = { Text("Expiry Date & Time") },
+        placeholder = { Text("YYYY-MM-DD HH:MM") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().testTag("admin_promo_expiry_input")
+      )
+
+      if (!validationError.isNullOrBlank()) {
+        Text(
+          text = validationError!!,
+          style = MaterialTheme.typography.bodySmall,
+          color = AdminRedDanger,
+          modifier = Modifier.testTag("admin_promo_validation_error")
+        )
+      }
+
+      Button(
+        onClick = {
+          val cleanCode = codeText.trim().uppercase(Locale.US)
+          val parsedCoins = rewardCoinsText.trim().toLongOrNull() ?: 0L
+          val parsedSlots = maxSlotsText.trim().toLongOrNull() ?: 0L
+          val parsedExpiryMillis =
+            runCatching {
+              val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+              sdf.parse(expiryDateTimeText.trim())?.time
+            }.getOrNull()
+              ?: (System.currentTimeMillis() + 24L * 60L * 60L * 1000L)
+
+          if (cleanCode.length < 3) {
+            validationError = "Promo code must be at least 3 characters."
+            return@Button
+          }
+          if (parsedCoins <= 0L) {
+            validationError = "Enter a custom coin reward greater than 0."
+            return@Button
+          }
+          if (parsedSlots <= 0L) {
+            validationError = "Enter maximum redemption slots greater than 0."
+            return@Button
+          }
+          if (parsedExpiryMillis <= System.currentTimeMillis()) {
+            validationError = "Expiry date & time must be in the future."
+            return@Button
+          }
+          validationError = null
+          onCreatePromoCode(
+            cleanCode,
+            parsedCoins,
+            parsedSlots,
+            parsedExpiryMillis,
+            expiryDateTimeText.trim(),
+            isActive
+          )
+          codeText = ""
+          rewardCoinsText = ""
+          maxSlotsText = ""
+        },
+        enabled = !isBusy,
+        shape = RoundedCornerShape(10.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = AdminBluePrimary),
+        modifier = Modifier.fillMaxWidth().testTag("admin_promo_create_button")
+      ) {
+        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Create Promo Code", fontWeight = FontWeight.Bold)
+      }
+
+      if (promoCodes.isNotEmpty()) {
+        HorizontalDivider(color = AdminBorderColor)
+        promoCodes.forEach { promo ->
+          val effStatus = promo.effectiveStatus()
+          val statusColor =
+            when (effStatus) {
+              PromoCodeStatus.ACTIVE -> AdminGreenSuccess
+              PromoCodeStatus.EXHAUSTED -> AdminAmberWarning
+              PromoCodeStatus.EXPIRED -> AdminRedDanger
+              else -> AdminTextMuted
+            }
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = AdminSoftGreyBg,
+            border = BorderStroke(1.dp, AdminBorderColor),
+            modifier = Modifier.fillMaxWidth().testTag("admin_promo_item_${promo.code}")
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(12.dp),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                  Text(
+                    text = promo.code,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = AdminTextDark
+                  )
+                  Surface(
+                    shape = RoundedCornerShape(50),
+                    color = statusColor.copy(alpha = 0.14f)
+                  ) {
+                    Text(
+                      text = effStatus,
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.Bold,
+                      color = statusColor,
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                  }
+                }
+                Text(
+                  text = "+${formatCoins(promo.rewardCoins)} • Slots: ${promo.usedSlots} / ${promo.maxSlots}",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = AdminTextSecondary,
+                  fontWeight = FontWeight.Medium
+                )
+                if (promo.expiresAtLabel.isNotBlank()) {
+                  Text(
+                    text = "Expires: ${promo.expiresAtLabel}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AdminTextMuted
+                  )
+                }
+              }
+              OutlinedButton(
+                onClick = { onTogglePromoCodeActive(promo.id.ifBlank { promo.code }, !promo.isActive) },
+                enabled = !isBusy && !promo.isExhausted,
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.testTag("admin_promo_toggle_${promo.code}")
+              ) {
+                Text(
+                  text = if (promo.isActive) "Deactivate" else "Activate",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+fun AdminManualBonusCreditCard(
+  users: List<UserProfile>,
+  manualBonuses: List<ManualBonusRecord> = emptyList(),
+  isBusy: Boolean = false,
+  onCreditBonus: (targetUserId: String, amountCoins: Long, reason: String) -> Unit
+) {
+  var searchQuery by rememberSaveable { mutableStateOf("") }
+  var selectedUserId by rememberSaveable { mutableStateOf("") }
+  var bonusCoinsText by rememberSaveable { mutableStateOf("") }
+  var bonusReasonText by rememberSaveable { mutableStateOf("") }
+  var validationError by remember { mutableStateOf<String?>(null) }
+
+  val matchingUsers =
+    remember(users, searchQuery) {
+      val q = searchQuery.trim().lowercase(Locale.US)
+      if (q.isEmpty()) {
+        users
+      } else {
+        users.filter { u ->
+          val uid = u.userId.ifBlank { u.id }.lowercase(Locale.US)
+          val id = u.id.lowercase(Locale.US)
+          val email = u.email.lowercase(Locale.US)
+          val name = u.displayName.lowercase(Locale.US)
+          uid.contains(q) || id.contains(q) || email.contains(q) || name.contains(q)
+        }
+      }
+    }
+
+  val selectedUser =
+    remember(users, selectedUserId) {
+      users.firstOrNull { (it.userId.ifBlank { it.id }) == selectedUserId || it.id == selectedUserId }
+    }
+
+  Card(
+    modifier = Modifier.fillMaxWidth().testTag("admin_manual_bonus_section"),
+    shape = RoundedCornerShape(16.dp),
+    colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+    border = BorderStroke(1.dp, AdminBorderColor)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        Icon(
+          imageVector = Icons.Default.CardGiftcard,
+          contentDescription = null,
+          tint = AdminBluePrimary
+        )
+        Text(
+          text = "Manual Bonus Credit",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.Bold,
+          color = AdminTextDark
+        )
+      }
+
+      OutlinedTextField(
+        value = searchQuery,
+        onValueChange = {
+          searchQuery = it
+          validationError = null
+        },
+        label = { Text("Search User by User ID or Email") },
+        placeholder = { Text("Enter User ID or email...") },
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().testTag("admin_manual_bonus_search_input")
+      )
+
+      if (matchingUsers.isEmpty()) {
+        Text(
+          text = "No matching users found.",
+          style = MaterialTheme.typography.bodySmall,
+          color = AdminTextMuted
+        )
+      } else {
+        Column(
+          modifier = Modifier.fillMaxWidth(),
+          verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+          matchingUsers.take(5).forEach { user ->
+            val uid = user.userId.ifBlank { user.id }
+            val isSelected = uid == selectedUserId
+            Surface(
+              shape = RoundedCornerShape(10.dp),
+              color = if (isSelected) AdminBlueTint else AdminSoftGreyBg,
+              border =
+                BorderStroke(
+                  width = if (isSelected) 1.5.dp else 1.dp,
+                  color = if (isSelected) AdminBluePrimary else AdminBorderColor
+                ),
+              modifier =
+                Modifier.fillMaxWidth()
+                  .clickable {
+                    selectedUserId = uid
+                    validationError = null
+                  }
+                  .testTag("admin_manual_bonus_user_$uid")
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth().padding(10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = user.displayName.ifBlank { "TaskFlow User" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = AdminTextDark
+                  )
+                  Text(
+                    text = "${user.email.ifBlank { uid }} • ID: $uid",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AdminTextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                  )
+                }
+                Text(
+                  text = formatCoins(user.getEffectiveBalanceCoins()),
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Bold,
+                  color = AdminBluePrimary
+                )
+              }
+            }
+          }
+        }
+      }
+
+      if (selectedUser != null) {
+        Text(
+          text = "Selected: ${selectedUser.displayName} (Current Wallet: ${formatCoins(selectedUser.getEffectiveBalanceCoins())})",
+          style = MaterialTheme.typography.labelMedium,
+          color = AdminGreenSuccess,
+          fontWeight = FontWeight.Bold,
+          modifier = Modifier.testTag("admin_manual_bonus_selected_user_label")
+        )
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        OutlinedTextField(
+          value = bonusCoinsText,
+          onValueChange = {
+            bonusCoinsText = it.filter { ch -> ch.isDigit() }
+            validationError = null
+          },
+          label = { Text("Bonus Coins") },
+          placeholder = { Text("Custom amount") },
+          singleLine = true,
+          modifier = Modifier.weight(1f).testTag("admin_manual_bonus_amount_input")
+        )
+        OutlinedTextField(
+          value = bonusReasonText,
+          onValueChange = {
+            bonusReasonText = it
+            validationError = null
+          },
+          label = { Text("Reason (Optional)") },
+          placeholder = { Text("e.g., Contest Winner") },
+          singleLine = true,
+          modifier = Modifier.weight(1f).testTag("admin_manual_bonus_reason_input")
+        )
+      }
+
+      if (!validationError.isNullOrBlank()) {
+        Text(
+          text = validationError!!,
+          style = MaterialTheme.typography.bodySmall,
+          color = AdminRedDanger,
+          modifier = Modifier.testTag("admin_manual_bonus_validation_error")
+        )
+      }
+
+      Button(
+        onClick = {
+          val parsedCoins = bonusCoinsText.trim().toLongOrNull() ?: 0L
+          if (selectedUserId.isBlank()) {
+            validationError = "Please select a registered user."
+            return@Button
+          }
+          if (parsedCoins <= 0L) {
+            validationError = "Enter a custom coin amount greater than 0."
+            return@Button
+          }
+          validationError = null
+          onCreditBonus(selectedUserId, parsedCoins, bonusReasonText.trim())
+          bonusCoinsText = ""
+          bonusReasonText = ""
+        },
+        enabled = !isBusy,
+        shape = RoundedCornerShape(10.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = AdminGreenSuccess),
+        modifier = Modifier.fillMaxWidth().testTag("admin_manual_bonus_submit_button")
+      ) {
+        Text("Credit Manual Bonus", fontWeight = FontWeight.Bold)
+      }
+
+      if (manualBonuses.isNotEmpty()) {
+        HorizontalDivider(color = AdminBorderColor)
+        Text(
+          text = "Recent Manual Bonus Credits (${manualBonuses.size})",
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = FontWeight.Bold,
+          color = AdminTextDark
+        )
+        manualBonuses.take(5).forEach { bonus ->
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "${bonus.targetUserName.ifBlank { bonus.targetUserId }} • ${bonus.reason.ifBlank { "Manual Bonus" }}",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = AdminTextDark
+              )
+              Text(
+                text = "By Admin: ${bonus.adminId}",
+                style = MaterialTheme.typography.labelSmall,
+                color = AdminTextMuted
+              )
+            }
+            Text(
+              text = "+${formatCoins(bonus.amountCoins)}",
+              style = MaterialTheme.typography.bodySmall,
               fontWeight = FontWeight.Bold,
               color = AdminGreenSuccess
             )
