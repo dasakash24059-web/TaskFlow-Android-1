@@ -66,7 +66,7 @@ service cloud.firestore {
     function isBootstrappedAdmin() {
       return isSignedIn() &&
              ('email' in request.auth.token) &&
-             request.auth.token.email == 'dasakash24059@gmail.com';
+             request.auth.token.email in ['dasakash24059@gmail.com', 'DasAkash24059@gmail.com', 'DASAKASH24059@GMAIL.COM'];
     }
 
     // Secure Admin verification:
