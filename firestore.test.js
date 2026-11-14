@@ -2199,23 +2199,25 @@ test("12. Phase 1 Server-Side Daily Check-In & Day 7 Reward Calculation + Unity 
     _calculateServerDailyCheckInState,
   } = require("./functions/index.js");
 
-  // 1. Days 1-6 = 100 paise (₹1.00), Day 7 = 500 paise (₹5.00)
-  for (let d = 1; d <= 6; d++) {
-    if (_getDailyCheckInRewardCents(d) !== 100) {
-      throw new Error(`Expected Day ${d} reward to be 100 paise`);
+  // 1. 30-day check-in coin schedule (Day 1 = 25 Coins, Day 7 = 100 Coins, Day 30 = 1000 Coins)
+  const expected30DayRewards = [
+    25, 35, 50, 60, 75, 85, 100, 110, 125, 150,
+    160, 175, 185, 200, 210, 225, 250, 260, 275, 285,
+    300, 325, 350, 375, 400, 425, 450, 500, 750, 1000,
+  ];
+  for (let d = 1; d <= 30; d++) {
+    if (_getDailyCheckInRewardCents(d) !== expected30DayRewards[d - 1]) {
+      throw new Error(`Expected Day ${d} reward to be ${expected30DayRewards[d - 1]} Coins`);
     }
-  }
-  if (_getDailyCheckInRewardCents(7) !== 500) {
-    throw new Error("Expected Day 7 reward to be 500 paise (₹5.00)");
   }
 
   // 2. Server-side streak progression & duplicate same-day check-in prevention
   const today = "2026-11-11";
   const yesterday = "2026-11-10";
 
-  // Consecutive Day 6 -> Day 7 (500 paise)
+  // Consecutive Day 6 -> Day 7 (100 Coins)
   const day7State = _calculateServerDailyCheckInState(yesterday, 6, today, yesterday);
-  if (!day7State.canCheckInToday || day7State.expectedStreakDay !== 7 || day7State.rewardCents !== 500) {
+  if (!day7State.canCheckInToday || day7State.expectedStreakDay !== 7 || day7State.rewardCents !== 100) {
     throw new Error(`Unexpected Day 7 state: ${JSON.stringify(day7State)}`);
   }
 
@@ -2225,15 +2227,15 @@ test("12. Phase 1 Server-Side Daily Check-In & Day 7 Reward Calculation + Unity 
     throw new Error("Expected duplicate check-in on the same date to be blocked");
   }
 
-  // After Day 7 -> rolls over to Day 1 (100 paise) on the next day
-  const rolloverState = _calculateServerDailyCheckInState(yesterday, 7, today, yesterday);
-  if (!rolloverState.canCheckInToday || rolloverState.expectedStreakDay !== 1 || rolloverState.rewardCents !== 100) {
-    throw new Error(`Unexpected rollover state after Day 7: ${JSON.stringify(rolloverState)}`);
+  // After Day 30 -> rolls over to Day 1 (25 Coins) on the next day
+  const rolloverState = _calculateServerDailyCheckInState(yesterday, 30, today, yesterday);
+  if (!rolloverState.canCheckInToday || rolloverState.expectedStreakDay !== 1 || rolloverState.rewardCents !== 25) {
+    throw new Error(`Unexpected rollover state after Day 30: ${JSON.stringify(rolloverState)}`);
   }
 
-  // Missed day -> resets streak to Day 1 (100 paise)
+  // Missed day -> resets streak to Day 1 (25 Coins)
   const missedDayState = _calculateServerDailyCheckInState("2026-11-05", 5, today, yesterday);
-  if (!missedDayState.canCheckInToday || missedDayState.expectedStreakDay !== 1 || missedDayState.rewardCents !== 100) {
+  if (!missedDayState.canCheckInToday || missedDayState.expectedStreakDay !== 1 || missedDayState.rewardCents !== 25) {
     throw new Error(`Unexpected missed-day state: ${JSON.stringify(missedDayState)}`);
   }
 
@@ -2270,6 +2272,305 @@ test("12. Phase 1 Server-Side Daily Check-In & Day 7 Reward Calculation + Unity 
     throw new Error("Valid Unity S2S HMAC-MD5 signature must be accepted");
   }
 });
+
+test("13. Step 7 Spin Wheel Hardening: locks spin_sessions & cooldown/extra-spin fields while preserving valid profile updates, admin reads, and anti-forgery leaderboard sync", async () => {
+  const ts = nowTimestamp();
+  const spinSessionId = "spin_srv_001";
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await db.collection("users").doc(ADMIN_UID).set({
+      userId: ADMIN_UID,
+      email: ADMIN_EMAIL,
+      displayName: "Admin",
+      role: "admin",
+      approvalStatus: "approved",
+      balanceCents: 0,
+      balanceCoins: 0,
+      eligibleCoins: 0,
+      promotionalCoins: 0,
+      completedTasksCount: 0,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      email: ALICE_EMAIL,
+      displayName: "Alice Spin",
+      role: "user",
+      approvalStatus: "approved",
+      balanceCents: 4000,       // ₹40.00 = 5,000 eligibleCoins
+      eligibleCoins: 5000,
+      promotionalCoins: 750,    // +750 promotionalCoins
+      balanceCoins: 5750,       // total = 5,750 balanceCoins (distinct from balanceCents)
+      completedTasksCount: 3,
+      assignedTaskId: "",
+      lastFreeSpinAt: ts,
+      extraSpinVideosWatched: 1,
+      extraSpinAvailable: false,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("users").doc(BOB_UID).set({
+      userId: BOB_UID,
+      email: BOB_EMAIL,
+      displayName: "Bob Spin",
+      role: "user",
+      approvalStatus: "approved",
+      balanceCents: 0,
+      balanceCoins: 0,
+      eligibleCoins: 0,
+      promotionalCoins: 0,
+      completedTasksCount: 0,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("spin_sessions")
+      .doc(spinSessionId)
+      .set({
+        sessionId: spinSessionId,
+        userId: ALICE_UID,
+        segmentIndex: 2,
+        rewardCoins: 150,
+        status: "CLAIMED",
+        claimed: true,
+        usedFreeSpin: true,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    await db.collection("leaderboard").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      displayName: "Alice Spin",
+      balanceCents: 4000,
+      balanceCoins: 5750,
+      completedTasksCount: 3,
+      approvalStatus: "approved",
+      updatedAt: ts,
+    });
+  });
+
+  const aliceDb = testEnv
+    .authenticatedContext(ALICE_UID, {
+      email: ALICE_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  const bobDb = testEnv
+    .authenticatedContext(BOB_UID, {
+      email: BOB_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  const adminDb = testEnv
+    .authenticatedContext(ADMIN_UID, {
+      email: ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+
+  // 1. Owner cannot create, modify, or delete /users/{userId}/spin_sessions/{sessionId}
+  await assertFails(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("spin_sessions")
+      .doc("client_forged_spin")
+      .set({
+        sessionId: "client_forged_spin",
+        userId: ALICE_UID,
+        rewardCoins: 1000,
+        status: "CLAIMED",
+        createdAt: ts,
+      })
+  );
+  await assertFails(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("spin_sessions")
+      .doc(spinSessionId)
+      .update({
+        rewardCoins: 9999,
+        status: "PENDING",
+      })
+  );
+  await assertFails(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("spin_sessions")
+      .doc(spinSessionId)
+      .delete()
+  );
+
+  // Admin also cannot client-write to spin_sessions (Admin SDK only)
+  await assertFails(
+    adminDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("spin_sessions")
+      .doc("admin_client_spin")
+      .set({ sessionId: "admin_client_spin", userId: ALICE_UID, rewardCoins: 100 })
+  );
+
+  // 2. Owner and Admin can read private spin_sessions; other users & unauth cannot
+  await assertSucceeds(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("spin_sessions")
+      .doc(spinSessionId)
+      .get()
+  );
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("spin_sessions").get()
+  );
+  await assertSucceeds(
+    adminDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("spin_sessions")
+      .doc(spinSessionId)
+      .get()
+  );
+  await assertSucceeds(
+    adminDb.collection("users").doc(ALICE_UID).collection("spin_sessions").get()
+  );
+
+  await assertFails(
+    bobDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("spin_sessions")
+      .doc(spinSessionId)
+      .get()
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("spin_sessions").get()
+  );
+  await assertFails(
+    unauthDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("spin_sessions")
+      .doc(spinSessionId)
+      .get()
+  );
+
+  // 3. Client cannot modify lastFreeSpinAt, extraSpinVideosWatched, or extraSpinAvailable on /users/{uid}
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      lastFreeSpinAt: new Date(Date.now() - 48 * 3600 * 1000),
+      updatedAt: new Date(),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      extraSpinVideosWatched: 2,
+      extraSpinAvailable: true,
+      updatedAt: new Date(),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      extraSpinAvailable: true,
+      updatedAt: new Date(),
+    })
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).update({
+      extraSpinAvailable: true,
+      updatedAt: new Date(),
+    })
+  );
+  await assertFails(
+    adminDb.collection("users").doc(ALICE_UID).update({
+      extraSpinAvailable: true,
+      updatedAt: new Date(),
+    })
+  );
+
+  // 4. Client cannot forge leaderboard balanceCoins or balanceCents
+  await assertFails(
+    aliceDb.collection("leaderboard").doc(ALICE_UID).set(
+      {
+        userId: ALICE_UID,
+        displayName: "Alice Spin",
+        balanceCents: 4000,
+        balanceCoins: 999999, // forged balanceCoins
+        completedTasksCount: 3,
+        approvalStatus: "approved",
+        updatedAt: new Date(),
+      },
+      { merge: true }
+    )
+  );
+  await assertFails(
+    aliceDb.collection("leaderboard").doc(ALICE_UID).set(
+      {
+        userId: ALICE_UID,
+        displayName: "Alice Spin",
+        balanceCents: 5750, // trying to swap balanceCoins into balanceCents
+        balanceCoins: 5750,
+        completedTasksCount: 3,
+        approvalStatus: "approved",
+        updatedAt: new Date(),
+      },
+      { merge: true }
+    )
+  );
+  await assertFails(
+    adminDb.collection("leaderboard").doc(ALICE_UID).set(
+      {
+        userId: ALICE_UID,
+        displayName: "Alice Spin",
+        balanceCents: 4000,
+        balanceCoins: 888888, // even admin cannot forge mismatched balanceCoins
+        completedTasksCount: 3,
+        approvalStatus: "approved",
+        updatedAt: new Date(),
+      },
+      { merge: true }
+    )
+  );
+
+  // 5. Legitimate owner profile update + leaderboard merge sync (preserving balanceCoins vs balanceCents) succeeds
+  const updateTs = new Date();
+  const validBatch = aliceDb.batch();
+  validBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    displayName: "Alice Verified",
+    updatedAt: updateTs,
+  });
+  validBatch.set(
+    aliceDb.collection("leaderboard").doc(ALICE_UID),
+    {
+      userId: ALICE_UID,
+      displayName: "Alice Verified",
+      balanceCents: 4000,
+      completedTasksCount: 3,
+      approvalStatus: "approved",
+      updatedAt: updateTs,
+    },
+    { merge: true }
+  );
+  await assertSucceeds(validBatch.commit());
+
+  const lbAfter = await assertSucceeds(
+    bobDb.collection("leaderboard").doc(ALICE_UID).get()
+  );
+  if (lbAfter.data().balanceCoins !== 5750 || lbAfter.data().balanceCents !== 4000) {
+    throw new Error(
+      `Expected preserved balanceCoins=5750 and balanceCents=4000, got ${JSON.stringify(lbAfter.data())}`
+    );
+  }
+});
+
 
 
 

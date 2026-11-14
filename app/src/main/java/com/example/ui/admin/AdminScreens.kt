@@ -101,6 +101,7 @@ import com.example.data.model.AppItem
 import com.example.data.model.CampaignItem
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.ManualBonusRecord
+import com.example.data.model.PromoAdminUiFeedback
 import com.example.data.model.PromoCodeItem
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskCategories
@@ -212,6 +213,8 @@ fun AdminDashboardScreen(
    telegramJoinConfig: TelegramJoinConfig = TelegramJoinConfig(),
    promoCodes: List<PromoCodeItem> = emptyList(),
    manualBonuses: List<ManualBonusRecord> = emptyList(),
+   promoAdminFeedback: PromoAdminUiFeedback = PromoAdminUiFeedback(),
+   onClearPromoFeedback: () -> Unit = {},
    onSaveTelegramConfig: (String, String, Long, Boolean) -> Unit = { _, _, _, _ -> },
    onCreatePromoCode: (String, Long, Long, Long, String, Boolean) -> Unit = { _, _, _, _, _, _ -> },
    onTogglePromoCodeActive: (String, Boolean) -> Unit = { _, _ -> },
@@ -739,6 +742,9 @@ fun AdminDashboardScreen(
               telegramConfig = telegramJoinConfig,
               promoCodes = promoCodes,
               manualBonuses = manualBonuses,
+              isBusy = isWithdrawalBusy || promoAdminFeedback.isLoading,
+              promoAdminFeedback = promoAdminFeedback,
+              onClearPromoFeedback = onClearPromoFeedback,
               onSaveTelegramConfig = onSaveTelegramConfig,
               onCreatePromoCode = onCreatePromoCode,
               onTogglePromoCodeActive = onTogglePromoCodeActive,

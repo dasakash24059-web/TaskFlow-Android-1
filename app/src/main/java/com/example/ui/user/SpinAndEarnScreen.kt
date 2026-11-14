@@ -308,12 +308,12 @@ fun SpinAndEarnScreen(
             )
             Spacer(modifier = Modifier.width(10.dp))
             Text(
-              text = "Verifying Claim...",
+              text = "Crediting Reward...",
               style = MaterialTheme.typography.titleMedium,
               fontWeight = FontWeight.Bold
             )
           } else {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Text(
               text = "Claim +${formatCoins(rewardCoins)}",

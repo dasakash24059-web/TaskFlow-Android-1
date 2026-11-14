@@ -43,6 +43,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -950,6 +951,12 @@ fun PromoCodeRedemptionScreen(
   BackHandler(onBack = onBack)
   var codeText by rememberSaveable { mutableStateOf(uiState.codeInput) }
 
+  LaunchedEffect(uiState.lastRedeemedCode) {
+    if (uiState.lastRedeemedCode.isNotBlank() && uiState.codeInput.isEmpty()) {
+      codeText = ""
+    }
+  }
+
   NeonBackgroundBox {
     Column(
       modifier =
@@ -1035,6 +1042,7 @@ fun PromoCodeRedemptionScreen(
               codeText = it.uppercase(Locale.US)
               onClearFeedback()
             },
+            enabled = !uiState.isRedeeming,
             label = { Text("Promo Code") },
             placeholder = { Text("Enter promo code") },
             singleLine = true,
@@ -1042,7 +1050,11 @@ fun PromoCodeRedemptionScreen(
           )
 
           Button(
-            onClick = { onRedeemCode(codeText.trim()) },
+            onClick = {
+              if (!uiState.isRedeeming) {
+                onRedeemCode(codeText.trim())
+              }
+            },
             enabled = !uiState.isRedeeming && codeText.isNotBlank(),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E3A8A)),

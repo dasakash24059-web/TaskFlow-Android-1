@@ -112,6 +112,7 @@ import com.example.ui.user.DedicatedDailyCheckInScreen
 import com.example.ui.user.GiftCardRedemptionScreen
 import com.example.ui.user.OfferWallScreen
 import com.example.ui.user.PromoCodeRedemptionScreen
+import com.example.ui.user.ScratchCardScreen
 import com.example.ui.user.SpinAndEarnScreen
 import com.example.ui.user.UpiRedemptionScreen
 import com.example.ui.user.UserHomeScreen
@@ -433,14 +434,17 @@ private fun AuthenticatedWorkspace(
   val promoCodes by viewModel.promoCodesState.collectAsStateWithLifecycle()
   val manualBonuses by viewModel.manualBonusesState.collectAsStateWithLifecycle()
   val promoRedemptionUiState by viewModel.promoRedemptionUiState.collectAsStateWithLifecycle()
+  val promoAdminFeedback by viewModel.promoAdminFeedback.collectAsStateWithLifecycle()
   val isPromoCodeScreenVisible by viewModel.isPromoCodeScreenVisible.collectAsStateWithLifecycle()
+  val isScratchCardScreenVisible by viewModel.isScratchCardScreenVisible.collectAsStateWithLifecycle()
+  val scratchCardUiState by viewModel.scratchCardUiState.collectAsStateWithLifecycle()
 
   BackHandler(
     enabled =
       selectedTaskId != null ||
         (activePortal == PortalLoginTarget.USER_APP &&
           activeUserTab == UserTab.HOME &&
-          (isPromoCodeScreenVisible || isDailyCheckInScreenVisible || isSpinScreenVisible || isOfferWallScreenVisible)) ||
+          (isScratchCardScreenVisible || isPromoCodeScreenVisible || isDailyCheckInScreenVisible || isSpinScreenVisible || isOfferWallScreenVisible)) ||
         (activePortal == PortalLoginTarget.USER_APP &&
           activeUserTab == UserTab.PROFILE &&
           profileSubScreen != ProfileSubScreen.MAIN) ||
@@ -449,6 +453,10 @@ private fun AuthenticatedWorkspace(
   ) {
     when {
       selectedTaskId != null -> viewModel.selectTask(null)
+      activePortal == PortalLoginTarget.USER_APP &&
+        activeUserTab == UserTab.HOME &&
+        isScratchCardScreenVisible ->
+        viewModel.setScratchCardScreenVisible(false)
       activePortal == PortalLoginTarget.USER_APP &&
         activeUserTab == UserTab.HOME &&
         isPromoCodeScreenVisible ->
@@ -754,7 +762,17 @@ private fun AuthenticatedWorkspace(
           } else {
             when (activeUserTab) {
               UserTab.HOME -> {
-                if (isPromoCodeScreenVisible) {
+                if (isScratchCardScreenVisible) {
+                  ScratchCardScreen(
+                    uiState = scratchCardUiState,
+                    onBack = { viewModel.setScratchCardScreenVisible(false) },
+                    onWatchAd = { act -> viewModel.watchAdForScratchCard(act) },
+                    onScratchRevealed = { viewModel.onScratchRevealed() },
+                    onClaimReward = { viewModel.claimScratchCardReward() },
+                    onDismissCongratulations = { viewModel.dismissScratchCongratulations() },
+                    onClearFeedback = { viewModel.clearScratchFeedback() }
+                  )
+                } else if (isPromoCodeScreenVisible) {
                   PromoCodeRedemptionScreen(
                     uiState = promoRedemptionUiState,
                     onRedeemCode = { rawCode -> viewModel.redeemPromoCode(rawCode) },
@@ -885,7 +903,7 @@ private fun AuthenticatedWorkspace(
                     },
                     watchStats = watchStats,
                     onClaimWatchEarn = {
-                      viewModel.claimWatchEarnReward()
+                      viewModel.claimWatchEarnReward(activity = currentActivity)
                     },
                     watchEarnUiState = watchEarnUiState,
                     onStartWatchVideo = {
@@ -913,6 +931,12 @@ private fun AuthenticatedWorkspace(
                       if (currentActivity != null) {
                         com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(currentActivity)
                       }
+                    },
+                    onNavigateToScratchCard = {
+                      viewModel.setScratchCardScreenVisible(true)
+                    },
+                    onNavigateToPromoCode = {
+                      viewModel.setPromoCodeScreenVisible(true)
                     }
                   )
                 }
@@ -1296,6 +1320,8 @@ private fun AuthenticatedWorkspace(
             telegramJoinConfig = telegramJoinConfig,
             promoCodes = promoCodes,
             manualBonuses = manualBonuses,
+            promoAdminFeedback = promoAdminFeedback,
+            onClearPromoFeedback = { viewModel.clearPromoAdminFeedback() },
             onSaveTelegramConfig = { channelUrl, channelChatId, rewardCoins, isActive ->
               viewModel.adminUpdateTelegramJoinConfig(
                 channelUrl = channelUrl,

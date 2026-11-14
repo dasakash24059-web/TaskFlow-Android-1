@@ -96,32 +96,33 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
             "Invalid streakDay $streakDay; expected $expectedDay"
           }
         }
-        val cents = DailyCheckInConstants.getRewardForDay(expectedDay) // Days 1-6 = 100, Day 7 = 500
+        val coins = DailyCheckInConstants.getRewardCoinsForDay(expectedDay)
         val sid = "srv_checkin_${UUID.randomUUID()}"
         sessions[sid] =
           ServerSession(
             sessionId = sid,
             userId = uid,
             rewardType = "DAILY_CHECK_IN",
-            rewardCents = cents,
+            rewardCents = coins,
             streakDay = expectedDay,
             dateKey = today
           )
-        CreatedRewardSession(sid, "DAILY_CHECK_IN", cents, expectedDay, today)
+        CreatedRewardSession(sid, "DAILY_CHECK_IN", coins, expectedDay, today)
       } else {
         val watched = watchCountsByUserDate["${uid}_$today"] ?: 0L
         check(watched < 25L) { "Daily limit of 25 watched videos reached." }
-        val sid = "srv_watch_${UUID.randomUUID()}"
+        val sid = "srv_${rewardType.lowercase()}_${UUID.randomUUID()}"
+        val rewardAmount = if (rewardType == "WATCH_AND_EARN") 100L else 0L
         sessions[sid] =
           ServerSession(
             sessionId = sid,
             userId = uid,
-            rewardType = "WATCH_AND_EARN",
-            rewardCents = 100L,
+            rewardType = rewardType,
+            rewardCents = rewardAmount,
             streakDay = null,
             dateKey = today
           )
-        CreatedRewardSession(sid, "WATCH_AND_EARN", 100L, null, today)
+        CreatedRewardSession(sid, rewardType, rewardAmount, null, today)
       }
     }
 
@@ -152,7 +153,10 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
       }
     }
 
-    override suspend fun claimRewardSession(sessionId: String): ClaimedRewardResult {
+    override suspend fun claimRewardSession(
+      sessionId: String,
+      secondSessionId: String?
+    ): ClaimedRewardResult {
       val uid = currentAuthUidProvider()
       val session = sessions[sessionId] ?: error("Invalid reward session.")
       check(session.userId == uid) { "Session belongs to another user." }
@@ -172,7 +176,7 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
           "Daily check-in already claimed for today."
         }
         val day = session.streakDay ?: 1
-        val rewardCents = if (day == 7) 500L else 100L
+        val rewardCents = DailyCheckInConstants.getRewardCoinsForDay(day)
         session.used = true
         session.claimed = true
         session.status = "CLAIMED"
@@ -185,12 +189,27 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
           dateKey = session.dateKey
         )
       } else {
+        check(!secondSessionId.isNullOrBlank()) {
+          "A second independently S2S-verified rewarded ad session is required."
+        }
+        val secondSession = sessions[secondSessionId] ?: error("Second reward session not found.")
+        check(secondSession.userId == uid) { "Second session belongs to another user." }
+        check(secondSession.s2sVerified && secondSession.status == "VERIFIED") {
+          "Second reward video completion has not been verified by server yet."
+        }
+        check(!secondSession.used && !secondSession.claimed && secondSession.status != "CLAIMED") {
+          "Second reward session already used."
+        }
+
         val watchKey = "${uid}_${session.dateKey}"
         val currentVideos = watchCountsByUserDate[watchKey] ?: 0L
         check(currentVideos < 25L) { "Daily limit of 25 watched videos reached." }
         session.used = true
         session.claimed = true
         session.status = "CLAIMED"
+        secondSession.used = true
+        secondSession.claimed = true
+        secondSession.status = "CLAIMED"
         val nextVideos = currentVideos + 1L
         watchCountsByUserDate[watchKey] = nextVideos
         onServerCredit(uid, 100L, null, session.dateKey)
@@ -201,6 +220,19 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
           dateKey = session.dateKey
         )
       }
+    }
+
+    override suspend fun recordExtraSpinAdWatch(sessionId: String): Int {
+      val uid = currentAuthUidProvider()
+      val session = sessions[sessionId] ?: error("Invalid extra spin session.")
+      check(session.userId == uid) { "Session belongs to another user." }
+      check(session.rewardType == "EXTRA_SPIN_UNLOCK") { "Session is not EXTRA_SPIN_UNLOCK" }
+      check(session.s2sVerified && session.status == "VERIFIED") { "Ad not verified" }
+      check(!session.used && !session.claimed) { "Session already used" }
+      session.used = true
+      session.claimed = true
+      session.status = "CONSUMED"
+      return 1
     }
 
     override suspend fun claimDailyCheckIn(streakDay: Int?): ClaimedRewardResult {
@@ -215,7 +247,7 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
         "Daily check-in already claimed for today."
       }
       val day = streakDay ?: 1
-      val rewardCents = if (day == 7) 500L else 100L
+      val rewardCents = DailyCheckInConstants.getRewardCoinsForDay(day)
       claimedCheckInDates.add(claimKey)
       onServerCredit(uid, rewardCents, day, today)
       return ClaimedRewardResult(
@@ -1162,6 +1194,11 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
           repository.createWatchEarnSession(userUid, todayKey).getOrThrow()
         }
       assertTrue(watchSessionId.isNotBlank())
+      val claimSessionId =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.createWatchEarnClaimSession(userUid).getOrThrow()
+        }
+      assertTrue(claimSessionId.isNotBlank())
 
       // 1. Attempting to claim BEFORE S2S verification MUST fail
       val prematureClaim =
@@ -1170,6 +1207,7 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
             userId = userUid,
             userName = "Watch User",
             sessionId = watchSessionId,
+            secondSessionId = claimSessionId,
             dateKey = todayKey
           )
         }
@@ -1195,15 +1233,21 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
       }
       assertTrue("Expected missing UNITY_S2S_SECRET to be rejected", missingSecretAttempt.isFailure)
 
-      // 3. Valid Unity S2S callback marks session VERIFIED
+      // 3. Valid Unity S2S callback marks both sessions VERIFIED
       simulatedBackend.simulateSignedS2SCallback(
         sessionId = watchSessionId,
         orderId = "oid_valid_1001",
         providedSecret = "prod_unity_s2s_secret"
       )
+      simulatedBackend.simulateSignedS2SCallback(
+        sessionId = claimSessionId,
+        orderId = "oid_valid_1002",
+        providedSecret = "prod_unity_s2s_secret"
+      )
 
       withTimeout(DEFAULT_TIMEOUT_MS) {
         repository.verifyWatchEarnSessionCompleted(userUid, watchSessionId).getOrThrow()
+        repository.verifyWatchEarnSessionCompleted(userUid, claimSessionId).getOrThrow()
       }
 
       // 4. First Claim succeeds (+100 paise)
@@ -1214,6 +1258,7 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
               userId = userUid,
               userName = "Watch User",
               sessionId = watchSessionId,
+              secondSessionId = claimSessionId,
               dateKey = todayKey
             )
             .getOrThrow()
@@ -1228,13 +1273,14 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
             userId = userUid,
             userName = "Watch User",
             sessionId = watchSessionId,
+            secondSessionId = claimSessionId,
             dateKey = todayKey
           )
         }
       assertTrue("Expected duplicate ad reward claim to fail", duplicateWatchClaim.isFailure)
       assertEquals(100L, simulatedServerBalance)
 
-      // PART B: Daily Check-In Day 7 Reward Calculation (500 paise = ₹5.00) & Duplicate Same-Day Rejection
+      // PART B: Daily Check-In Day 7 Reward Calculation (100 Coins) & Duplicate Same-Day Rejection
       val checkInSessionId =
         withTimeout(DEFAULT_TIMEOUT_MS) {
           repository
@@ -1242,7 +1288,7 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
               userId = userUid,
               dateKey = todayKey,
               streakDay = 7,
-              rewardCents = 500L
+              rewardCents = DailyCheckInConstants.getRewardCoinsForDay(7)
             )
             .getOrThrow()
         }
@@ -1259,15 +1305,15 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
             .claimDailyCheckIn(
               userId = userUid,
               streakDay = 7,
-              rewardCents = 500L,
+              rewardCents = DailyCheckInConstants.getRewardCoinsForDay(7),
               dateKey = todayKey,
               userName = "Watch User",
               verifiedAdCallbackToken = checkInSessionId
             )
             .getOrThrow()
         }
-      assertEquals(500L, day7Reward)
-      assertEquals(600L, simulatedServerBalance)
+      assertEquals(100L, day7Reward)
+      assertEquals(200L, simulatedServerBalance)
       assertEquals(7, simulatedStreak)
       assertEquals(todayKey, simulatedLastCheckInDate)
 
@@ -1278,14 +1324,14 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
             userId = userUid,
             dateKey = todayKey,
             streakDay = 1,
-            rewardCents = 100L
+            rewardCents = DailyCheckInConstants.getRewardCoinsForDay(1)
           )
         }
       assertFalse(
         "Expected duplicate daily check-in session on the same date to be rejected",
         duplicateCheckInSession.isSuccess
       )
-      assertEquals(600L, simulatedServerBalance)
+      assertEquals(200L, simulatedServerBalance)
     }
 
   @Test
@@ -1435,6 +1481,256 @@ class TaskFlowRepositoryRuleTest : FirestoreEmulatorTestBase() {
       val bobProfileAfter = repository.getUserProfile(bobUid).getOrThrow() ?: error("Bob profile not found")
       assertEquals(1200L, bobProfileAfter.balanceCents)
       assertEquals(1L, bobProfileAfter.completedTasksCount)
+    }
+
+  @Test
+  fun spinWheelAndLeaderboardRules_enforceServerAuthoritativeLocksAndPreserveValidProfileUpdates() =
+    runBlocking {
+      val repository = TaskFlowRepository(firestore, photoUploader = fakeStorageUploader)
+
+      // 1. Bootstrap Admin and register/approve Alice and Bob
+      val adminUid = signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.ensureUserProfile(adminUid, BOOTSTRAPPED_ADMIN_EMAIL, "Admin").getOrThrow()
+      }
+
+      val suffix = UUID.randomUUID().toString().take(8)
+      val aliceEmail = "alice_spin_rule_$suffix@test.com"
+      val aliceUid = signInTestUser(aliceEmail, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.ensureUserProfile(aliceUid, aliceEmail, "Alice Spin").getOrThrow()
+      }
+
+      val bobEmail = "bob_spin_rule_$suffix@test.com"
+      val bobUid = signInTestUser(bobEmail, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.ensureUserProfile(bobUid, bobEmail, "Bob Spin").getOrThrow()
+      }
+
+      signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        repository.updateUserApprovalStatus(aliceUid, "approved").getOrThrow()
+        repository.updateUserApprovalStatus(bobUid, "approved").getOrThrow()
+      }
+
+      // Seed a server-owned spin session via Emulator Owner API (simulating Admin SDK)
+      val spinSessionId = "srv_spin_$suffix"
+      val spinSessionDocName =
+        "projects/demo-no-project/databases/$databaseId/documents/users/$aliceUid/spin_sessions/$spinSessionId"
+      val commitUrl =
+        java.net.URL(
+          "http://127.0.0.1:8085/v1/projects/demo-no-project/databases/$databaseId/documents:commit"
+        )
+      val conn =
+        (commitUrl.openConnection() as java.net.HttpURLConnection).apply {
+          requestMethod = "POST"
+          connectTimeout = 5000
+          readTimeout = 5000
+          setRequestProperty("Authorization", "Bearer owner")
+          setRequestProperty("Content-Type", "application/json")
+          doOutput = true
+        }
+      val seedFields =
+        org.json.JSONObject()
+          .put("sessionId", org.json.JSONObject().put("stringValue", spinSessionId))
+          .put("userId", org.json.JSONObject().put("stringValue", aliceUid))
+          .put("rewardCoins", org.json.JSONObject().put("integerValue", "150"))
+          .put("status", org.json.JSONObject().put("stringValue", "CLAIMED"))
+      val seedBody =
+        org.json.JSONObject()
+          .put(
+            "writes",
+            org.json.JSONArray()
+              .put(
+                org.json.JSONObject()
+                  .put(
+                    "update",
+                    org.json.JSONObject().put("name", spinSessionDocName).put("fields", seedFields)
+                  )
+              )
+          )
+          .toString()
+      conn.outputStream.use { it.write(seedBody.toByteArray(Charsets.UTF_8)) }
+      check(conn.responseCode in 200..299) {
+        "Failed to seed spin session (HTTP ${conn.responseCode})"
+      }
+      conn.disconnect()
+
+      // 2. Owner (Alice) cannot create, update, or delete /users/{uid}/spin_sessions/{sessionId}
+      signInTestUser(aliceEmail, emailVerified = true)
+      val createSpinAttempt = runCatching {
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          firestore
+            .collection("users")
+            .document(aliceUid)
+            .collection("spin_sessions")
+            .document("forged_spin")
+            .set(mapOf("sessionId" to "forged_spin", "userId" to aliceUid, "rewardCoins" to 1000L))
+            .await()
+        }
+      }
+      assertEquals(
+        FirebaseFirestoreException.Code.PERMISSION_DENIED,
+        createSpinAttempt.exceptionOrNull()?.unwrapFirestoreException()?.code
+      )
+
+      val updateSpinAttempt = runCatching {
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          firestore
+            .collection("users")
+            .document(aliceUid)
+            .collection("spin_sessions")
+            .document(spinSessionId)
+            .update("rewardCoins", 9999L)
+            .await()
+        }
+      }
+      assertEquals(
+        FirebaseFirestoreException.Code.PERMISSION_DENIED,
+        updateSpinAttempt.exceptionOrNull()?.unwrapFirestoreException()?.code
+      )
+
+      val deleteSpinAttempt = runCatching {
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          firestore
+            .collection("users")
+            .document(aliceUid)
+            .collection("spin_sessions")
+            .document(spinSessionId)
+            .delete()
+            .await()
+        }
+      }
+      assertEquals(
+        FirebaseFirestoreException.Code.PERMISSION_DENIED,
+        deleteSpinAttempt.exceptionOrNull()?.unwrapFirestoreException()?.code
+      )
+
+      // Owner CAN read her own spin session
+      val ownerSpinRead =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          firestore
+            .collection("users")
+            .document(aliceUid)
+            .collection("spin_sessions")
+            .document(spinSessionId)
+            .get()
+            .await()
+        }
+      assertTrue("Owner should be able to read own spin session", ownerSpinRead.exists())
+
+      // 3. Owner cannot modify lastFreeSpinAt, extraSpinVideosWatched, or extraSpinAvailable
+      for (payload in
+        listOf(
+          mapOf("lastFreeSpinAt" to FieldValue.serverTimestamp(), "updatedAt" to FieldValue.serverTimestamp()),
+          mapOf("extraSpinVideosWatched" to 2L, "updatedAt" to FieldValue.serverTimestamp()),
+          mapOf("extraSpinAvailable" to true, "updatedAt" to FieldValue.serverTimestamp())
+        )) {
+        val attempt = runCatching {
+          withTimeout(DEFAULT_TIMEOUT_MS) {
+            firestore.collection("users").document(aliceUid).update(payload).await()
+          }
+        }
+        assertEquals(
+          "Expected PERMISSION_DENIED for spin cooldown/extra-spin field update: $payload",
+          FirebaseFirestoreException.Code.PERMISSION_DENIED,
+          attempt.exceptionOrNull()?.unwrapFirestoreException()?.code
+        )
+      }
+
+      // 4. Owner cannot forge leaderboard balanceCoins or balanceCents
+      val forgedCoinsLb = runCatching {
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          firestore
+            .collection("leaderboard")
+            .document(aliceUid)
+            .set(
+              mapOf(
+                "userId" to aliceUid,
+                "displayName" to "Alice Spin",
+                "balanceCents" to 0L,
+                "balanceCoins" to 50_000L,
+                "completedTasksCount" to 0L,
+                "approvalStatus" to "approved",
+                "updatedAt" to FieldValue.serverTimestamp()
+              )
+            )
+            .await()
+        }
+      }
+      assertEquals(
+        FirebaseFirestoreException.Code.PERMISSION_DENIED,
+        forgedCoinsLb.exceptionOrNull()?.unwrapFirestoreException()?.code
+      )
+
+      val forgedCentsLb = runCatching {
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          firestore
+            .collection("leaderboard")
+            .document(aliceUid)
+            .set(
+              mapOf(
+                "userId" to aliceUid,
+                "displayName" to "Alice Spin",
+                "balanceCents" to 50_000L,
+                "completedTasksCount" to 0L,
+                "approvalStatus" to "approved",
+                "updatedAt" to FieldValue.serverTimestamp()
+              )
+            )
+            .await()
+        }
+      }
+      assertEquals(
+        FirebaseFirestoreException.Code.PERMISSION_DENIED,
+        forgedCentsLb.exceptionOrNull()?.unwrapFirestoreException()?.code
+      )
+
+      // 5. Legitimate profile update (displayName + leaderboard sync) still succeeds
+      val validDisplayUpdate =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          repository.updateUserDisplayName(aliceUid, "Alice Verified Spin")
+        }
+      assertTrue(
+        "Expected legitimate displayName update to succeed: ${validDisplayUpdate.exceptionOrNull()}",
+        validDisplayUpdate.isSuccess
+      )
+
+      // 6. Other user (Bob) cannot read Alice's private spin_sessions
+      signInTestUser(bobEmail, emailVerified = true)
+      val crossUserSpinGet = runCatching {
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          firestore
+            .collection("users")
+            .document(aliceUid)
+            .collection("spin_sessions")
+            .document(spinSessionId)
+            .get()
+            .await()
+        }
+      }
+      assertEquals(
+        FirebaseFirestoreException.Code.PERMISSION_DENIED,
+        crossUserSpinGet.exceptionOrNull()?.unwrapFirestoreException()?.code
+      )
+
+      val crossUserSpinList = runCatching {
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          firestore.collection("users").document(aliceUid).collection("spin_sessions").get().await()
+        }
+      }
+      assertEquals(
+        FirebaseFirestoreException.Code.PERMISSION_DENIED,
+        crossUserSpinList.exceptionOrNull()?.unwrapFirestoreException()?.code
+      )
+
+      // 7. Admin can read Alice's spin_sessions, while client writes remain denied
+      signInTestUser(BOOTSTRAPPED_ADMIN_EMAIL, emailVerified = true)
+      val adminSpinList =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          firestore.collection("users").document(aliceUid).collection("spin_sessions").get().await()
+        }
+      assertFalse("Admin should be able to list user spin_sessions", adminSpinList.isEmpty)
     }
 
   private companion object {

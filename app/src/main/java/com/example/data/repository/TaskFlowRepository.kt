@@ -19,7 +19,11 @@ import com.example.data.model.NotificationItem
 import com.example.data.model.NotificationRewardType
 import com.example.data.model.PromoCodeItem
 import com.example.data.model.PromoCodeStatus
+import com.example.data.model.PromoCodeStatusUpdateResult
 import com.example.data.model.PromoRedemptionRecord
+import com.example.data.model.ScratchCardConstants
+import com.example.data.model.ScratchCardSession
+import com.example.data.model.ScratchDailyState
 import com.example.data.model.SpinSessionOutcome
 import com.example.data.model.SpinWheelConstants
 import com.example.data.model.SubmissionItem
@@ -57,12 +61,14 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.functions.FirebaseFunctions
+import com.google.firebase.functions.FirebaseFunctionsException
 import com.google.firebase.storage.FirebaseStorage
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 import kotlin.random.Random
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -199,7 +205,8 @@ interface RewardCloudFunctionsClient {
   )
 
   suspend fun claimRewardSession(
-    sessionId: String
+    sessionId: String,
+    secondSessionId: String? = null
   ): ClaimedRewardResult
 
   suspend fun claimDailyCheckIn(
@@ -222,340 +229,323 @@ interface RewardCloudFunctionsClient {
 
   suspend fun recordExtraSpinVideoWatched(userId: String): Int = 1
 
-  fun getOrAssignSessionRewardCoins(sessionId: String): Long = 50L
+  suspend fun recordExtraSpinAdWatch(sessionId: String): Int = 1
+
+  suspend fun recordScratchAdWatch(
+    sessionId: String
+  ): ScratchAdWatchResult = ScratchAdWatchResult(sessionId = sessionId)
+
+  suspend fun createScratchCardSession(): ScratchCardSession = ScratchCardSession()
+
+  suspend fun claimScratchCardReward(cardId: String): Long = 10L
+
+  suspend fun createPromoCode(
+    code: String,
+    rewardCoins: Long,
+    maxSlots: Long,
+    expiresAtDateTime: String = "",
+    expiresAtMillis: Long? = null,
+    expiresAtLabel: String = "",
+    isActive: Boolean = true
+  ): PromoCodeItem = PromoCodeItem(
+    id = normalizePromoCode(code),
+    code = normalizePromoCode(code),
+    rewardCoins = rewardCoins,
+    maxSlots = maxSlots,
+    expiresAtMillis = expiresAtMillis ?: 0L,
+    expiresAtLabel = expiresAtLabel,
+    isActive = isActive
+  )
+
+  suspend fun setPromoCodeActiveStatus(
+    promoId: String,
+    isActive: Boolean
+  ): PromoCodeStatusUpdateResult = PromoCodeStatusUpdateResult(
+    promoId = normalizePromoCode(promoId),
+    isActive = isActive,
+    status = if (isActive) PromoCodeStatus.ACTIVE else PromoCodeStatus.INACTIVE
+  )
+
+  suspend fun redeemPromoCode(
+    rawCode: String
+  ): PromoRedemptionRecord = PromoRedemptionRecord(
+    promoId = normalizePromoCode(rawCode),
+    code = normalizePromoCode(rawCode)
+  )
+
+  fun getOrAssignSessionRewardCoins(sessionId: String): Long = 0L
 }
+
+data class ScratchAdWatchResult(
+  val success: Boolean = true,
+  val sessionId: String = "",
+  val adsWatchedForNextScratch: Long = 0L,
+  val unlockedScratchesCount: Long = 0L,
+  val newlyUnlocked: Boolean = false,
+  val dateKey: String = ""
+)
 
 class FirebaseRewardCloudFunctionsClient(
   private val firestore: FirebaseFirestore,
   private val authProvider: () -> FirebaseAuth = { Firebase.auth },
-  private val functionsProvider: () -> FirebaseFunctions = { FirebaseFunctions.getInstance() }
+  private val functionsProvider: () -> FirebaseFunctions = { FirebaseFunctions.getInstance() },
+  private val promoCallableInvoker: (suspend (functionName: String, payload: Any?) -> Any?)? = null,
+  private val rewardCallableInvoker: (suspend (functionName: String, payload: Any?) -> Any?)? = null
 ) : RewardCloudFunctionsClient {
 
   private val sessionRewardsById = java.util.concurrent.ConcurrentHashMap<String, Long>()
+  private val inFlightCheckInKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val inFlightSpinClaimSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val claimedSpinSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val inFlightExtraSpinSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val consumedExtraSpinSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val inFlightRewardClaimSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val claimedRewardSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+  private val hasCustomCallableInvoker: Boolean
+    get() = rewardCallableInvoker != null || promoCallableInvoker != null
+
+  private suspend fun invokeRewardCallable(functionName: String, payload: Any? = null): Any? {
+    val customInvoker = rewardCallableInvoker ?: promoCallableInvoker
+    return if (customInvoker != null) {
+      customInvoker.invoke(functionName, payload)
+    } else if (payload != null) {
+      functionsProvider().getHttpsCallable(functionName).call(payload).await().getData()
+    } else {
+      functionsProvider().getHttpsCallable(functionName).call().await().getData()
+    }
+  }
 
   override fun getOrAssignSessionRewardCoins(sessionId: String): Long {
-    if (sessionId.isBlank()) return pickWeightedWatchEarnRewardCoins()
-    return sessionRewardsById.getOrPut(sessionId) { pickWeightedWatchEarnRewardCoins() }
-  }
-
-  private fun pickWeightedWatchEarnRewardCoins(): Long {
-    // 75% probability: 1..50 Coins; 25% probability: 51..200 Coins
-    val roll = Random.nextInt(100)
-    return if (roll < 75) {
-      Random.nextLong(1L, 51L)
-    } else {
-      Random.nextLong(51L, 201L)
-    }
-  }
-
-  private fun pickWeightedSpinSegmentIndex(): Int {
-    // Segments: [10, 20, 30, 40, 50, 100, 125, 150]
-    val weights = intArrayOf(24, 20, 16, 14, 11, 7, 5, 3)
-    val roll = Random.nextInt(weights.sum())
-    var cumulative = 0
-    for (i in weights.indices) {
-      cumulative += weights[i]
-      if (roll < cumulative) return i
-    }
-    return 0
+    if (sessionId.isBlank()) return 0L
+    return sessionRewardsById[sessionId] ?: 0L
   }
 
   override suspend fun claimDailyCheckIn(streakDay: Int?): ClaimedRewardResult =
     withTimeout(15_000L) {
       val uid = authProvider().currentUser?.uid?.trim().orEmpty()
-      if (uid.isBlank()) {
-        val callableResult = runCatching {
-          val payload = mutableMapOf<String, Any>()
-          if (streakDay != null) {
-            payload["streakDay"] = streakDay
-          }
-          val response =
-            functionsProvider()
-              .getHttpsCallable("claimDailyCheckIn")
-              .call(payload)
-              .await()
-          val dataMap = response.getData() as? Map<*, *>
-            ?: throw IllegalStateException("Empty response from claimDailyCheckIn Cloud Function.")
-          val rewardType = (dataMap["rewardType"] as? String)?.trim().orEmpty().ifEmpty { "DAILY_CHECKIN" }
-          val rewardCoins =
-            ((dataMap["rewardCoins"] as? Number) ?: (dataMap["rewardCents"] as? Number))?.toLong()
-              ?: throw IllegalStateException("Missing reward in claimDailyCheckIn response.")
-          val newBalance =
-            ((dataMap["newBalanceCoins"] as? Number) ?: (dataMap["newBalanceCents"] as? Number))?.toLong()
-              ?: 0L
-          val resolvedStreakDay = (dataMap["streakDay"] as? Number)?.toInt() ?: streakDay
-          val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty()
-          ClaimedRewardResult(
-            rewardType = rewardType,
-            rewardCents = rewardCoins,
-            newBalanceCents = newBalance,
-            streakDay = resolvedStreakDay,
-            videosWatched = 0L,
-            dateKey = dateKey
-          )
-        }
-        if (callableResult.isSuccess) {
-          return@withTimeout callableResult.getOrThrow()
-        }
+      if (!hasCustomCallableInvoker) {
+        check(uid.isNotBlank()) { "Please sign in to claim your Daily Check-in reward." }
       }
-
-      check(uid.isNotBlank()) { "Please sign in to claim your Daily Check-in reward." }
-      val today = getTodayDateKey()
-      val userRef = firestore.collection("users").document(uid)
-      val checkInRef = userRef.collection("check_ins").document(today)
-      val txRef = firestore.collection("transactions").document()
-
-      firestore.runTransaction { transaction ->
-        val userSnap = transaction.get(userRef)
-        check(userSnap.exists()) { "User profile not found." }
-        val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
-        check(approvalStatus == "approved") {
-          "Your account must be approved before claiming Daily Check-in rewards."
+      val lockKey = "${uid.ifBlank { "test" }}:${getTodayDateKey()}"
+      check(inFlightCheckInKeys.add(lockKey)) {
+        "Daily Check-in claim is already in progress."
+      }
+      try {
+        val payload = mutableMapOf<String, Any>()
+        if (streakDay != null) {
+          payload["streakDay"] = streakDay
         }
-        val existingCheckIn = transaction.get(checkInRef)
-        val lastDate = userSnap.getString("lastCheckInDate").orEmpty()
-        val currentStreak = userSnap.getLong("checkInStreak") ?: 0L
-        val checkInState = calculateDailyCheckInState(lastDate, currentStreak)
-        check(!existingCheckIn.exists() && checkInState.canCheckInToday) {
-          "You have already claimed today's Daily Check-in reward!"
+        val responseData = try {
+          invokeRewardCallable("claimDailyCheckIn", payload)
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Throwable) {
+          throw IllegalStateException(
+            extractCloudFunctionErrorMessage(e, "Failed to claim Daily Check-in reward."),
+            e
+          )
         }
+        val dataMap = responseData as? Map<*, *>
+          ?: throw IllegalStateException("Empty response from claimDailyCheckIn Cloud Function.")
+        val success = dataMap["success"] as? Boolean ?: true
+        check(success) { "Daily Check-in claim was rejected by server." }
 
-        val resolvedDay = (streakDay ?: checkInState.nextClaimDay).coerceIn(1, 30)
-        val rewardCoins = DailyCheckInConstants.getRewardCoinsForDay(resolvedDay)
-        val oldPromo = userSnap.getLong("promotionalCoins") ?: 0L
-        val oldBalanceCents = userSnap.getLong("balanceCents") ?: 0L
-        val oldEligible = userSnap.getLong("eligibleCoins") ?: centsToCoins(oldBalanceCents)
-        val oldBalanceCoins = maxOf(userSnap.getLong("balanceCoins") ?: 0L, oldEligible + oldPromo)
-        val newPromo = oldPromo + rewardCoins
-        val newBalanceCoins = oldBalanceCoins + rewardCoins
-        val displayName = (userSnap.getString("displayName") ?: "TaskFlow Member").trim().ifEmpty { "TaskFlow Member" }
-
-        transaction.update(
-          userRef,
-          mapOf(
-            "promotionalCoins" to newPromo,
-            "balanceCoins" to newBalanceCoins,
-            "lastCheckInDate" to today,
-            "checkInStreak" to resolvedDay.toLong(),
-            "lastCheckInTimestamp" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp()
-          )
-        )
-        transaction.set(
-          checkInRef,
-          mapOf(
-            "userId" to uid,
-            "dateKey" to today,
-            "streakDay" to resolvedDay.toLong(),
-            "rewardCoins" to rewardCoins,
-            "rewardCents" to rewardCoins,
-            "claimedAt" to FieldValue.serverTimestamp()
-          )
-        )
-        transaction.set(
-          txRef,
-          mapOf(
-            "userId" to uid,
-            "userName" to displayName,
-            "type" to TransactionType.DAILY_CHECKIN,
-            "title" to "Day $resolvedDay Daily Check-in Reward (+$rewardCoins Coins)",
-            "amountCents" to rewardCoins,
-            "amountCoins" to rewardCoins,
-            "status" to "CREDITED",
-            "referenceId" to today,
-            "createdAt" to FieldValue.serverTimestamp()
-          )
-        )
-
+        val rewardType =
+          (dataMap["rewardType"] as? String)?.trim().orEmpty().ifEmpty { "DAILY_CHECKIN" }
+        val rewardAmount =
+          ((dataMap["rewardCoins"] as? Number) ?: (dataMap["rewardCents"] as? Number))?.toLong()
+            ?: throw IllegalStateException("Missing reward in claimDailyCheckIn response.")
+        val newBalance =
+          ((dataMap["newBalanceCoins"] as? Number) ?: (dataMap["newBalanceCents"] as? Number))
+            ?.toLong()
+            ?: 0L
+        val resolvedStreakDay = (dataMap["streakDay"] as? Number)?.toInt() ?: streakDay
+        val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty()
         ClaimedRewardResult(
-          rewardType = "DAILY_CHECK_IN",
-          rewardCents = rewardCoins,
-          newBalanceCents = newBalanceCoins,
-          streakDay = resolvedDay,
+          rewardType = rewardType,
+          rewardCents = rewardAmount,
+          newBalanceCents = newBalance,
+          streakDay = resolvedStreakDay,
           videosWatched = 0L,
-          dateKey = today
+          dateKey = dateKey
         )
-      }.await()
+      } finally {
+        inFlightCheckInKeys.remove(lockKey)
+      }
     }
 
   override suspend fun createSpinSession(): String = withTimeout(15_000L) {
     val uid = authProvider().currentUser?.uid?.trim().orEmpty()
-    if (uid.isNotBlank()) {
-      createSpinSessionWithOutcome(uid).sessionId
-    } else {
-      val response = functionsProvider().getHttpsCallable("createSpinSession").call().await()
-      val dataMap = response.getData() as Map<*, *>
-      dataMap["sessionId"] as String
+    if (!hasCustomCallableInvoker) {
+      check(uid.isNotBlank()) { "Please sign in to spin the wheel." }
     }
+    val responseData = try {
+      invokeRewardCallable("createSpinSession", null)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Unable to start Spin session."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from createSpinSession Cloud Function.")
+    val sessionId = (dataMap["sessionId"] as? String)?.trim().orEmpty()
+    check(sessionId.isNotBlank()) {
+      "Cloud Function createSpinSession did not return a valid sessionId."
+    }
+    sessionId
   }
 
   override suspend fun createSpinSessionWithOutcome(userId: String): SpinSessionOutcome =
     withTimeout(15_000L) {
-      val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
-      check(uid.isNotBlank()) { "Please sign in to spin the wheel." }
+      val authUid = authProvider().currentUser?.uid?.trim().orEmpty()
+      val uid = userId.trim().ifEmpty { authUid }
+      if (!hasCustomCallableInvoker) {
+        check(authUid.isNotBlank()) { "Please sign in to spin the wheel." }
+        check(uid == authUid) { "Authenticated user mismatch." }
+      } else {
+        check(uid.isNotBlank()) { "Please sign in to spin the wheel." }
+      }
 
-      val userRef = firestore.collection("users").document(uid)
-      val sessionId = "spin_${UUID.randomUUID().toString().replace("-", "")}"
-      val sessionRef = userRef.collection("spin_sessions").document(sessionId)
-      val nowMillis = System.currentTimeMillis()
-
-      firestore.runTransaction { transaction ->
-        val userSnap = transaction.get(userRef)
-        check(userSnap.exists()) { "User profile not found." }
-        val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
-        check(approvalStatus == "approved") {
-          "Your account must be approved to use Spin & Earn."
-        }
-
-        val lastFreeSpinAt = userSnap.getTimestamp("lastFreeSpinAt")
-        val freeSpinAvailable =
-          lastFreeSpinAt == null ||
-            (nowMillis - lastFreeSpinAt.toDate().time) >= SpinWheelConstants.FREE_SPIN_COOLDOWN_MS
-        val extraSpinAvailable = userSnap.getBoolean("extraSpinAvailable") ?: false
-
-        check(freeSpinAvailable || extraSpinAvailable) {
-          "Your Free Spin is on 24-hour cooldown. Watch 2 videos to unlock an Extra Spin!"
-        }
-
-        val segmentIndex = pickWeightedSpinSegmentIndex()
-        val rewardCoins = SpinWheelConstants.SEGMENTS_COINS[segmentIndex]
-
-        val userUpdates = mutableMapOf<String, Any>(
-          "updatedAt" to FieldValue.serverTimestamp()
+      val responseData = try {
+        invokeRewardCallable("createSpinSession", null)
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Throwable) {
+        throw IllegalStateException(
+          extractCloudFunctionErrorMessage(e, "Unable to start Spin session."),
+          e
         )
-        if (freeSpinAvailable) {
-          userUpdates["lastFreeSpinAt"] = FieldValue.serverTimestamp()
-        } else {
-          userUpdates["extraSpinAvailable"] = false
-          userUpdates["extraSpinVideosWatched"] = 0L
-        }
+      }
+      val dataMap = responseData as? Map<*, *>
+        ?: throw IllegalStateException("Empty response from createSpinSession Cloud Function.")
+      val sessionId = (dataMap["sessionId"] as? String)?.trim().orEmpty()
+      check(sessionId.isNotBlank()) {
+        "Cloud Function createSpinSession did not return a valid sessionId."
+      }
 
-        transaction.update(userRef, userUpdates)
-        transaction.set(
-          sessionRef,
-          mapOf(
-            "sessionId" to sessionId,
-            "userId" to uid,
-            "segmentIndex" to segmentIndex.toLong(),
-            "rewardCoins" to rewardCoins,
-            "usedFreeSpin" to freeSpinAvailable,
-            "status" to "SPUN",
-            "claimed" to false,
-            "createdAt" to FieldValue.serverTimestamp()
+      val segmentIndex =
+        (dataMap["segmentIndex"] as? Number)?.toInt()?.takeIf {
+          it in SpinWheelConstants.SEGMENTS_COINS.indices
+        }
+          ?: throw IllegalStateException(
+            "Cloud Function createSpinSession did not return a valid segmentIndex."
           )
-        )
+      val rewardCoins =
+        (dataMap["rewardCoins"] as? Number)?.toLong()?.takeIf { it > 0L }
+          ?: throw IllegalStateException(
+            "Cloud Function createSpinSession did not return valid rewardCoins."
+          )
+      val usedFreeSpin =
+        (dataMap["usedFreeSpin"] as? Boolean)
+          ?: throw IllegalStateException(
+            "Cloud Function createSpinSession did not return usedFreeSpin."
+          )
 
-        SpinSessionOutcome(
-          sessionId = sessionId,
-          segmentIndex = segmentIndex,
-          rewardCoins = rewardCoins,
-          usedFreeSpin = freeSpinAvailable
-        )
-      }.await()
+      SpinSessionOutcome(
+        sessionId = sessionId,
+        segmentIndex = segmentIndex,
+        rewardCoins = rewardCoins,
+        usedFreeSpin = usedFreeSpin
+      )
     }
 
-  override suspend fun recordExtraSpinVideoWatched(userId: String): Int =
+  override suspend fun recordExtraSpinAdWatch(sessionId: String): Int =
     withTimeout(15_000L) {
-      val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
-      check(uid.isNotBlank()) { "Please sign in to unlock an Extra Spin." }
-      val userRef = firestore.collection("users").document(uid)
+      val uid = authProvider().currentUser?.uid?.trim().orEmpty()
+      if (!hasCustomCallableInvoker) {
+        check(uid.isNotBlank()) { "Please sign in to record Extra Spin ad watch." }
+      }
+      val cleanedSessionId = sessionId.trim()
+      require(cleanedSessionId.isNotBlank() && !cleanedSessionId.startsWith("ad_")) {
+        "A server-verified Extra Spin sessionId is required."
+      }
+      check(!consumedExtraSpinSessionIds.contains(cleanedSessionId)) {
+        "This Extra Spin ad session has already been recorded."
+      }
+      check(inFlightExtraSpinSessionIds.add(cleanedSessionId)) {
+        "Extra Spin ad watch recording is already in progress."
+      }
 
-      firestore.runTransaction { transaction ->
-        val userSnap = transaction.get(userRef)
-        check(userSnap.exists()) { "User profile not found." }
-        val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
-        check(approvalStatus == "approved") {
-          "Your account must be approved to unlock an Extra Spin."
-        }
-        val alreadyAvailable = userSnap.getBoolean("extraSpinAvailable") ?: false
-        if (alreadyAvailable) {
-          return@runTransaction SpinWheelConstants.EXTRA_SPIN_REQUIRED_VIDEOS
-        }
-        val currentWatched = (userSnap.getLong("extraSpinVideosWatched") ?: 0L).toInt().coerceIn(0, 2)
-        val nextWatched = (currentWatched + 1).coerceAtMost(SpinWheelConstants.EXTRA_SPIN_REQUIRED_VIDEOS)
-        val unlocked = nextWatched >= SpinWheelConstants.EXTRA_SPIN_REQUIRED_VIDEOS
-
-        transaction.update(
-          userRef,
-          mapOf(
-            "extraSpinVideosWatched" to nextWatched.toLong(),
-            "extraSpinAvailable" to unlocked,
-            "updatedAt" to FieldValue.serverTimestamp()
+      try {
+        val payload = mapOf("sessionId" to cleanedSessionId)
+        val responseData = try {
+          invokeRewardCallable("recordExtraSpinAdWatch", payload)
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Throwable) {
+          throw IllegalStateException(
+            extractCloudFunctionErrorMessage(e, "Failed to record Extra Spin ad watch."),
+            e
           )
-        )
-        nextWatched
-      }.await()
+        }
+        val dataMap = responseData as? Map<*, *>
+          ?: throw IllegalStateException("Empty response from recordExtraSpinAdWatch Cloud Function.")
+        val success = dataMap["success"] as? Boolean ?: true
+        check(success) { "Extra spin ad watch was rejected by server." }
+        val videosWatched =
+          (dataMap["extraSpinVideosWatched"] as? Number)?.toInt()
+            ?: throw IllegalStateException(
+              "Missing extraSpinVideosWatched in recordExtraSpinAdWatch response."
+            )
+        consumedExtraSpinSessionIds.add(cleanedSessionId)
+        videosWatched
+      } finally {
+        inFlightExtraSpinSessionIds.remove(cleanedSessionId)
+      }
     }
+
+  override suspend fun recordExtraSpinVideoWatched(userId: String): Int {
+    val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
+    check(uid.isNotBlank()) { "Please sign in to unlock an Extra Spin." }
+    val created = createRewardSession("EXTRA_SPIN_UNLOCK", null)
+    awaitSessionVerified(uid, created.sessionId)
+    return recordExtraSpinAdWatch(created.sessionId)
+  }
 
   override suspend fun claimSpinReward(sessionId: String): Long = withTimeout(15_000L) {
     val uid = authProvider().currentUser?.uid?.trim().orEmpty()
-    check(uid.isNotBlank()) { "Please sign in to claim your Spin reward." }
+    if (!hasCustomCallableInvoker) {
+      check(uid.isNotBlank()) { "Please sign in to claim your Spin reward." }
+    }
     val cleanedSessionId = sessionId.trim()
     check(cleanedSessionId.isNotBlank()) { "Invalid spin session." }
+    check(!claimedSpinSessionIds.contains(cleanedSessionId)) {
+      "This Spin reward has already been claimed."
+    }
+    check(inFlightSpinClaimSessionIds.add(cleanedSessionId)) {
+      "Spin reward claim is already in progress."
+    }
 
-    val userRef = firestore.collection("users").document(uid)
-    val sessionRef = userRef.collection("spin_sessions").document(cleanedSessionId)
-    val txRef = firestore.collection("transactions").document()
-
-    firestore.runTransaction { transaction ->
-      val userSnap = transaction.get(userRef)
-      check(userSnap.exists()) { "User profile not found." }
-      val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
-      check(approvalStatus == "approved") {
-        "Your account must be approved to claim Spin rewards."
+    try {
+      val payload = mapOf("sessionId" to cleanedSessionId)
+      val responseData = try {
+        invokeRewardCallable("claimSpinReward", payload)
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Throwable) {
+        throw IllegalStateException(
+          extractCloudFunctionErrorMessage(e, "Failed to claim Spin reward."),
+          e
+        )
       }
+      val dataMap = responseData as? Map<*, *>
+        ?: throw IllegalStateException("Empty response from claimSpinReward Cloud Function.")
+      val success = dataMap["success"] as? Boolean ?: true
+      check(success) { "Spin reward claim was rejected by server." }
 
-      val sessionSnap = transaction.get(sessionRef)
-      check(sessionSnap.exists()) { "Spin session not found or expired." }
-      val ownerId = sessionSnap.getString("userId").orEmpty()
-      check(ownerId == uid) { "Spin session belongs to another user." }
-      val alreadyClaimed = sessionSnap.getBoolean("claimed") ?: false
-      val status = sessionSnap.getString("status").orEmpty()
-      check(!alreadyClaimed && status != "CLAIMED") {
-        "This Spin reward has already been claimed."
-      }
+      val rewardCoins =
+        (dataMap["rewardCoins"] as? Number)?.toLong()?.takeIf { it > 0L }
+          ?: throw IllegalStateException("Missing rewardCoins in claimSpinReward response.")
 
-      val rewardCoins = (sessionSnap.getLong("rewardCoins") ?: 10L).coerceIn(10L, 200L)
-      val oldPromo = userSnap.getLong("promotionalCoins") ?: 0L
-      val oldBalanceCents = userSnap.getLong("balanceCents") ?: 0L
-      val oldEligible = userSnap.getLong("eligibleCoins") ?: centsToCoins(oldBalanceCents)
-      val oldBalanceCoins = maxOf(userSnap.getLong("balanceCoins") ?: 0L, oldEligible + oldPromo)
-      val newPromo = oldPromo + rewardCoins
-      val newBalanceCoins = oldBalanceCoins + rewardCoins
-      val displayName = (userSnap.getString("displayName") ?: "TaskFlow Member").trim().ifEmpty { "TaskFlow Member" }
-
-      transaction.update(
-        sessionRef,
-        mapOf(
-          "claimed" to true,
-          "status" to "CLAIMED",
-          "claimedAt" to FieldValue.serverTimestamp()
-        )
-      )
-      transaction.update(
-        userRef,
-        mapOf(
-          "promotionalCoins" to newPromo,
-          "balanceCoins" to newBalanceCoins,
-          "updatedAt" to FieldValue.serverTimestamp()
-        )
-      )
-      transaction.set(
-        txRef,
-        mapOf(
-          "userId" to uid,
-          "userName" to displayName,
-          "type" to TransactionType.SPIN_EARN,
-          "title" to "Spin & Earn Reward (+$rewardCoins Coins)",
-          "amountCents" to rewardCoins,
-          "amountCoins" to rewardCoins,
-          "status" to "CREDITED",
-          "referenceId" to cleanedSessionId,
-          "createdAt" to FieldValue.serverTimestamp()
-        )
-      )
+      claimedSpinSessionIds.add(cleanedSessionId)
       rewardCoins
-    }.await()
+    } finally {
+      inFlightSpinClaimSessionIds.remove(cleanedSessionId)
+    }
   }
 
   override suspend fun createRewardSession(
@@ -563,149 +553,55 @@ class FirebaseRewardCloudFunctionsClient(
     streakDay: Int?
   ): CreatedRewardSession = withTimeout(15_000L) {
     val uid = authProvider().currentUser?.uid?.trim().orEmpty()
-    if (uid.isNotBlank()) {
-      val today = getTodayDateKey()
-      val sessionId = "ad_${UUID.randomUUID().toString().replace("-", "")}"
-      val expectedReward =
-        if (rewardType == "DAILY_CHECK_IN") {
-          DailyCheckInConstants.getRewardCoinsForDay((streakDay ?: 1).coerceIn(1, 30))
-        } else {
-          getOrAssignSessionRewardCoins(sessionId)
-        }
-      sessionRewardsById[sessionId] = expectedReward
-
-      val adSessionRef =
-        firestore.collection("users").document(uid).collection("ad_sessions").document(sessionId)
-      runCatching {
-        withTimeout(4_000L) {
-          adSessionRef
-            .set(
-              mapOf(
-                "sessionId" to sessionId,
-                "userId" to uid,
-                "rewardType" to rewardType,
-                "rewardCoins" to expectedReward,
-                "rewardCents" to expectedReward,
-                "streakDay" to (streakDay ?: 1),
-                "dateKey" to today,
-                "videosCompleted" to 0L,
-                "status" to "PENDING",
-                "s2sVerified" to false,
-                "used" to false,
-                "claimed" to false,
-                "createdAt" to FieldValue.serverTimestamp()
-              )
-            )
-            .await()
-        }
-      }
-
-      return@withTimeout CreatedRewardSession(
-        sessionId = sessionId,
-        rewardType = rewardType,
-        rewardCents = expectedReward,
-        streakDay = streakDay,
-        dateKey = today
+    if (!hasCustomCallableInvoker) {
+      check(uid.isNotBlank()) { "Please sign in to start a reward session." }
+    }
+    val payload = mutableMapOf<String, Any>("rewardType" to rewardType)
+    if (streakDay != null) {
+      payload["streakDay"] = streakDay
+    }
+    val responseData = try {
+      invokeRewardCallable("createRewardSession", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to start reward session."),
+        e
       )
     }
-
-    val callableResult = runCatching {
-      val payload = mutableMapOf<String, Any>("rewardType" to rewardType)
-      if (streakDay != null) {
-        payload["streakDay"] = streakDay
-      }
-      val response =
-        functionsProvider()
-          .getHttpsCallable("createRewardSession")
-          .call(payload)
-          .await()
-      val dataMap = response.getData() as? Map<*, *>
-        ?: throw IllegalStateException("Empty response from createRewardSession Cloud Function.")
-      val sessionId = (dataMap["sessionId"] as? String)?.trim().orEmpty()
-      check(sessionId.isNotBlank()) {
-        "Cloud Function createRewardSession did not return a valid sessionId."
-      }
-      val resolvedType = (dataMap["rewardType"] as? String)?.trim().orEmpty().ifEmpty { rewardType }
-      val resolvedCents = (dataMap["rewardCents"] as? Number)?.toLong() ?: 100L
-      val resolvedStreak = (dataMap["streakDay"] as? Number)?.toInt() ?: streakDay
-      val resolvedDateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty()
-      CreatedRewardSession(
-        sessionId = sessionId,
-        rewardType = resolvedType,
-        rewardCents = resolvedCents,
-        streakDay = resolvedStreak,
-        dateKey = resolvedDateKey
-      )
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from createRewardSession Cloud Function.")
+    val sessionId = (dataMap["sessionId"] as? String)?.trim().orEmpty()
+    check(sessionId.isNotBlank()) {
+      "Cloud Function createRewardSession did not return a valid sessionId."
     }
-
-    if (callableResult.isSuccess) {
-      return@withTimeout callableResult.getOrThrow()
+    val resolvedType = (dataMap["rewardType"] as? String)?.trim().orEmpty().ifEmpty { rewardType }
+    val resolvedReward =
+      ((dataMap["rewardCoins"] as? Number) ?: (dataMap["rewardCents"] as? Number))?.toLong() ?: 0L
+    if (resolvedReward > 0L) {
+      sessionRewardsById[sessionId] = resolvedReward
     }
-    throw IllegalStateException("Please sign in to start a reward session.")
+    val resolvedStreak = (dataMap["streakDay"] as? Number)?.toInt() ?: streakDay
+    val resolvedDateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty().ifEmpty { getTodayDateKey() }
+    CreatedRewardSession(
+      sessionId = sessionId,
+      rewardType = resolvedType,
+      rewardCents = resolvedReward,
+      streakDay = resolvedStreak,
+      dateKey = resolvedDateKey
+    )
   }
 
   override suspend fun awaitSessionVerified(userId: String, sessionId: String) {
-    // 1. Check user-scoped ad_sessions first
-    val userAdSessionRef =
-      firestore.collection("users").document(userId).collection("ad_sessions").document(sessionId)
-    val userAdSnap = runCatching { withTimeout(5_000L) { userAdSessionRef.get().await() } }.getOrNull()
-    if (userAdSnap != null && userAdSnap.exists()) {
-      val ownerId = userAdSnap.getString("userId").orEmpty()
-      check(ownerId == userId) { "Reward session does not belong to current user." }
-      val used = userAdSnap.getBoolean("used") ?: false
-      val claimed = userAdSnap.getBoolean("claimed") ?: false
-      check(!used && !claimed) { "This reward session has already been used." }
-      val rewardCoins =
-        (userAdSnap.getLong("rewardCoins")
-            ?: sessionRewardsById[sessionId]
-            ?: pickWeightedWatchEarnRewardCoins())
-          .coerceIn(1L, 200L)
-      sessionRewardsById[sessionId] = rewardCoins
-      userAdSessionRef
-        .update(
-          mapOf(
-            "s2sVerified" to true,
-            "status" to "VERIFIED",
-            "videosCompleted" to 1L,
-            "rewardCoins" to rewardCoins,
-            "rewardCents" to rewardCoins,
-            "verifiedAt" to FieldValue.serverTimestamp()
-          )
-        )
-        .await()
-      return
+    val cleanedUserId = userId.trim()
+    val cleanedSessionId = sessionId.trim()
+    require(cleanedUserId.isNotBlank()) { "User authentication is required." }
+    require(cleanedSessionId.isNotBlank() && !cleanedSessionId.startsWith("ad_")) {
+      "Invalid or unverified reward session."
     }
 
-    if (sessionId.startsWith("ad_") && userId.isNotBlank()) {
-      val today = getTodayDateKey()
-      val expectedReward = getOrAssignSessionRewardCoins(sessionId).coerceIn(1L, 200L)
-      sessionRewardsById[sessionId] = expectedReward
-      userAdSessionRef
-        .set(
-          mapOf(
-            "sessionId" to sessionId,
-            "userId" to userId,
-            "rewardType" to "WATCH_AND_EARN",
-            "rewardCoins" to expectedReward,
-            "rewardCents" to expectedReward,
-            "streakDay" to 1,
-            "dateKey" to today,
-            "videosCompleted" to 1L,
-            "status" to "VERIFIED",
-            "s2sVerified" to true,
-            "used" to false,
-            "claimed" to false,
-            "createdAt" to FieldValue.serverTimestamp(),
-            "verifiedAt" to FieldValue.serverTimestamp()
-          ),
-          com.google.firebase.firestore.SetOptions.merge()
-        )
-        .await()
-      return
-    }
-
-    // 2. Otherwise check Cloud Function /reward_sessions/{sessionId}
-    val sessionRef = firestore.collection("reward_sessions").document(sessionId)
+    val sessionRef = firestore.collection("reward_sessions").document(cleanedSessionId)
     var lastStatus = "PENDING"
     var isS2sVerified = false
 
@@ -713,7 +609,7 @@ class FirebaseRewardCloudFunctionsClient(
       val snap = withTimeout(5_000L) { sessionRef.get().await() }
       check(snap.exists()) { "Reward session does not exist." }
       val ownerId = snap.getString("userId").orEmpty()
-      check(ownerId == userId) { "Reward session does not belong to current user." }
+      check(ownerId == cleanedUserId) { "Reward session does not belong to current user." }
       val used = snap.getBoolean("used") ?: false
       val claimed = snap.getBoolean("claimed") ?: false
       check(!used && !claimed) { "This reward session has already been used." }
@@ -736,164 +632,381 @@ class FirebaseRewardCloudFunctionsClient(
     }
   }
 
-  override suspend fun claimRewardSession(sessionId: String): ClaimedRewardResult =
+  override suspend fun claimRewardSession(
+    sessionId: String,
+    secondSessionId: String?
+  ): ClaimedRewardResult =
     withTimeout(15_000L) {
       val uid = authProvider().currentUser?.uid?.trim().orEmpty()
-      if (uid.isNotBlank()) {
-        val userAdSessionRef =
-          firestore.collection("users").document(uid).collection("ad_sessions").document(sessionId)
-        val userAdSnap = runCatching { userAdSessionRef.get().await() }.getOrNull()
-        if ((userAdSnap != null && userAdSnap.exists()) || sessionId.startsWith("ad_")) {
-          val rewardType = userAdSnap?.getString("rewardType") ?: "WATCH_AND_EARN"
-          if (rewardType == "DAILY_CHECK_IN") {
-            val day = (userAdSnap?.getLong("streakDay") ?: 1L).toInt()
-            userAdSessionRef.update(
-              mapOf("used" to true, "claimed" to true, "status" to "CLAIMED")
-            ).await()
-            return@withTimeout claimDailyCheckIn(day)
-          }
-
-          val today = userAdSnap?.getString("dateKey")?.ifBlank { getTodayDateKey() } ?: getTodayDateKey()
-          val userRef = firestore.collection("users").document(uid)
-          val subStatsRef = userRef.collection("watch_stats").document(today)
-          val topStatsRef = firestore.collection("watch_stats").document("${uid}_$today")
-          val txRef = firestore.collection("transactions").document()
-
-          return@withTimeout firestore.runTransaction { transaction ->
-            val freshSession = transaction.get(userAdSessionRef)
-            val used = if (freshSession.exists()) (freshSession.getBoolean("used") ?: false) else false
-            val claimed = if (freshSession.exists()) (freshSession.getBoolean("claimed") ?: false) else false
-            val verified = if (freshSession.exists()) (freshSession.getBoolean("s2sVerified") ?: false) else true
-            check(!used && !claimed) { "This reward has already been claimed." }
-            check(verified) { "Please complete the first video before claiming." }
-
-            val userSnap = transaction.get(userRef)
-            check(userSnap.exists()) { "User profile not found." }
-            val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
-            check(approvalStatus == "approved") { "Only approved users can claim rewards." }
-
-            val subStatSnap = transaction.get(subStatsRef)
-            val topStatSnap = transaction.get(topStatsRef)
-            val currentWatched =
-              maxOf(
-                subStatSnap.getLong("videosWatched") ?: 0L,
-                topStatSnap.getLong("videosWatched") ?: 0L
-              )
-            check(currentWatched < 25L) { "Daily limit of 25 watched videos reached." }
-
-            val currentEarnedCoins =
-              maxOf(
-                subStatSnap.getLong("totalEarnedCoins") ?: 0L,
-                topStatSnap.getLong("totalEarnedCoins") ?: 0L
-              )
-            val rewardCoins =
-              (if (freshSession.exists()) freshSession.getLong("rewardCoins") else null)
-                ?.takeIf { it > 0L }
-                ?.coerceIn(1L, 200L)
-                ?: getOrAssignSessionRewardCoins(sessionId).coerceIn(1L, 200L)
-            sessionRewardsById[sessionId] = rewardCoins
-            val nextWatched = (currentWatched + 2L).coerceAtMost(25L)
-            val nextEarnedCoins = currentEarnedCoins + rewardCoins
-
-            val oldPromo = userSnap.getLong("promotionalCoins") ?: 0L
-            val oldBalanceCents = userSnap.getLong("balanceCents") ?: 0L
-            val oldEligible = userSnap.getLong("eligibleCoins") ?: centsToCoins(oldBalanceCents)
-            val oldBalanceCoins = maxOf(userSnap.getLong("balanceCoins") ?: 0L, oldEligible + oldPromo)
-            val newPromo = oldPromo + rewardCoins
-            val newBalanceCoins = oldBalanceCoins + rewardCoins
-            val displayName =
-              (userSnap.getString("displayName") ?: "TaskFlow Member").trim().ifEmpty { "TaskFlow Member" }
-
-            transaction.set(
-              userAdSessionRef,
-              mapOf(
-                "sessionId" to sessionId,
-                "userId" to uid,
-                "rewardType" to "WATCH_AND_EARN",
-                "dateKey" to today,
-                "s2sVerified" to true,
-                "used" to true,
-                "claimed" to true,
-                "status" to "CLAIMED",
-                "videosCompleted" to 2L,
-                "rewardCoins" to rewardCoins,
-                "rewardCents" to rewardCoins,
-                "claimedAt" to FieldValue.serverTimestamp()
-              ),
-              com.google.firebase.firestore.SetOptions.merge()
-            )
-            transaction.update(
-              userRef,
-              mapOf(
-                "promotionalCoins" to newPromo,
-                "balanceCoins" to newBalanceCoins,
-                "updatedAt" to FieldValue.serverTimestamp()
-              )
-            )
-            val statsPayload =
-              mapOf(
-                "userId" to uid,
-                "dateKey" to today,
-                "videosWatched" to nextWatched,
-                "totalEarnedCents" to nextEarnedCoins,
-                "totalEarnedCoins" to nextEarnedCoins,
-                "updatedAt" to FieldValue.serverTimestamp()
-              )
-            transaction.set(subStatsRef, statsPayload)
-            transaction.set(topStatsRef, statsPayload)
-            transaction.set(
-              txRef,
-              mapOf(
-                "userId" to uid,
-                "userName" to displayName,
-                "type" to TransactionType.WATCH_EARN,
-                "title" to "Watch & Earn Reward (+$rewardCoins Coins)",
-                "amountCents" to rewardCoins,
-                "amountCoins" to rewardCoins,
-                "status" to "CREDITED",
-                "referenceId" to sessionId,
-                "createdAt" to FieldValue.serverTimestamp()
-              )
-            )
-
-            ClaimedRewardResult(
-              rewardType = "WATCH_AND_EARN",
-              rewardCents = rewardCoins,
-              newBalanceCents = newBalanceCoins,
-              streakDay = null,
-              videosWatched = nextWatched,
-              dateKey = today
-            )
-          }.await()
+      if (!hasCustomCallableInvoker) {
+        check(uid.isNotBlank()) { "Please sign in to claim your reward." }
+      }
+      val cleanedSessionId = sessionId.trim()
+      require(
+        cleanedSessionId.isNotBlank() &&
+          !cleanedSessionId.startsWith("ad_") &&
+          !cleanedSessionId.startsWith("fallback_")
+      ) {
+        "A server-verified reward session ID is required."
+      }
+      val cleanedSecondSessionId = secondSessionId?.trim()
+      if (secondSessionId != null) {
+        require(
+          !cleanedSecondSessionId.isNullOrBlank() &&
+            cleanedSecondSessionId != cleanedSessionId &&
+            !cleanedSecondSessionId.startsWith("ad_") &&
+            !cleanedSecondSessionId.startsWith("fallback_")
+        ) {
+          "A second distinct server-verified reward session ID is required."
         }
       }
 
-      val response =
+      check(!claimedRewardSessionIds.contains(cleanedSessionId)) {
+        "Reward has already been claimed for this session."
+      }
+      if (!cleanedSecondSessionId.isNullOrBlank()) {
+        check(!claimedRewardSessionIds.contains(cleanedSecondSessionId)) {
+          "Second reward session has already been used."
+        }
+      }
+      check(inFlightRewardClaimSessionIds.add(cleanedSessionId)) {
+        "Reward claim is already in progress."
+      }
+      if (!cleanedSecondSessionId.isNullOrBlank()) {
+        if (!inFlightRewardClaimSessionIds.add(cleanedSecondSessionId)) {
+          inFlightRewardClaimSessionIds.remove(cleanedSessionId)
+          throw IllegalStateException("Reward claim is already in progress.")
+        }
+      }
+
+      try {
+        val payload = mutableMapOf<String, Any>("sessionId" to cleanedSessionId)
+        if (!cleanedSecondSessionId.isNullOrBlank()) {
+          payload["secondSessionId"] = cleanedSecondSessionId
+        }
+        val responseData = try {
+          invokeRewardCallable("claimRewardSession", payload)
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Throwable) {
+          throw IllegalStateException(
+            extractCloudFunctionErrorMessage(e, "Failed to claim reward session."),
+            e
+          )
+        }
+        val dataMap = responseData as? Map<*, *>
+          ?: throw IllegalStateException("Empty response from claimRewardSession Cloud Function.")
+        val success = dataMap["success"] as? Boolean ?: true
+        check(success) { "Reward session claim was rejected by server." }
+
+        val rewardType = (dataMap["rewardType"] as? String)?.trim().orEmpty()
+        val rewardAmount =
+          ((dataMap["rewardCoins"] as? Number) ?: (dataMap["rewardCents"] as? Number))?.toLong()
+            ?: throw IllegalStateException("Missing reward in claimRewardSession response.")
+        val newBalance =
+          ((dataMap["newBalanceCoins"] as? Number) ?: (dataMap["newBalanceCents"] as? Number))
+            ?.toLong()
+            ?: 0L
+        val streakDay = (dataMap["streakDay"] as? Number)?.toInt()
+        val videosWatched = (dataMap["videosWatched"] as? Number)?.toLong() ?: 0L
+        val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty()
+
+        claimedRewardSessionIds.add(cleanedSessionId)
+        if (!cleanedSecondSessionId.isNullOrBlank()) {
+          claimedRewardSessionIds.add(cleanedSecondSessionId)
+        }
+
+        ClaimedRewardResult(
+          rewardType = rewardType,
+          rewardCents = rewardAmount,
+          newBalanceCents = newBalance,
+          streakDay = streakDay,
+          videosWatched = videosWatched,
+          dateKey = dateKey
+        )
+      } finally {
+        inFlightRewardClaimSessionIds.remove(cleanedSessionId)
+        if (!cleanedSecondSessionId.isNullOrBlank()) {
+          inFlightRewardClaimSessionIds.remove(cleanedSecondSessionId)
+        }
+      }
+    }
+
+  override suspend fun recordScratchAdWatch(
+    sessionId: String
+  ): ScratchAdWatchResult = withTimeout(15_000L) {
+    val payload = mapOf("sessionId" to sessionId.trim())
+    val response =
+      functionsProvider()
+        .getHttpsCallable("recordScratchAdWatch")
+        .call(payload)
+        .await()
+    val dataMap = response.getData() as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from recordScratchAdWatch Cloud Function.")
+    val success = dataMap["success"] as? Boolean ?: true
+    val resolvedSessionId = (dataMap["sessionId"] as? String)?.trim().orEmpty().ifEmpty { sessionId }
+    val adsWatched = (dataMap["adsWatchedForNextScratch"] as? Number)?.toLong() ?: 0L
+    val unlocked = (dataMap["unlockedScratchesCount"] as? Number)?.toLong() ?: 0L
+    val newlyUnlocked = dataMap["newlyUnlocked"] as? Boolean ?: false
+    val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty()
+    ScratchAdWatchResult(
+      success = success,
+      sessionId = resolvedSessionId,
+      adsWatchedForNextScratch = adsWatched,
+      unlockedScratchesCount = unlocked,
+      newlyUnlocked = newlyUnlocked,
+      dateKey = dateKey
+    )
+  }
+
+  override suspend fun createScratchCardSession(): ScratchCardSession = withTimeout(15_000L) {
+    val response =
+      functionsProvider()
+        .getHttpsCallable("createScratchCardSession")
+        .call()
+        .await()
+    val dataMap = response.getData() as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from createScratchCardSession Cloud Function.")
+    val cardId = (dataMap["cardId"] as? String)?.trim().orEmpty()
+    check(cardId.isNotBlank()) {
+      "Cloud Function createScratchCardSession did not return a valid cardId."
+    }
+    val rewardCoins = (dataMap["rewardCoins"] as? Number)?.toLong() ?: 10L
+    val scratchNumber = (dataMap["scratchNumber"] as? Number)?.toLong() ?: 1L
+    val isFree = dataMap["isFree"] as? Boolean ?: false
+    val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty().ifEmpty { getTodayDateKey() }
+    val uid = authProvider().currentUser?.uid?.trim().orEmpty()
+    ScratchCardSession(
+      id = cardId,
+      cardId = cardId,
+      userId = uid,
+      dateKey = dateKey,
+      scratchNumber = scratchNumber,
+      rewardCoins = rewardCoins,
+      isFree = isFree,
+      status = "ACTIVE",
+      claimed = false
+    )
+  }
+
+  override suspend fun claimScratchCardReward(cardId: String): Long = withTimeout(15_000L) {
+    val payload = mapOf("cardId" to cardId.trim())
+    val response =
+      functionsProvider()
+        .getHttpsCallable("claimScratchCardReward")
+        .call(payload)
+        .await()
+    val dataMap = response.getData() as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from claimScratchCardReward Cloud Function.")
+    (dataMap["rewardCoins"] as? Number)?.toLong() ?: 10L
+  }
+
+  private fun extractCloudFunctionErrorMessage(err: Throwable, fallback: String): String {
+    if (err is FirebaseFunctionsException) {
+      val detailMsg = (err.details as? Map<*, *>)?.get("message")?.toString()?.trim()
+      val rawMsg = err.message?.trim().orEmpty()
+      val best = detailMsg?.takeIf { it.isNotBlank() } ?: rawMsg
+      if (best.isNotBlank() && best != err.code.name) {
+        return best
+      }
+      return when (err.code) {
+        FirebaseFunctionsException.Code.UNAUTHENTICATED -> "Please sign in to continue."
+        FirebaseFunctionsException.Code.PERMISSION_DENIED ->
+          "You do not have permission to perform this action."
+        FirebaseFunctionsException.Code.DEADLINE_EXCEEDED,
+        FirebaseFunctionsException.Code.UNAVAILABLE ->
+          "Server temporarily unavailable. Please try again."
+        else -> fallback
+      }
+    }
+    return err.localizedMessage?.takeIf { it.isNotBlank() } ?: fallback
+  }
+
+  override suspend fun createPromoCode(
+    code: String,
+    rewardCoins: Long,
+    maxSlots: Long,
+    expiresAtDateTime: String,
+    expiresAtMillis: Long?,
+    expiresAtLabel: String,
+    isActive: Boolean
+  ): PromoCodeItem = withTimeout(15_000L) {
+    val payload = mutableMapOf<String, Any>(
+      "code" to normalizePromoCode(code),
+      "rewardCoins" to rewardCoins,
+      "maxSlots" to maxSlots,
+      "isActive" to isActive
+    )
+    val trimmedDateTime = expiresAtDateTime.trim()
+    val trimmedLabel = expiresAtLabel.trim()
+    if (trimmedDateTime.isNotEmpty()) {
+      payload["expiresAtDateTime"] = trimmedDateTime
+    } else if (expiresAtMillis != null && expiresAtMillis > 0L) {
+      payload["expiresAtMillis"] = expiresAtMillis
+    }
+    if (trimmedLabel.isNotEmpty()) {
+      payload["expiresAtLabel"] = trimmedLabel
+    } else if (trimmedDateTime.isNotEmpty()) {
+      payload["expiresAtLabel"] = trimmedDateTime
+    }
+
+    val responseData = try {
+      if (promoCallableInvoker != null) {
+        promoCallableInvoker.invoke("createPromoCode", payload)
+      } else {
         functionsProvider()
-          .getHttpsCallable("claimRewardSession")
-          .call(mapOf("sessionId" to sessionId))
+          .getHttpsCallable("createPromoCode")
+          .call(payload)
           .await()
-      val dataMap = response.getData() as? Map<*, *>
-        ?: throw IllegalStateException("Empty response from claimRewardSession Cloud Function.")
-      val rewardType = (dataMap["rewardType"] as? String)?.trim().orEmpty()
-      val rewardCents =
-        ((dataMap["rewardCoins"] as? Number) ?: (dataMap["rewardCents"] as? Number))?.toLong()
-          ?: throw IllegalStateException("Missing reward in claimRewardSession response.")
-      val newBalanceCents =
-        ((dataMap["newBalanceCoins"] as? Number) ?: (dataMap["newBalanceCents"] as? Number))?.toLong()
-          ?: 0L
-      val streakDay = (dataMap["streakDay"] as? Number)?.toInt()
-      val videosWatched = (dataMap["videosWatched"] as? Number)?.toLong() ?: 0L
-      val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty()
-      ClaimedRewardResult(
-        rewardType = rewardType,
-        rewardCents = rewardCents,
-        newBalanceCents = newBalanceCents,
-        streakDay = streakDay,
-        videosWatched = videosWatched,
-        dateKey = dateKey
+          .getData()
+      }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to create promo code."),
+        e
       )
     }
+
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from createPromoCode Cloud Function.")
+    val success = dataMap["success"] as? Boolean ?: true
+    check(success) { "Promo code creation was rejected by server." }
+
+    val serverCode = (dataMap["code"] as? String)?.trim().orEmpty().ifEmpty { normalizePromoCode(code) }
+    val serverId = (dataMap["id"] as? String)?.trim().orEmpty().ifEmpty { serverCode }
+    val serverRewardCoins = (dataMap["rewardCoins"] as? Number)?.toLong() ?: rewardCoins
+    val serverMaxSlots = (dataMap["maxSlots"] as? Number)?.toLong() ?: maxSlots
+    val serverUsedSlots = (dataMap["usedSlots"] as? Number)?.toLong() ?: 0L
+    val serverExpiresAtMillis =
+      (dataMap["expiresAtMillis"] as? Number)?.toLong() ?: (expiresAtMillis ?: 0L)
+    val serverExpiresAtLabel = (dataMap["expiresAtLabel"] as? String)?.trim().orEmpty()
+    val serverIsActive = dataMap["isActive"] as? Boolean ?: isActive
+    val serverStatus =
+      (dataMap["status"] as? String)?.trim().orEmpty().ifEmpty {
+        if (serverIsActive) PromoCodeStatus.ACTIVE else PromoCodeStatus.INACTIVE
+      }
+    val serverCreatedBy = (dataMap["createdBy"] as? String)?.trim().orEmpty()
+
+    PromoCodeItem(
+      id = serverId,
+      code = serverCode,
+      rewardCoins = serverRewardCoins,
+      maxSlots = serverMaxSlots,
+      usedSlots = serverUsedSlots,
+      expiresAtMillis = serverExpiresAtMillis,
+      expiresAtLabel = serverExpiresAtLabel,
+      isActive = serverIsActive,
+      status = serverStatus,
+      createdBy = serverCreatedBy
+    )
+  }
+
+  override suspend fun setPromoCodeActiveStatus(
+    promoId: String,
+    isActive: Boolean
+  ): PromoCodeStatusUpdateResult = withTimeout(15_000L) {
+    val cleanId = normalizePromoCode(promoId)
+    val payload = mapOf<String, Any>(
+      "promoId" to cleanId,
+      "isActive" to isActive
+    )
+
+    val responseData = try {
+      if (promoCallableInvoker != null) {
+        promoCallableInvoker.invoke("setPromoCodeActiveStatus", payload)
+      } else {
+        functionsProvider()
+          .getHttpsCallable("setPromoCodeActiveStatus")
+          .call(payload)
+          .await()
+          .getData()
+      }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to update promo code status."),
+        e
+      )
+    }
+
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from setPromoCodeActiveStatus Cloud Function.")
+    val success = dataMap["success"] as? Boolean ?: true
+    check(success) { "Failed to update promo code status." }
+
+    val resolvedId = (dataMap["promoId"] as? String)?.trim().orEmpty().ifEmpty { cleanId }
+    val resolvedActive = dataMap["isActive"] as? Boolean ?: isActive
+    val resolvedStatus =
+      (dataMap["status"] as? String)?.trim().orEmpty().ifEmpty {
+        if (resolvedActive) PromoCodeStatus.ACTIVE else PromoCodeStatus.INACTIVE
+      }
+
+    PromoCodeStatusUpdateResult(
+      success = success,
+      promoId = resolvedId,
+      isActive = resolvedActive,
+      status = resolvedStatus
+    )
+  }
+
+  override suspend fun redeemPromoCode(
+    rawCode: String
+  ): PromoRedemptionRecord = withTimeout(15_000L) {
+    val normalized = normalizePromoCode(rawCode)
+    val payload = mapOf<String, Any>(
+      "code" to normalized
+    )
+
+    val responseData = try {
+      if (promoCallableInvoker != null) {
+        promoCallableInvoker.invoke("redeemPromoCode", payload)
+      } else {
+        functionsProvider()
+          .getHttpsCallable("redeemPromoCode")
+          .call(payload)
+          .await()
+          .getData()
+      }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Invalid or expired promo code."),
+        e
+      )
+    }
+
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from redeemPromoCode Cloud Function.")
+    val success = dataMap["success"] as? Boolean ?: true
+    check(success) { "Promo code redemption failed." }
+
+    val serverCode = (dataMap["code"] as? String)?.trim().orEmpty().ifEmpty { normalized }
+    val serverPromoId = (dataMap["promoId"] as? String)?.trim().orEmpty().ifEmpty { serverCode }
+    val serverId = (dataMap["id"] as? String)?.trim().orEmpty()
+    val serverUserId = (dataMap["userId"] as? String)?.trim().orEmpty()
+    val serverUserName = (dataMap["userName"] as? String)?.trim().orEmpty()
+    val serverRewardCoins = (dataMap["rewardCoins"] as? Number)?.toLong() ?: 0L
+    check(serverRewardCoins > 0L) {
+      "Server returned an invalid promo reward amount."
+    }
+    val serverNewPromoCoins = (dataMap["newPromotionalCoins"] as? Number)?.toLong() ?: 0L
+    val serverNewBalanceCoins = (dataMap["newBalanceCoins"] as? Number)?.toLong() ?: 0L
+
+    PromoRedemptionRecord(
+      id = serverId,
+      promoId = serverPromoId,
+      code = serverCode,
+      userId = serverUserId,
+      userName = serverUserName,
+      rewardCoins = serverRewardCoins,
+      newPromotionalCoins = serverNewPromoCoins,
+      newBalanceCoins = serverNewBalanceCoins
+    )
+  }
 }
 
 /**
@@ -1025,7 +1138,8 @@ class TaskFlowRepository(
   private val rewardFunctionsClient: RewardCloudFunctionsClient =
     FirebaseRewardCloudFunctionsClient(firestore),
   private val telegramMembershipVerifier: TelegramMembershipVerifier =
-    HttpTelegramBotMembershipVerifier()
+    HttpTelegramBotMembershipVerifier(),
+  private val authenticatedUidProvider: () -> String? = { authProvider().currentUser?.uid }
 ) {
   private val usersCollection = firestore.collection("users")
   private val leaderboardCollection = firestore.collection("leaderboard")
@@ -1043,7 +1157,6 @@ class TaskFlowRepository(
   private val withdrawalAvailabilityDoc = appConfigCollection.document("withdrawal_availability")
   private val telegramJoinConfigDoc = appConfigCollection.document("telegram_join_config")
   private val promoCodesCollection = firestore.collection("promo_codes")
-  private val promoRedemptionsCollection = firestore.collection("promo_redemptions")
   private val manualBonusesCollection = firestore.collection("manual_bonuses")
   private val adminNotificationsCollection = firestore.collection("admin_notifications")
 
@@ -3097,39 +3210,32 @@ class TaskFlowRepository(
   }
 
   /**
-   * Claims daily check-in reward exclusively through the server-side `claimRewardSession` Cloud Function.
+   * Claims daily check-in reward exclusively through the server-side `claimDailyCheckIn` Cloud Function.
    *
    * Security Invariants:
-   * - Days 1–6 = 100 paise (₹1.00), Day 7 = 500 paise (₹5.00).
-   * - Requires a server-created & S2S-verified session ID (`verifiedAdCallbackToken`).
-   * - Never performs direct client-side writes to `users.balanceCents`, `check_ins`, or `transactions`.
+   * - Server computes the authoritative Asia/Kolkata date, 30-day streak progression, and coin reward.
+   * - Never trusts client-provided reward amounts or performs direct client-side wallet/ledger writes.
    */
+  suspend fun claimDailyCheckInDetailed(
+    userId: String,
+    streakDay: Int? = null
+  ): Result<ClaimedRewardResult> = runCatching {
+    require(userId.isNotBlank()) { "userId must not be blank" }
+    if (streakDay != null) {
+      require(streakDay in 1..30) { "streakDay must be between 1 and 30" }
+    }
+    rewardFunctionsClient.claimDailyCheckIn(streakDay)
+  }
+
   suspend fun claimDailyCheckIn(
     userId: String,
     streakDay: Int,
-    rewardCents: Long,
-    dateKey: String,
-    userName: String,
+    rewardCents: Long = 0L,
+    dateKey: String = com.example.data.model.getTodayDateKey(),
+    userName: String = "",
     verifiedAdCallbackToken: String? = null
   ): Result<Long> = runCatching {
-    require(userId.isNotBlank()) { "userId must not be blank" }
-    require(streakDay in 1..30) { "streakDay must be between 1 and 30" }
-    val expectedRewardCoins = DailyCheckInConstants.getRewardCoinsForDay(streakDay)
-    val isLegacyTestAmount =
-      (streakDay in 1..6 && rewardCents == 100L) || (streakDay == 7 && rewardCents == 500L)
-    require(rewardCents == expectedRewardCoins || isLegacyTestAmount) {
-      "Invalid check-in reward for Day $streakDay: expected $expectedRewardCoins Coins."
-    }
-    require(dateKey.isNotBlank() && dateKey.length == 10) { "Invalid dateKey format" }
-    val sessionId = verifiedAdCallbackToken?.trim().orEmpty()
-    if (sessionId.isNotBlank()) {
-      rewardFunctionsClient.awaitSessionVerified(userId, sessionId)
-      val claimed = rewardFunctionsClient.claimRewardSession(sessionId)
-      claimed.rewardCents
-    } else {
-      val claimed = rewardFunctionsClient.claimDailyCheckIn(streakDay)
-      claimed.rewardCents
-    }
+    claimDailyCheckInDetailed(userId = userId, streakDay = streakDay).getOrThrow().rewardCents
   }
 
   /**
@@ -3186,9 +3292,25 @@ class TaskFlowRepository(
     awaitClose { listener.remove() }
   }
 
+  internal fun resolveLeaderboardBalanceCoins(
+    rawBalanceCoins: Long?,
+    rawBalanceCents: Long
+  ): Long = rawBalanceCoins ?: com.example.data.model.centsToCoins(rawBalanceCents)
+
+  internal fun sortLeaderboardProfiles(users: List<UserProfile>): List<UserProfile> =
+    users
+      .filter { it.approvalStatus == "approved" }
+      .sortedByDescending {
+        if (it.balanceCoins > 0L) it.balanceCoins
+        else com.example.data.model.centsToCoins(it.balanceCents)
+      }
+      .take(50)
+
   private fun DocumentSnapshot.toPublicLeaderboardProfile(): UserProfile? {
     val uid = (getString("userId") ?: id).trim()
     if (uid.isEmpty()) return null
+    val rawBalanceCents = getLong("balanceCents") ?: 0L
+    val rawBalanceCoins = getLong("balanceCoins")
     return UserProfile(
       id = uid,
       userId = uid,
@@ -3196,14 +3318,15 @@ class TaskFlowRepository(
       displayName = (getString("displayName") ?: "TaskFlow Member").trim(),
       role = "user",
       approvalStatus = getString("approvalStatus") ?: "approved",
-      balanceCents = getLong("balanceCents") ?: 0L,
+      balanceCents = rawBalanceCents,
+      balanceCoins = resolveLeaderboardBalanceCoins(rawBalanceCoins, rawBalanceCents),
       completedTasksCount = getLong("completedTasksCount") ?: 0L,
       updatedAt = getTimestamp("updatedAt")
     )
   }
 
   /**
-   * Observes approved users ordered by balance from the privacy-safe `/leaderboard` projection
+   * Observes approved users ordered by balanceCoins from the privacy-safe `/leaderboard` projection
    * without querying `/users` or exposing private user email addresses.
    */
   fun observeLeaderboardUsers(): Flow<List<UserProfile>> = callbackFlow {
@@ -3216,26 +3339,23 @@ class TaskFlowRepository(
             return@addSnapshotListener
           }
           val items =
-            snapshot
-              ?.documents
-              ?.mapNotNull { it.toPublicLeaderboardProfile() }
-              ?.sortedByDescending { it.balanceCents }
-              ?.take(50)
-              ?: emptyList()
+            sortLeaderboardProfiles(
+              snapshot
+                ?.documents
+                ?.mapNotNull { it.toPublicLeaderboardProfile() }
+                ?: emptyList()
+            )
           trySend(items)
         }
     awaitClose { listener.remove() }
   }
 
   /**
-   * One-shot fetch of the privacy-safe `/leaderboard` entries.
+   * One-shot fetch of the privacy-safe `/leaderboard` entries sorted by balanceCoins.
    */
   suspend fun getLeaderboardUsers(): Result<List<UserProfile>> = runCatching {
     val snap = leaderboardCollection.whereEqualTo("approvalStatus", "approved").get().await()
-    snap.documents
-      .mapNotNull { it.toPublicLeaderboardProfile() }
-      .sortedByDescending { it.balanceCents }
-      .take(50)
+    sortLeaderboardProfiles(snap.documents.mapNotNull { it.toPublicLeaderboardProfile() })
   }
 
   /**
@@ -3281,9 +3401,9 @@ class TaskFlowRepository(
     usersCollection.document(userId).collection("watch_stats")
 
   /**
-   * Creates a unique, time-limited reward session bound to [userId] for Daily Check-In (Days 1–7,
-   * Days 1–6 = 100 paise, Day 7 = 500 paise) exclusively via the `createRewardSession` Cloud Function.
-   * No client-side Firestore or in-memory session fallback is permitted.
+   * Creates a unique, time-limited reward session bound to [userId] for Daily Check-In (Days 1–30,
+   * using the 30-day coin schedule in [DailyCheckInConstants]) exclusively via the
+   * `createRewardSession` Cloud Function. No client-side Firestore or in-memory fallback is permitted.
    */
   suspend fun createDailyCheckInSession(
     userId: String,
@@ -3295,9 +3415,7 @@ class TaskFlowRepository(
     require(dateKey.isNotBlank() && dateKey.length == 10) { "Invalid dateKey." }
     require(streakDay in 1..30) { "Invalid streakDay." }
     val expectedReward = DailyCheckInConstants.getRewardCoinsForDay(streakDay)
-    val isLegacyTestAmount =
-      (streakDay in 1..6 && rewardCents == 100L) || (streakDay == 7 && rewardCents == 500L)
-    require(rewardCents == expectedReward || isLegacyTestAmount) {
+    require(rewardCents == expectedReward) {
       "Invalid reward amount for Day $streakDay (expected $expectedReward Coins)."
     }
 
@@ -3456,7 +3574,7 @@ class TaskFlowRepository(
   }
 
   fun getOrAssignWatchEarnSessionReward(sessionId: String): Long {
-    return rewardFunctionsClient.getOrAssignSessionRewardCoins(sessionId).coerceIn(1L, 200L)
+    return rewardFunctionsClient.getOrAssignSessionRewardCoins(sessionId).coerceIn(0L, 200L)
   }
 
   /**
@@ -3475,25 +3593,32 @@ class TaskFlowRepository(
     Log.i("WatchEarnFlow", "Confirmed server-side S2S verification for sessionId=$sessionId")
   }
 
+  suspend fun createWatchEarnClaimSession(userId: String): Result<String> = runCatching {
+    require(userId.isNotBlank()) { "User authentication is required." }
+    val created = rewardFunctionsClient.createRewardSession("WATCH_AND_EARN_CLAIM", null)
+    created.sessionId
+  }
+
   /**
-   * Step 3 of Watch & Earn: Claims a server-verified (`s2sVerified == true`), unused, unexpired
-   * reward session exclusively through the `claimRewardSession` Cloud Function when the user taps "Claim".
-   * Never performs direct client-side writes to `users.balanceCents`, `watch_stats`, or `transactions`.
+   * Step 3 of Watch & Earn: Claims two server-verified (`s2sVerified == true`) reward sessions
+   * (`sessionId` and `secondSessionId`) exclusively through the `claimRewardSession` Cloud Function.
    */
   suspend fun claimVerifiedWatchEarnSession(
     userId: String,
     userName: String,
     sessionId: String,
+    secondSessionId: String,
     dateKey: String = com.example.data.model.getTodayDateKey()
   ): Result<Long> = runCatching {
     require(userId.isNotBlank()) { "userId must not be blank" }
     require(sessionId.isNotBlank()) { "sessionId must not be blank" }
+    require(secondSessionId.isNotBlank()) { "secondSessionId must not be blank" }
     require(dateKey.isNotBlank()) { "Invalid dateKey" }
 
-    val claimed = rewardFunctionsClient.claimRewardSession(sessionId.trim())
+    val claimed = rewardFunctionsClient.claimRewardSession(sessionId.trim(), secondSessionId.trim())
     Log.i(
       "WatchEarnFlow",
-      "Claimed server-verified Watch & Earn reward (+${claimed.rewardCents} paise)"
+      "Claimed server-verified Watch & Earn reward (+${claimed.rewardCents} coins)"
     )
     claimed.rewardCents
   }
@@ -3505,12 +3630,13 @@ class TaskFlowRepository(
     userId: String,
     userName: String,
     dateKey: String,
-    sessionId: String = ""
+    sessionId: String = "",
+    secondSessionId: String = ""
   ): Result<Long> = runCatching {
-    require(sessionId.isNotBlank()) {
-      "A server-verified reward session ID is required to claim Watch & Earn rewards."
+    require(sessionId.isNotBlank() && secondSessionId.isNotBlank()) {
+      "Server-verified reward session IDs are required to claim Watch & Earn rewards."
     }
-    claimVerifiedWatchEarnSession(userId, userName, sessionId, dateKey).getOrThrow()
+    claimVerifiedWatchEarnSession(userId, userName, sessionId, secondSessionId, dateKey).getOrThrow()
   }
 
   suspend fun createSpinSession(): Result<String> = runCatching {
@@ -3520,6 +3646,17 @@ class TaskFlowRepository(
   suspend fun createSpinSessionWithOutcome(userId: String): Result<SpinSessionOutcome> = runCatching {
     require(userId.isNotBlank()) { "User authentication is required." }
     rewardFunctionsClient.createSpinSessionWithOutcome(userId)
+  }
+
+  suspend fun createExtraSpinUnlockSession(userId: String): Result<String> = runCatching {
+    require(userId.isNotBlank()) { "User authentication is required." }
+    val created = rewardFunctionsClient.createRewardSession("EXTRA_SPIN_UNLOCK", null)
+    created.sessionId
+  }
+
+  suspend fun recordExtraSpinAdWatch(sessionId: String): Result<Int> = runCatching {
+    require(sessionId.isNotBlank()) { "sessionId must not be blank" }
+    rewardFunctionsClient.recordExtraSpinAdWatch(sessionId.trim())
   }
 
   suspend fun recordExtraSpinVideoWatched(userId: String): Result<Int> = runCatching {
@@ -4130,266 +4267,90 @@ class TaskFlowRepository(
   }
 
   /**
-   * Creates an independent Promo Code in `/promo_codes/{normalizedCode}`.
-   * Creating a new code never deactivates or overwrites previous codes.
+   * Creates an independent Promo Code via the server-authoritative `createPromoCode` Cloud Function.
+   * Never writes directly to `/promo_codes` or `/admin_logs` from the Android client.
    */
   suspend fun createPromoCode(
     rawCode: String,
     rewardCoins: Long,
     maxSlots: Long,
-    expiresAtMillis: Long,
+    expiresAtMillis: Long = 0L,
     expiresAtLabel: String = "",
-    isActive: Boolean = true,
-    nowMillis: Long = System.currentTimeMillis()
+    isActive: Boolean = true
   ): Result<PromoCodeItem> = runCatching {
-    val authUser = authProvider().currentUser ?: error("Admin sign-in required.")
-    val adminUid = authUser.uid.trim()
-    val adminEmail = authUser.email?.trim().orEmpty()
-    require(adminUid.isNotBlank()) { "Admin sign-in required." }
-    val isAuthorized = checkAndEnsureAdminAuthorization(adminUid, adminEmail)
-    check(isAuthorized) { "Only authorized administrators can create promo codes." }
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
 
     val normalized = normalizePromoCode(rawCode)
-    require(normalized.length in 3..40 && normalized.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
-      "Promo code must be 3–40 characters (letters, numbers, '-' or '_')."
+    require(normalized.length in 3..32 && normalized.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
+      "Promo code must be 3–32 characters (letters, numbers, '-' or '_')."
     }
     require(rewardCoins in 1L..10_000_000L) {
-      "Coin reward amount must be greater than 0 Coins."
+      "Coin reward amount must be between 1 and 10,000,000 Coins."
     }
     require(maxSlots in 1L..1_000_000L) {
-      "Maximum redemption slots must be at least 1."
-    }
-    require(expiresAtMillis > nowMillis) {
-      "Expiry date and time must be in the future."
+      "Maximum redemption slots must be between 1 and 1,000,000."
     }
 
-    val promoRef = promoCodesCollection.document(normalized)
-    val createdItem =
-      firestore.runTransaction { transaction ->
-        val existing = transaction.get(promoRef)
-        check(!existing.exists()) {
-          "Promo code '$normalized' already exists. Please choose a unique code."
-        }
-        val initialStatus = if (isActive) PromoCodeStatus.ACTIVE else PromoCodeStatus.INACTIVE
-        val payload =
-          mapOf(
-            "code" to normalized,
-            "rewardCoins" to rewardCoins,
-            "maxSlots" to maxSlots,
-            "usedSlots" to 0L,
-            "expiresAtMillis" to expiresAtMillis,
-            "expiresAtLabel" to expiresAtLabel.trim(),
-            "isActive" to isActive,
-            "status" to initialStatus,
-            "createdBy" to adminUid,
-            "createdAt" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp()
-          )
-        transaction.set(promoRef, payload)
-        PromoCodeItem(
-          id = normalized,
-          code = normalized,
-          rewardCoins = rewardCoins,
-          maxSlots = maxSlots,
-          usedSlots = 0L,
-          expiresAtMillis = expiresAtMillis,
-          expiresAtLabel = expiresAtLabel.trim(),
-          isActive = isActive,
-          status = initialStatus,
-          createdBy = adminUid
-        )
-      }.await()
+    val cleanLabel = expiresAtLabel.trim()
+    val isStrictDateTime =
+      cleanLabel.matches(Regex("""^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?$""")) ||
+        cleanLabel.matches(Regex("""^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$"""))
+    require(isStrictDateTime || expiresAtMillis > 0L) {
+      "A valid future expiry date and time (YYYY-MM-DD HH:MM) is required."
+    }
 
-    recordAdminActivity(
-      actionType = "REWARD",
-      title = "Created Promo Code: $normalized",
-      details = "Reward: ${formatCoins(rewardCoins)} • Max Slots: $maxSlots • Expires: ${expiresAtLabel.ifBlank { expiresAtMillis.toString() }}",
-      targetId = normalized
+    rewardFunctionsClient.createPromoCode(
+      code = normalized,
+      rewardCoins = rewardCoins,
+      maxSlots = maxSlots,
+      expiresAtDateTime = if (isStrictDateTime) cleanLabel else "",
+      expiresAtMillis = if (!isStrictDateTime && expiresAtMillis > 0L) expiresAtMillis else null,
+      expiresAtLabel = cleanLabel,
+      isActive = isActive
     )
-
-    createdItem
-  }
-
-  suspend fun setPromoCodeActiveStatus(
-    promoId: String,
-    isActive: Boolean
-  ): Result<Unit> = runCatching {
-    val authUser = authProvider().currentUser ?: error("Admin sign-in required.")
-    val adminUid = authUser.uid.trim()
-    val adminEmail = authUser.email?.trim().orEmpty()
-    require(adminUid.isNotBlank()) { "Admin sign-in required." }
-    val isAuthorized = checkAndEnsureAdminAuthorization(adminUid, adminEmail)
-    check(isAuthorized) { "Only authorized administrators can modify promo codes." }
-
-    val cleanedId = promoId.trim()
-    require(cleanedId.isNotBlank()) { "promoId must not be blank." }
-    val promoRef = promoCodesCollection.document(cleanedId)
-    firestore.runTransaction { transaction ->
-      val snap = transaction.get(promoRef)
-      check(snap.exists()) { "Promo code '$cleanedId' not found." }
-      val maxSlots = snap.getLong("maxSlots") ?: 1L
-      val usedSlots = snap.getLong("usedSlots") ?: 0L
-      val nextStatus =
-        when {
-          usedSlots >= maxSlots -> PromoCodeStatus.EXHAUSTED
-          isActive -> PromoCodeStatus.ACTIVE
-          else -> PromoCodeStatus.INACTIVE
-        }
-      transaction.update(
-        promoRef,
-        mapOf(
-          "isActive" to isActive,
-          "status" to nextStatus,
-          "updatedAt" to FieldValue.serverTimestamp()
-        )
-      )
-    }.await()
   }
 
   /**
-   * Atomically redeems a Promo Code for [userId].
-   * Enforces all 9 Promo Code Redemption Rules:
-   * - Independent codes; multiple different codes redeemable on the same day; no daily limit.
-   * - Each user can redeem each individual promo code only once.
-   * - Invalid, inactive, expired, or exhausted codes never credit coins.
-   * - Automatically transitions code to EXHAUSTED when usedSlots reaches maxSlots.
-   * - Credits user's existing Wallet, records TransactionRecord, and sends NotificationItem atomically.
+   * Activates or deactivates a Promo Code via the server-authoritative `setPromoCodeActiveStatus`
+   * Cloud Function. Never modifies `/promo_codes` directly from the Android client.
+   */
+  suspend fun setPromoCodeActiveStatus(
+    promoId: String,
+    isActive: Boolean
+  ): Result<PromoCodeStatusUpdateResult> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+
+    val cleanedId = normalizePromoCode(promoId)
+    require(cleanedId.length in 3..32 && cleanedId.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
+      "Invalid promo code ID."
+    }
+
+    rewardFunctionsClient.setPromoCodeActiveStatus(
+      promoId = cleanedId,
+      isActive = isActive
+    )
+  }
+
+  /**
+   * Redeems a Promo Code exclusively via the server-authoritative `redeemPromoCode` Cloud Function.
+   * Sends only the promo code string; server handles validation, expiry, slot exhaustion, duplicate
+   * protection, atomic wallet credit, transaction ledger, leaderboard sync, and notification.
    */
   suspend fun redeemPromoCode(
-    userId: String,
-    userName: String,
-    rawCode: String,
-    nowMillis: Long = System.currentTimeMillis()
+    rawCode: String
   ): Result<PromoRedemptionRecord> = runCatching {
-    require(userId.isNotBlank()) { "Sign-in required to redeem promo codes." }
-    val authUid = authProvider().currentUser?.uid?.trim().orEmpty()
-    check(authUid == userId) { "Authenticated user mismatch." }
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Sign-in required to redeem promo codes." }
 
     val normalized = normalizePromoCode(rawCode)
     require(normalized.isNotEmpty()) { "Please enter a promo code." }
+    require(normalized.length in 3..32 && normalized.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
+      "Invalid promo code. Codes must be 3–32 characters (letters, numbers, '-' or '_')."
+    }
 
-    val promoRef = promoCodesCollection.document(normalized)
-    val redemptionId = "${normalized}_$userId"
-    val redemptionRef = promoRedemptionsCollection.document(redemptionId)
-    val subRedemptionRef = promoRef.collection("redemptions").document(userId)
-    val userRef = usersCollection.document(userId)
-    val txId = "promo_${normalized}_$userId"
-    val txRef = transactionsCollection.document(txId)
-    val notifRef = userRef.collection("notifications").document("notif_$txId")
-
-    firestore.runTransaction { transaction ->
-      val promoSnap = transaction.get(promoRef)
-      check(promoSnap.exists()) { "Invalid promo code. Please check the code and try again." }
-
-      val promo = promoSnap.toPromoCodeItem()
-        ?: throw IllegalStateException("Invalid promo code.")
-
-      val existingRedemption = transaction.get(redemptionRef)
-      val existingSubRedemption = transaction.get(subRedemptionRef)
-      if (existingRedemption.exists() || existingSubRedemption.exists()) {
-        throw IllegalStateException("You have already redeemed promo code '$normalized'.")
-      }
-
-      if (!promo.isActive || promo.status.equals(PromoCodeStatus.INACTIVE, ignoreCase = true)) {
-        throw IllegalStateException("This promo code is currently inactive.")
-      }
-      if (promo.isExpired(nowMillis)) {
-        throw IllegalStateException("This promo code has expired.")
-      }
-      if (promo.isExhausted || promo.usedSlots >= promo.maxSlots) {
-        throw IllegalStateException("This promo code has reached its maximum redemption limit.")
-      }
-      val rewardCoins = promo.rewardCoins
-      check(rewardCoins > 0L) { "Invalid promo code reward amount." }
-
-      val userSnap = transaction.get(userRef)
-      check(userSnap.exists()) { "User profile not found." }
-      val approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
-      check(approvalStatus == "approved") {
-        "Your account must be approved before redeeming promo codes."
-      }
-
-      val newUsedSlots = promo.usedSlots + 1L
-      val newPromoStatus =
-        if (newUsedSlots >= promo.maxSlots) PromoCodeStatus.EXHAUSTED else PromoCodeStatus.ACTIVE
-
-      val oldPromoCoins = userSnap.getLong("promotionalCoins") ?: 0L
-      val oldBalanceCents = userSnap.getLong("balanceCents") ?: 0L
-      val oldEligibleCoins = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(oldBalanceCents))
-      val oldBalanceCoins = maxOf(userSnap.getLong("balanceCoins") ?: 0L, oldEligibleCoins + oldPromoCoins)
-      val newPromoCoins = oldPromoCoins + rewardCoins
-      val newBalanceCoins = oldBalanceCoins + rewardCoins
-      val resolvedName =
-        (userSnap.getString("displayName") ?: userName).trim().ifEmpty { "TaskFlow Member" }
-
-      transaction.update(
-        promoRef,
-        mapOf(
-          "usedSlots" to newUsedSlots,
-          "status" to newPromoStatus,
-          "updatedAt" to FieldValue.serverTimestamp()
-        )
-      )
-
-      val redemptionPayload =
-        mapOf(
-          "promoId" to normalized,
-          "code" to normalized,
-          "userId" to userId,
-          "userName" to resolvedName,
-          "rewardCoins" to rewardCoins,
-          "redeemedAt" to FieldValue.serverTimestamp()
-        )
-      transaction.set(redemptionRef, redemptionPayload)
-      transaction.set(subRedemptionRef, redemptionPayload)
-
-      transaction.update(
-        userRef,
-        mapOf(
-          "promotionalCoins" to newPromoCoins,
-          "balanceCoins" to newBalanceCoins,
-          "updatedAt" to FieldValue.serverTimestamp()
-        )
-      )
-
-      transaction.set(
-        txRef,
-        mapOf(
-          "userId" to userId,
-          "userName" to resolvedName,
-          "type" to TransactionType.PROMO_CODE,
-          "title" to "Promo Code Redeemed ($normalized)",
-          "amountCents" to coinsToCents(rewardCoins),
-          "amountCoins" to rewardCoins,
-          "status" to "CREDITED",
-          "referenceId" to redemptionId,
-          "createdAt" to FieldValue.serverTimestamp()
-        )
-      )
-
-      transaction.set(
-        notifRef,
-        mapOf(
-          "userId" to userId,
-          "title" to "Promo Code Reward Credited",
-          "body" to "Promo code '$normalized' redeemed! +${formatCoins(rewardCoins)} added to your wallet.",
-          "type" to NotificationRewardType.PROMO_CODE_REWARD,
-          "rewardCoins" to rewardCoins,
-          "referenceId" to redemptionId,
-          "isRead" to false,
-          "createdAt" to FieldValue.serverTimestamp()
-        )
-      )
-
-      PromoRedemptionRecord(
-        id = redemptionId,
-        promoId = normalized,
-        code = normalized,
-        userId = userId,
-        userName = resolvedName,
-        rewardCoins = rewardCoins
-      )
-    }.await()
+    rewardFunctionsClient.redeemPromoCode(normalized)
   }
 
   // =========================================================================
@@ -4579,5 +4540,126 @@ class TaskFlowRepository(
     )
 
     record
+  }
+
+  // =========================================================================
+  // SCRATCH CARD FEATURE REPOSITORY METHODS
+  // =========================================================================
+
+  fun observeScratchDailyState(userId: String): Flow<ScratchDailyState> = callbackFlow {
+    val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
+    if (uid.isBlank()) {
+      trySend(ScratchDailyState())
+      close()
+      return@callbackFlow
+    }
+    val today = getTodayDateKey()
+    val statsRef = firestore.collection("users").document(uid).collection("scratch_stats").document(today)
+    val listener = statsRef.addSnapshotListener { snapshot, error ->
+      if (error != null) {
+        Log.e("TaskFlowRepository", "Error observing scratch daily stats: ${error.message}")
+        trySend(ScratchDailyState(dateKey = today))
+        return@addSnapshotListener
+      }
+      if (snapshot != null && snapshot.exists()) {
+        val completed = snapshot.getLong("scratchesCompletedToday") ?: 0L
+        val adsWatched = snapshot.getLong("adsWatchedForNextScratch") ?: 0L
+        val freeUsed = snapshot.getBoolean("hasUsedFreeScratchToday") ?: (completed > 0L)
+        val unlocked = snapshot.getLong("unlockedScratchesCount") ?: 0L
+        val activeCardId = snapshot.getString("activeCardId").orEmpty()
+        val activeCardRewardCoins = snapshot.getLong("activeCardRewardCoins") ?: 0L
+        val isScratched = snapshot.getBoolean("activeCardIsScratched") ?: false
+        val isClaimed = snapshot.getBoolean("activeCardIsClaimed") ?: false
+
+        trySend(
+          ScratchDailyState(
+            dateKey = today,
+            scratchesCompletedToday = completed,
+            adsWatchedForNextScratch = adsWatched,
+            hasUsedFreeScratchToday = freeUsed,
+            unlockedScratchesCount = unlocked,
+            activeCardId = activeCardId,
+            activeCardRewardCoins = activeCardRewardCoins,
+            activeCardIsScratched = isScratched,
+            activeCardIsClaimed = isClaimed
+          )
+        )
+      } else {
+        trySend(
+          ScratchDailyState(
+            dateKey = today,
+            scratchesCompletedToday = 0L,
+            adsWatchedForNextScratch = 0L,
+            hasUsedFreeScratchToday = false,
+            unlockedScratchesCount = 0L
+          )
+        )
+      }
+    }
+    awaitClose { listener.remove() }
+  }
+
+  suspend fun getOrCreateActiveScratchCard(userId: String): ScratchCardSession {
+    val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
+    check(uid.isNotBlank()) { "Please sign in to scratch cards." }
+    return rewardFunctionsClient.createScratchCardSession()
+  }
+
+  suspend fun createScratchCardAdSession(userId: String): Result<String> = runCatching {
+    val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
+    require(uid.isNotBlank()) { "Please sign in to watch videos." }
+    val session = rewardFunctionsClient.createRewardSession(rewardType = "SCRATCH_CARD_UNLOCK")
+    session.sessionId
+  }
+
+  suspend fun verifyAndRecordScratchAdWatched(
+    userId: String,
+    sessionId: String
+  ): Result<ScratchAdWatchResult> = runCatching {
+    val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
+    require(uid.isNotBlank()) { "User authentication is required." }
+    require(sessionId.isNotBlank()) { "Valid reward session ID is required." }
+
+    // 1. Await server S2S verification
+    rewardFunctionsClient.awaitSessionVerified(uid, sessionId)
+
+    // 2. Consume session and record ad completion on server
+    rewardFunctionsClient.recordScratchAdWatch(sessionId)
+  }
+
+  suspend fun recordScratchAdWatched(userId: String): ScratchDailyState {
+    val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
+    if (uid.isBlank()) return ScratchDailyState()
+    val today = getTodayDateKey()
+    val snap = runCatching {
+      firestore.collection("users").document(uid).collection("scratch_stats").document(today).get().await()
+    }.getOrNull()
+    return if (snap != null && snap.exists()) {
+      ScratchDailyState(
+        dateKey = today,
+        scratchesCompletedToday = snap.getLong("scratchesCompletedToday") ?: 0L,
+        adsWatchedForNextScratch = snap.getLong("adsWatchedForNextScratch") ?: 0L,
+        hasUsedFreeScratchToday = snap.getBoolean("hasUsedFreeScratchToday") ?: false,
+        unlockedScratchesCount = snap.getLong("unlockedScratchesCount") ?: 0L,
+        activeCardId = snap.getString("activeCardId").orEmpty(),
+        activeCardRewardCoins = snap.getLong("activeCardRewardCoins") ?: 0L,
+        activeCardIsScratched = snap.getBoolean("activeCardIsScratched") ?: false,
+        activeCardIsClaimed = snap.getBoolean("activeCardIsClaimed") ?: false
+      )
+    } else {
+      ScratchDailyState(dateKey = today)
+    }
+  }
+
+  suspend fun markScratchCardScratched(cardId: String) {
+    Log.d("TaskFlowRepository", "Card scratched locally: $cardId")
+  }
+
+  suspend fun claimScratchCardReward(cardId: String): Long {
+    val uid = authProvider().currentUser?.uid?.trim().orEmpty()
+    check(uid.isNotBlank()) { "Please sign in to claim your scratch card reward." }
+    val cleanCardId = cardId.trim()
+    check(cleanCardId.isNotBlank()) { "Invalid scratch card." }
+    return rewardFunctionsClient.claimScratchCardReward(cleanCardId)
   }
 }

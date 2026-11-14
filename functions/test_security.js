@@ -40,31 +40,45 @@ const {
   assert.strictEqual(_resolveUnityS2SSecret(), "prod_secret_abc");
   delete process.env.UNITY_S2S_SECRET;
 
-  // 2. Server-side Daily Check-in Reward & Eligibility Validation (_getDailyCheckInRewardCents & _calculateServerDailyCheckInState)
-  for (let day = 1; day <= 6; day++) {
-    assert.strictEqual(_getDailyCheckInRewardCents(day), 100, `Day ${day} must equal 100 paise`);
+  // 2. Server-side 30-Day Daily Check-in Reward & Eligibility Validation (_getDailyCheckInRewardCoins & _calculateServerDailyCheckInState)
+  const expected30DayRewards = [
+    25, 35, 50, 60, 75, 85, 100, 110, 125, 150,
+    160, 175, 185, 200, 210, 225, 250, 260, 275, 285,
+    300, 325, 350, 375, 400, 425, 450, 500, 750, 1000
+  ];
+  for (let day = 1; day <= 30; day++) {
+    assert.strictEqual(
+      _getDailyCheckInRewardCents(day),
+      expected30DayRewards[day - 1],
+      `Day ${day} must equal ${expected30DayRewards[day - 1]} Coins`
+    );
   }
-  assert.strictEqual(_getDailyCheckInRewardCents(7), 500, "Day 7 must equal 500 paise (Rs. 5.00)");
   assert.throws(() => _getDailyCheckInRewardCents(0), /Invalid streakDay/);
-  assert.throws(() => _getDailyCheckInRewardCents(8), /Invalid streakDay/);
+  assert.throws(() => _getDailyCheckInRewardCents(31), /Invalid streakDay/);
 
-  // Consecutive yesterday -> today streak progression (Days 1..7)
-  for (let prevStreak = 1; prevStreak <= 6; prevStreak++) {
+  // Consecutive yesterday -> today streak progression (Days 1..30)
+  for (let prevStreak = 1; prevStreak <= 29; prevStreak++) {
     const state = _calculateServerDailyCheckInState("2026-11-10", prevStreak, "2026-11-11", "2026-11-10");
     assert.strictEqual(state.canCheckInToday, true);
     assert.strictEqual(state.expectedStreakDay, prevStreak + 1);
-    assert.strictEqual(state.rewardCents, prevStreak + 1 === 7 ? 500 : 100);
+    assert.strictEqual(state.rewardCents, expected30DayRewards[prevStreak]);
   }
+
+  // Day 30 consecutive wraps back to Day 1 (25 Coins)
+  const wrapState = _calculateServerDailyCheckInState("2026-11-10", 30, "2026-11-11", "2026-11-10");
+  assert.strictEqual(wrapState.canCheckInToday, true);
+  assert.strictEqual(wrapState.expectedStreakDay, 1);
+  assert.strictEqual(wrapState.rewardCents, 25);
 
   // Same-date claim attempt (lastCheckInDate === today) -> canCheckInToday is false
   const duplicateTodayState = _calculateServerDailyCheckInState("2026-11-11", 3, "2026-11-11", "2026-11-10");
   assert.strictEqual(duplicateTodayState.canCheckInToday, false);
 
-  // Missed day resets streak to Day 1 (100 paise)
-  const resetState = _calculateServerDailyCheckInState("2026-11-08", 5, "2026-11-11", "2026-11-10");
+  // Missed day resets streak to Day 1 (25 Coins)
+  const resetState = _calculateServerDailyCheckInState("2026-11-08", 15, "2026-11-11", "2026-11-10");
   assert.strictEqual(resetState.canCheckInToday, true);
   assert.strictEqual(resetState.expectedStreakDay, 1);
-  assert.strictEqual(resetState.rewardCents, 100);
+  assert.strictEqual(resetState.rewardCents, 25);
 
   // 3. Simulate Atomic Session Lifecycle: PENDING -> VERIFIED -> CLAIMED (single-use)
   const sessions = {

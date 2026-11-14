@@ -55,6 +55,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -68,6 +69,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -99,6 +101,7 @@ import com.example.data.model.COINS_PER_RUPEE
 import com.example.data.model.CampaignItem
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.ManualBonusRecord
+import com.example.data.model.PromoAdminUiFeedback
 import com.example.data.model.PromoCodeItem
 import com.example.data.model.PromoCodeStatus
 import com.example.data.model.TaskItem
@@ -121,6 +124,7 @@ import com.example.ui.viewmodel.AdminTab
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 // Deep Navy Blue & Neutral Slate Admin Control Center Design Tokens
 internal val AdminWhiteBg = Color(0xFFFFFFFF)
@@ -1383,6 +1387,8 @@ fun AdminCoinsRewardsSection(
   promoCodes: List<PromoCodeItem> = emptyList(),
   manualBonuses: List<ManualBonusRecord> = emptyList(),
   isBusy: Boolean = false,
+  promoAdminFeedback: PromoAdminUiFeedback = PromoAdminUiFeedback(),
+  onClearPromoFeedback: () -> Unit = {},
   onSaveTelegramConfig: (channelUrl: String, channelChatId: String, rewardCoins: Long, isActive: Boolean) -> Unit = { _, _, _, _ -> },
   onCreatePromoCode: (code: String, rewardCoins: Long, maxSlots: Long, expiresAtMillis: Long, expiresAtLabel: String, isActive: Boolean) -> Unit = { _, _, _, _, _, _ -> },
   onTogglePromoCodeActive: (promoId: String, isActive: Boolean) -> Unit = { _, _ -> },
@@ -1434,7 +1440,9 @@ fun AdminCoinsRewardsSection(
     item {
       AdminPromoCodeManagerCard(
         promoCodes = promoCodes,
-        isBusy = isBusy,
+        isBusy = isBusy || promoAdminFeedback.isLoading,
+        promoAdminFeedback = promoAdminFeedback,
+        onClearPromoFeedback = onClearPromoFeedback,
         onCreatePromoCode = onCreatePromoCode,
         onTogglePromoCodeActive = onTogglePromoCodeActive
       )
@@ -1810,19 +1818,34 @@ fun AdminTelegramJoinManagementCard(
 fun AdminPromoCodeManagerCard(
   promoCodes: List<PromoCodeItem>,
   isBusy: Boolean = false,
+  promoAdminFeedback: PromoAdminUiFeedback = PromoAdminUiFeedback(),
+  onClearPromoFeedback: () -> Unit = {},
   onCreatePromoCode: (code: String, rewardCoins: Long, maxSlots: Long, expiresAtMillis: Long, expiresAtLabel: String, isActive: Boolean) -> Unit,
   onTogglePromoCodeActive: (promoId: String, isActive: Boolean) -> Unit
 ) {
+  val effectiveBusy = isBusy || promoAdminFeedback.isLoading
   var codeText by rememberSaveable { mutableStateOf("") }
   var rewardCoinsText by rememberSaveable { mutableStateOf("") }
   var maxSlotsText by rememberSaveable { mutableStateOf("") }
   val defaultExpiryLabel = remember {
-    val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
-    fmt.format(java.util.Date(System.currentTimeMillis() + 24L * 60L * 60L * 1000L))
+    val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply {
+      isLenient = false
+      timeZone = TimeZone.getTimeZone("Asia/Kolkata")
+    }
+    fmt.format(Date(System.currentTimeMillis() + 24L * 60L * 60L * 1000L))
   }
   var expiryDateTimeText by rememberSaveable { mutableStateOf(defaultExpiryLabel) }
   var isActive by rememberSaveable { mutableStateOf(true) }
   var validationError by remember { mutableStateOf<String?>(null) }
+
+  LaunchedEffect(promoAdminFeedback.lastCreatedCode) {
+    if (promoAdminFeedback.lastCreatedCode.isNotBlank()) {
+      codeText = ""
+      rewardCoinsText = ""
+      maxSlotsText = ""
+      validationError = null
+    }
+  }
 
   Card(
     modifier = Modifier.fillMaxWidth().testTag("admin_promo_code_manager_card"),
@@ -1867,7 +1890,8 @@ fun AdminPromoCodeManagerCard(
           )
           Switch(
             checked = isActive,
-            onCheckedChange = { isActive = it },
+            onCheckedChange = { if (!effectiveBusy) isActive = it },
+            enabled = !effectiveBusy,
             colors = SwitchDefaults.colors(checkedTrackColor = AdminBluePrimary),
             modifier = Modifier.testTag("admin_promo_active_switch")
           )
@@ -1879,7 +1903,9 @@ fun AdminPromoCodeManagerCard(
         onValueChange = {
           codeText = it.uppercase(Locale.US)
           validationError = null
+          onClearPromoFeedback()
         },
+        enabled = !effectiveBusy,
         label = { Text("Promo Code") },
         placeholder = { Text("Enter custom promo code") },
         singleLine = true,
@@ -1895,7 +1921,9 @@ fun AdminPromoCodeManagerCard(
           onValueChange = {
             rewardCoinsText = it.filter { ch -> ch.isDigit() }
             validationError = null
+            onClearPromoFeedback()
           },
+          enabled = !effectiveBusy,
           label = { Text("Coin Reward") },
           placeholder = { Text("Custom Coins") },
           singleLine = true,
@@ -1906,7 +1934,9 @@ fun AdminPromoCodeManagerCard(
           onValueChange = {
             maxSlotsText = it.filter { ch -> ch.isDigit() }
             validationError = null
+            onClearPromoFeedback()
           },
+          enabled = !effectiveBusy,
           label = { Text("Max Slots") },
           placeholder = { Text("Maximum users") },
           singleLine = true,
@@ -1919,44 +1949,72 @@ fun AdminPromoCodeManagerCard(
         onValueChange = {
           expiryDateTimeText = it
           validationError = null
+          onClearPromoFeedback()
         },
-        label = { Text("Expiry Date & Time") },
+        enabled = !effectiveBusy,
+        label = { Text("Expiry Date & Time (IST)") },
         placeholder = { Text("YYYY-MM-DD HH:MM") },
         singleLine = true,
         modifier = Modifier.fillMaxWidth().testTag("admin_promo_expiry_input")
       )
 
-      if (!validationError.isNullOrBlank()) {
+      val displayedError = validationError ?: promoAdminFeedback.errorMessage
+      if (!displayedError.isNullOrBlank()) {
         Text(
-          text = validationError!!,
+          text = displayedError,
           style = MaterialTheme.typography.bodySmall,
           color = AdminRedDanger,
           modifier = Modifier.testTag("admin_promo_validation_error")
         )
       }
 
+      if (!promoAdminFeedback.successMessage.isNullOrBlank()) {
+        Surface(
+          shape = RoundedCornerShape(10.dp),
+          color = AdminGreenTint,
+          border = BorderStroke(1.dp, AdminGreenSuccess.copy(alpha = 0.4f)),
+          modifier = Modifier.fillMaxWidth().testTag("admin_promo_success_message")
+        ) {
+          Text(
+            text = promoAdminFeedback.successMessage,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = AdminGreenSuccess,
+            modifier = Modifier.padding(10.dp)
+          )
+        }
+      }
+
       Button(
         onClick = {
+          if (effectiveBusy) return@Button
           val cleanCode = codeText.trim().uppercase(Locale.US)
           val parsedCoins = rewardCoinsText.trim().toLongOrNull() ?: 0L
           val parsedSlots = maxSlotsText.trim().toLongOrNull() ?: 0L
+          val trimmedExpiry = expiryDateTimeText.trim()
           val parsedExpiryMillis =
             runCatching {
-              val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
-              sdf.parse(expiryDateTimeText.trim())?.time
+              val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply {
+                isLenient = false
+                timeZone = TimeZone.getTimeZone("Asia/Kolkata")
+              }
+              sdf.parse(trimmedExpiry)?.time
             }.getOrNull()
-              ?: (System.currentTimeMillis() + 24L * 60L * 60L * 1000L)
 
-          if (cleanCode.length < 3) {
-            validationError = "Promo code must be at least 3 characters."
+          if (cleanCode.length !in 3..32 || !cleanCode.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
+            validationError = "Promo code must be 3–32 characters (letters, numbers, '-' or '_')."
             return@Button
           }
-          if (parsedCoins <= 0L) {
-            validationError = "Enter a custom coin reward greater than 0."
+          if (parsedCoins !in 1L..10_000_000L) {
+            validationError = "Enter a coin reward between 1 and 10,000,000."
             return@Button
           }
-          if (parsedSlots <= 0L) {
-            validationError = "Enter maximum redemption slots greater than 0."
+          if (parsedSlots !in 1L..1_000_000L) {
+            validationError = "Enter maximum redemption slots between 1 and 1,000,000."
+            return@Button
+          }
+          if (parsedExpiryMillis == null) {
+            validationError = "Invalid expiry date & time. Use YYYY-MM-DD HH:MM."
             return@Button
           }
           if (parsedExpiryMillis <= System.currentTimeMillis()) {
@@ -1969,21 +2027,28 @@ fun AdminPromoCodeManagerCard(
             parsedCoins,
             parsedSlots,
             parsedExpiryMillis,
-            expiryDateTimeText.trim(),
+            trimmedExpiry,
             isActive
           )
-          codeText = ""
-          rewardCoinsText = ""
-          maxSlotsText = ""
         },
-        enabled = !isBusy,
+        enabled = !effectiveBusy,
         shape = RoundedCornerShape(10.dp),
         colors = ButtonDefaults.buttonColors(containerColor = AdminBluePrimary),
         modifier = Modifier.fillMaxWidth().testTag("admin_promo_create_button")
       ) {
-        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text("Create Promo Code", fontWeight = FontWeight.Bold)
+        if (effectiveBusy) {
+          CircularProgressIndicator(
+            modifier = Modifier.size(16.dp),
+            strokeWidth = 2.dp,
+            color = Color.White
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Creating...", fontWeight = FontWeight.Bold)
+        } else {
+          Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Create Promo Code", fontWeight = FontWeight.Bold)
+        }
       }
 
       if (promoCodes.isNotEmpty()) {
@@ -2047,8 +2112,12 @@ fun AdminPromoCodeManagerCard(
                 }
               }
               OutlinedButton(
-                onClick = { onTogglePromoCodeActive(promo.id.ifBlank { promo.code }, !promo.isActive) },
-                enabled = !isBusy && !promo.isExhausted,
+                onClick = {
+                  if (!effectiveBusy) {
+                    onTogglePromoCodeActive(promo.id.ifBlank { promo.code }, !promo.isActive)
+                  }
+                },
+                enabled = !effectiveBusy && !promo.isExhausted && !promo.isExpired(),
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.testTag("admin_promo_toggle_${promo.code}")
               ) {

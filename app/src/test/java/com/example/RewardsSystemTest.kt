@@ -18,11 +18,16 @@ import com.example.data.model.PromoCodeItem
 import com.example.data.model.PromoCodeStatus
 import com.example.data.model.PromoRedemptionRecord
 import com.example.data.model.PromoRedemptionUiState
+import com.example.data.model.ScratchCardConstants
+import com.example.data.model.ScratchCardSession
+import com.example.data.model.ScratchDailyState
+import com.example.data.model.ScratchCardUiState
 import com.example.data.model.TelegramJoinConfig
 import com.example.data.model.TelegramUserRewardState
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
+import com.example.data.model.formatCoins
 import com.example.data.model.getEffectiveBalanceCoins
 import com.example.data.model.normalizePromoCode
 import com.example.data.repository.TaskFlowRepository
@@ -31,6 +36,8 @@ import com.example.ui.admin.AdminCoinsRewardsSection
 import com.example.ui.theme.TaskFlowTheme
 import com.example.ui.user.DedicatedDailyCheckInScreen
 import com.example.ui.user.PromoCodeRedemptionScreen
+import com.example.ui.user.ScratchCardScreen
+import java.util.UUID
 import com.google.firebase.Timestamp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -350,6 +357,118 @@ class RewardsSystemTest {
         )
       )
       return record
+    }
+
+    val scratchDailyByUserAndDate = mutableMapOf<Pair<String, String>, ScratchDailyState>()
+    val scratchSessions = mutableMapOf<String, ScratchCardSession>()
+
+    fun getOrCreateScratchCard(userId: String, dateKey: String = "2026-11-14"): ScratchCardSession {
+      val user = checkNotNull(users[userId]) { "User profile not found." }
+      check(user.approvalStatus == "approved") { "Account must be approved." }
+      val daily = scratchDailyByUserAndDate[userId to dateKey] ?: ScratchDailyState(dateKey = dateKey)
+      check(daily.scratchesCompletedToday < ScratchCardConstants.MAX_DAILY_SCRATCHES) {
+        "Daily scratch limit reached. Check back tomorrow!"
+      }
+      val activeId = daily.activeCardId
+      if (activeId.isNotBlank() && scratchSessions.containsKey(activeId)) {
+        val existing = scratchSessions[activeId]!!
+        if (!existing.claimed) return existing
+      }
+      val isFree = !daily.hasUsedFreeScratchToday
+      check(isFree || daily.unlockedScratchesCount > 0L) {
+        "Watch 2 videos to unlock your next Scratch Card."
+      }
+      val rewardCoins = ScratchCardConstants.calculateScratchReward(user.completedTasksCount)
+      val cardId = "scratch_test_${UUID.randomUUID().toString().replace("-", "")}"
+      val session = ScratchCardSession(
+        id = cardId,
+        cardId = cardId,
+        userId = userId,
+        dateKey = dateKey,
+        scratchNumber = daily.scratchesCompletedToday + 1,
+        rewardCoins = rewardCoins,
+        isFree = isFree,
+        status = "ACTIVE",
+        claimed = false
+      )
+      scratchSessions[cardId] = session
+      val nextUnlocked = if (isFree) daily.unlockedScratchesCount else (daily.unlockedScratchesCount - 1L).coerceAtLeast(0L)
+      scratchDailyByUserAndDate[userId to dateKey] = daily.copy(
+        hasUsedFreeScratchToday = true,
+        unlockedScratchesCount = nextUnlocked,
+        activeCardId = cardId,
+        activeCardRewardCoins = rewardCoins,
+        activeCardIsScratched = false,
+        activeCardIsClaimed = false
+      )
+      return session
+    }
+
+    fun recordScratchVideoAd(userId: String, dateKey: String = "2026-11-14"): ScratchDailyState {
+      val daily = scratchDailyByUserAndDate[userId to dateKey] ?: ScratchDailyState(dateKey = dateKey)
+      check(daily.scratchesCompletedToday < ScratchCardConstants.MAX_DAILY_SCRATCHES) {
+        "Daily scratch limit reached. Check back tomorrow!"
+      }
+      val nextWatched = daily.adsWatchedForNextScratch + 1L
+      val (finalWatched, finalUnlocked) = if (nextWatched >= ScratchCardConstants.ADS_REQUIRED_PER_SCRATCH) {
+        0L to (daily.unlockedScratchesCount + 1L)
+      } else {
+        nextWatched to daily.unlockedScratchesCount
+      }
+      val updated = daily.copy(
+        adsWatchedForNextScratch = finalWatched,
+        unlockedScratchesCount = finalUnlocked
+      )
+      scratchDailyByUserAndDate[userId to dateKey] = updated
+      return updated
+    }
+
+    fun claimScratchCard(userId: String, cardId: String, dateKey: String = "2026-11-14"): Long {
+      val user = checkNotNull(users[userId]) { "User profile not found." }
+      val session = checkNotNull(scratchSessions[cardId]) { "Scratch card session not found." }
+      check(session.userId == userId) { "Belongs to another user." }
+      check(!session.claimed) { "This Scratch Card reward has already been claimed." }
+      val rewardCoins = session.rewardCoins
+      val newPromo = user.promotionalCoins + rewardCoins
+      val newBalance = user.getEffectiveBalanceCoins() + rewardCoins
+      users[userId] = user.copy(promotionalCoins = newPromo, balanceCoins = newBalance)
+      scratchSessions[cardId] = session.copy(claimed = true, status = "CLAIMED")
+      val daily = scratchDailyByUserAndDate[userId to dateKey] ?: ScratchDailyState(dateKey = dateKey)
+      scratchDailyByUserAndDate[userId to dateKey] = daily.copy(
+        scratchesCompletedToday = daily.scratchesCompletedToday + 1,
+        activeCardId = "",
+        activeCardRewardCoins = 0L,
+        activeCardIsScratched = false,
+        activeCardIsClaimed = true
+      )
+      transactions.add(
+        TransactionRecord(
+          id = "tx_${UUID.randomUUID().toString().replace("-", "")}",
+          userId = userId,
+          userName = user.displayName,
+          type = TransactionType.SCRATCH_CARD,
+          title = "Scratch Card Reward (+$rewardCoins Coins)",
+          amountCoins = rewardCoins,
+          amountCents = rewardCoins,
+          status = "CREDITED",
+          referenceId = cardId,
+          createdAt = Timestamp.now()
+        )
+      )
+      notificationsByUser.getOrPut(userId) { mutableListOf() }.add(
+        NotificationItem(
+          id = "notif_scratch_$cardId",
+          userId = userId,
+          title = "Scratch Card Reward",
+          body = "You revealed and claimed +${formatCoins(rewardCoins)} Coins from Scratch & Win!",
+          type = NotificationRewardType.SCRATCH_CARD_REWARD,
+          rewardCoins = rewardCoins,
+          referenceId = cardId,
+          isRead = false,
+          createdAt = Timestamp.now()
+        )
+      )
+      return rewardCoins
     }
   }
 
@@ -1152,5 +1271,201 @@ class RewardsSystemTest {
     composeTestRule.onNodeWithTag("promo_code_redemption_screen").assertIsDisplayed()
     composeTestRule.onNodeWithTag("promo_code_input_field").assertIsDisplayed()
     composeTestRule.onNodeWithTag("promo_code_redeem_button").assertIsDisplayed()
+  }
+
+  // =========================================================================
+  // SCENARIO 15: First scratch each day is free & subsequent requires 2 videos
+  // =========================================================================
+  @Test
+  fun scenario15_scratchCard_firstDailyScratchIsFree_andSubsequentRequiresTwoVideos() {
+    val ledger = SimulatedRewardsLedger()
+    val uid = "user_free_scratch"
+    ledger.users[uid] = UserProfile(userId = uid, displayName = "Free Scratcher", approvalStatus = "approved")
+
+    // 1. First scratch of the day is FREE
+    val firstCard = ledger.getOrCreateScratchCard(uid)
+    assertTrue("First scratch of day must be free", firstCard.isFree)
+    val claimedCoins = ledger.claimScratchCard(uid, firstCard.cardId)
+    assertTrue("Reward coins must be in 1..100", claimedCoins in 1L..100L)
+
+    // 2. Immediate second scratch attempt without watching ads MUST be rejected
+    try {
+      ledger.getOrCreateScratchCard(uid)
+      fail("Should reject second scratch without completed video ads")
+    } catch (e: IllegalStateException) {
+      assertTrue(e.message?.contains("Watch 2 videos") == true)
+    }
+
+    // 3. Complete Video 1 of 2: Still locked (requires 2 completed videos)
+    val stateAfterVideo1 = ledger.recordScratchVideoAd(uid)
+    assertEquals(1L, stateAfterVideo1.adsWatchedForNextScratch)
+    assertEquals(0L, stateAfterVideo1.unlockedScratchesCount)
+    assertFalse(stateAfterVideo1.canScratchNow)
+
+    // 4. Complete Video 2 of 2: Unlocks exactly ONE scratch
+    val stateAfterVideo2 = ledger.recordScratchVideoAd(uid)
+    assertEquals(0L, stateAfterVideo2.adsWatchedForNextScratch)
+    assertEquals(1L, stateAfterVideo2.unlockedScratchesCount)
+    assertTrue(stateAfterVideo2.canScratchNow)
+
+    // 5. User can now scratch the unlocked card
+    val secondCard = ledger.getOrCreateScratchCard(uid)
+    assertFalse("Subsequent scratch is unlocked via ads, not free", secondCard.isFree)
+    ledger.claimScratchCard(uid, secondCard.cardId)
+    assertEquals(2L, ledger.scratchDailyByUserAndDate[uid to "2026-11-14"]?.scratchesCompletedToday)
+  }
+
+  // =========================================================================
+  // SCENARIO 16: Reward distribution (90% 1–40, 10% 41–100) & single generation
+  // =========================================================================
+  @Test
+  fun scenario16_scratchCard_rewardDistribution_andSingleGenerationPerScratch() {
+    val ledger = SimulatedRewardsLedger()
+    val uid = "user_dist_check"
+    ledger.users[uid] = UserProfile(userId = uid, displayName = "Dist Tester", approvalStatus = "approved", completedTasksCount = 5L)
+
+    // Test reward calculation boundary and probability distribution
+    // Low tier (randomRoll < 0.90): exactly in 1..40
+    for (i in 0 until 50) {
+      val roll = 0.05 + (i * 0.015) // all < 0.90
+      val coins = ScratchCardConstants.calculateScratchReward(
+        completedTasksCount = 5L,
+        randomRoll = roll,
+        randomValue = i / 50.0
+      )
+      assertTrue("Low-tier reward must be in 1..40, got $coins", coins in 1L..40L)
+    }
+
+    // High tier (randomRoll >= 0.90): exactly in 41..100
+    for (i in 0 until 20) {
+      val roll = 0.90 + (i * 0.005) // all >= 0.90
+      val coins = ScratchCardConstants.calculateScratchReward(
+        completedTasksCount = 10L,
+        randomRoll = roll,
+        randomValue = i / 20.0
+      )
+      assertTrue("High-tier reward must be in 41..100, got $coins", coins in 41L..100L)
+    }
+
+    // Test Single Generation per scratch: Calling getOrCreate multiple times returns exact same card & coins
+    val cardA = ledger.getOrCreateScratchCard(uid)
+    val cardB = ledger.getOrCreateScratchCard(uid)
+    assertEquals("Must return exact same card session without re-generating", cardA.cardId, cardB.cardId)
+    assertEquals("Must return exact same reward coins", cardA.rewardCoins, cardB.rewardCoins)
+  }
+
+  // =========================================================================
+  // SCENARIO 17: Prevents duplicate claim & credits wallet atomically
+  // =========================================================================
+  @Test
+  fun scenario17_scratchCard_preventsDuplicateClaim_andCreditsWalletAtomically() {
+    val ledger = SimulatedRewardsLedger()
+    val uid = "user_dup_claim"
+    ledger.users[uid] = UserProfile(
+      userId = uid,
+      displayName = "Dup Claim Tester",
+      approvalStatus = "approved",
+      balanceCoins = 500L,
+      promotionalCoins = 100L
+    )
+
+    val card = ledger.getOrCreateScratchCard(uid)
+    val reward = card.rewardCoins
+
+    // First claim succeeds and credits wallet
+    val credited = ledger.claimScratchCard(uid, card.cardId)
+    assertEquals(reward, credited)
+    val updatedUser = ledger.users[uid]!!
+    assertEquals(500L + reward, updatedUser.balanceCoins)
+    assertEquals(100L + reward, updatedUser.promotionalCoins)
+
+    // Auditable transaction and notification created
+    val tx = ledger.transactions.firstOrNull { it.referenceId == card.cardId }
+    assertTrue("Transaction record must be created", tx != null)
+    assertEquals(TransactionType.SCRATCH_CARD, tx?.type)
+    assertEquals(reward, tx?.amountCoins)
+
+    val notifs = ledger.notificationsByUser[uid] ?: emptyList()
+    assertTrue("Notification must be sent to user", notifs.any { it.referenceId == card.cardId })
+
+    // Second claim attempt MUST be rejected
+    try {
+      ledger.claimScratchCard(uid, card.cardId)
+      fail("Duplicate claim must be rejected")
+    } catch (e: IllegalStateException) {
+      assertTrue(e.message?.contains("already been claimed") == true)
+    }
+  }
+
+  // =========================================================================
+  // SCENARIO 18: Maximum 50 scratches per day & daily reset on new dateKey
+  // =========================================================================
+  @Test
+  fun scenario18_scratchCard_enforces50PerDayLimit_andResetsDailyOnNewDateKey() {
+    val ledger = SimulatedRewardsLedger()
+    val uid = "user_50_limit"
+    ledger.users[uid] = UserProfile(userId = uid, displayName = "Heavy Scratcher", approvalStatus = "approved")
+
+    val day1 = "2026-11-14"
+    // Simulate reaching 50 completed scratches on day 1
+    ledger.scratchDailyByUserAndDate[uid to day1] = ScratchDailyState(
+      dateKey = day1,
+      scratchesCompletedToday = 50L,
+      hasUsedFreeScratchToday = true,
+      unlockedScratchesCount = 5L
+    )
+
+    // Attempting 51st scratch on Day 1 is blocked
+    try {
+      ledger.getOrCreateScratchCard(uid, dateKey = day1)
+      fail("Should enforce 50 scratches per day limit")
+    } catch (e: IllegalStateException) {
+      assertTrue(e.message?.contains("Daily scratch limit reached") == true)
+    }
+
+    // Daily reset: On next day (new dateKey), limit resets and first scratch is free again!
+    val day2 = "2026-11-15"
+    val day2Card = ledger.getOrCreateScratchCard(uid, dateKey = day2)
+    assertTrue("First scratch on new day must be free", day2Card.isFree)
+    ledger.claimScratchCard(uid, day2Card.cardId, dateKey = day2)
+    assertEquals(1L, ledger.scratchDailyByUserAndDate[uid to day2]?.scratchesCompletedToday)
+  }
+
+  // =========================================================================
+  // SCENARIO 19: ScratchCardScreen UI renders interactive card & Congratulations popup
+  // =========================================================================
+  @Test
+  @Config(sdk = [33], qualifiers = "w393dp-h851dp-xxhdpi")
+  fun scenario19_scratchCardScreen_uiInteraction_andCongratulationsPopup() {
+    var claimed = false
+    var dismissed = false
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        ScratchCardScreen(
+          uiState = ScratchCardUiState(
+            revealedCoins = 55L,
+            isScratched = true,
+            showCongratulations = true,
+            dailyState = ScratchDailyState(
+              scratchesCompletedToday = 1L,
+              hasUsedFreeScratchToday = true
+            )
+          ),
+          onBack = {},
+          onWatchAd = {},
+          onScratchRevealed = {},
+          onClaimReward = { claimed = true },
+          onDismissCongratulations = { dismissed = true }
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("scratch_card_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("interactive_scratch_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("congratulations_title").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("scratch_reward_amount_text").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("claim_scratch_reward_button").assertIsDisplayed().performClick()
+    assertTrue("Tapping claim button in popup must trigger onClaimReward", claimed)
   }
 }

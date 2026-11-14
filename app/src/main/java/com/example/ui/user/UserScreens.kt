@@ -3,6 +3,7 @@ package com.example.ui.user
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import com.example.data.model.getEffectiveBalanceCoins
+import com.example.data.model.getLeaderboardDisplayCoins
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -99,6 +100,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.CardGiftcard
+import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.ReceiptLong
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DailyCheckInState
@@ -166,7 +169,9 @@ fun UserHomeScreen(
   onOpenWatchDialog: () -> Unit = {},
   onShowInterstitial: () -> Unit = {},
   onNavigateToSpin: () -> Unit = {},
-  onNavigateToOfferWall: () -> Unit = {}
+  onNavigateToOfferWall: () -> Unit = {},
+  onNavigateToScratchCard: () -> Unit = {},
+  onNavigateToPromoCode: () -> Unit = {}
 ) {
   val profile = (profileState as? UiState.Success)?.data
   val currentUserId = profile?.userId?.ifBlank { profile.id } ?: ""
@@ -391,6 +396,19 @@ fun UserHomeScreen(
             )
             OfferWallCard(
               onClick = onNavigateToOfferWall,
+              modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+          }
+          Row(
+            modifier = Modifier.fillMaxWidth().height(140.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+          ) {
+            ScratchCard(
+              onClick = onNavigateToScratchCard,
+              modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+            PromoCodeCard(
+              onClick = onNavigateToPromoCode,
               modifier = Modifier.weight(1f).fillMaxHeight()
             )
           }
@@ -719,16 +737,7 @@ private fun WatchAdInfoDialog(
   val isClaiming = watchEarnUiState.isClaiming
   val isClaimed = watchEarnUiState.isClaimed
   val hasError = watchEarnUiState.hasError
-  val displayedRewardCoins =
-    remember(watchEarnUiState.activeSessionId, watchEarnUiState.lastRewardCoins) {
-      if (watchEarnUiState.lastRewardCoins > 0L) {
-        watchEarnUiState.lastRewardCoins
-      } else if (watchEarnUiState.activeSessionId.isNotBlank()) {
-        ((kotlin.math.abs(watchEarnUiState.activeSessionId.hashCode()) % 170) + 15).toLong()
-      } else {
-        32L
-      }
-    }
+  val displayedRewardCoins = watchEarnUiState.lastRewardCoins.coerceAtLeast(0L)
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -776,10 +785,10 @@ private fun WatchAdInfoDialog(
           ) {
             Text(
               text =
-                if (isReadyToClaim || isClaimed || watchEarnUiState.lastRewardCoins > 0L) {
+                if (displayedRewardCoins > 0L) {
                   "+${formatCoins(displayedRewardCoins)} Reward"
                 } else {
-                  "1–200 Coins / Cycle"
+                  "63–125 Coins / Cycle"
                 },
               style = MaterialTheme.typography.labelSmall,
               fontWeight = FontWeight.SemiBold,
@@ -843,8 +852,15 @@ private fun WatchAdInfoDialog(
               Text(
                 text =
                   watchEarnUiState.statusMessage.ifBlank {
-                    if (isClaiming) "Adding +${formatCoins(displayedRewardCoins)} to your wallet..."
-                    else "Loading video..."
+                    if (isClaiming) {
+                      if (displayedRewardCoins > 0L) {
+                        "Adding +${formatCoins(displayedRewardCoins)} to your wallet..."
+                      } else {
+                        "Crediting your Watch & Earn reward..."
+                      }
+                    } else {
+                      "Loading video..."
+                    }
                   },
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
@@ -911,13 +927,25 @@ private fun WatchAdInfoDialog(
                   )
                   Spacer(modifier = Modifier.height(2.dp))
                   Text(
-                    text = "+${formatCoins(displayedRewardCoins)}",
+                    text =
+                      if (displayedRewardCoins > 0L) "+${formatCoins(displayedRewardCoins)}"
+                      else "Server Reward",
                     style = MaterialTheme.typography.headlineMedium,
                     color = Color(0xFFB45309),
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.testTag("watch_earn_reward_coins_text")
                   )
                 }
+              }
+
+              if (!watchEarnUiState.errorMessage.isNullOrBlank()) {
+                Text(
+                  text = watchEarnUiState.errorMessage,
+                  style = MaterialTheme.typography.bodySmall,
+                  fontWeight = FontWeight.SemiBold,
+                  color = Color(0xFFDC2626),
+                  textAlign = TextAlign.Center
+                )
               }
 
               Button(
@@ -937,7 +965,9 @@ private fun WatchAdInfoDialog(
                 Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                  text = "Claim +${formatCoins(displayedRewardCoins)}",
+                  text =
+                    if (displayedRewardCoins > 0L) "Claim +${formatCoins(displayedRewardCoins)}"
+                    else "Watch Video 2 to Claim",
                   fontWeight = FontWeight.Bold
                 )
               }
@@ -956,7 +986,11 @@ private fun WatchAdInfoDialog(
             Text(
               text =
                 watchEarnUiState.statusMessage.ifBlank {
-                  "Reward claimed successfully! +${formatCoins(displayedRewardCoins)} added to your wallet."
+                  if (displayedRewardCoins > 0L) {
+                    "Reward claimed successfully! +${formatCoins(displayedRewardCoins)} added to your wallet."
+                  } else {
+                    "Reward claimed successfully! Coins added to your wallet."
+                  }
                 },
               style = MaterialTheme.typography.bodySmall,
               fontWeight = FontWeight.SemiBold,
@@ -1178,6 +1212,124 @@ private fun OfferWallCard(
 }
 
 @Composable
+private fun ScratchCard(
+  onClick: () -> Unit = {},
+  modifier: Modifier = Modifier
+) {
+  Box(
+    modifier =
+      modifier
+        .testTag("home_scratch_card")
+        .clip(RoundedCornerShape(22.dp))
+        .background(
+          Brush.verticalGradient(
+            colors = listOf(Color(0xFF581C87), Color(0xFF7E22CE), Color(0xFF3B0764))
+          )
+        )
+        .border(1.dp, Color(0xFFC084FC).copy(alpha = 0.45f), RoundedCornerShape(22.dp))
+        .clickable(onClick = onClick)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(14.dp),
+      verticalArrangement = Arrangement.Center,
+      horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+      Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = Color.White.copy(alpha = 0.16f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
+        modifier = Modifier.size(46.dp)
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.CardGiftcard,
+            contentDescription = "Scratch Card",
+            tint = Color(0xFFE9D5FF),
+            modifier = Modifier.size(26.dp)
+          )
+        }
+      }
+      Spacer(modifier = Modifier.height(8.dp))
+      Text(
+        text = "Scratch Card",
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+        lineHeight = 18.sp,
+        color = Color.White
+      )
+      Spacer(modifier = Modifier.height(2.dp))
+      Text(
+        text = "Scratch & Win",
+        style = MaterialTheme.typography.labelSmall,
+        fontSize = 10.sp,
+        color = Color(0xFFF3E8FF),
+        fontWeight = FontWeight.SemiBold
+      )
+    }
+  }
+}
+
+@Composable
+private fun PromoCodeCard(
+  onClick: () -> Unit = {},
+  modifier: Modifier = Modifier
+) {
+  Box(
+    modifier =
+      modifier
+        .testTag("home_promo_code_card")
+        .clip(RoundedCornerShape(22.dp))
+        .background(
+          Brush.verticalGradient(
+            colors = listOf(Color(0xFF831843), Color(0xFF9D174D), Color(0xFF4C0519))
+          )
+        )
+        .border(1.dp, Color(0xFFF43F5E).copy(alpha = 0.45f), RoundedCornerShape(22.dp))
+        .clickable(onClick = onClick)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(14.dp),
+      verticalArrangement = Arrangement.Center,
+      horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+      Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = Color.White.copy(alpha = 0.16f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
+        modifier = Modifier.size(46.dp)
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.LocalOffer,
+            contentDescription = "Promo Code",
+            tint = Color(0xFFFECDD3),
+            modifier = Modifier.size(26.dp)
+          )
+        }
+      }
+      Spacer(modifier = Modifier.height(8.dp))
+      Text(
+        text = "Promo Code",
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+        lineHeight = 18.sp,
+        color = Color.White
+      )
+      Spacer(modifier = Modifier.height(2.dp))
+      Text(
+        text = "Redeem Bonus",
+        style = MaterialTheme.typography.labelSmall,
+        fontSize = 10.sp,
+        color = Color(0xFFFFE4E6),
+        fontWeight = FontWeight.SemiBold
+      )
+    }
+  }
+}
+
+@Composable
 private fun LeaderboardPreviewCard(
   users: List<UserProfile>,
   onViewAllClicked: () -> Unit
@@ -1313,7 +1465,7 @@ private fun LeaderboardPreviewCard(
               }
 
               Text(
-                text = formatCoins(user.getEffectiveBalanceCoins()),
+                text = formatCoins(user.getLeaderboardDisplayCoins()),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color(0xFF16A34A)
@@ -1397,7 +1549,7 @@ private fun LeaderboardDialog(
                   )
                 }
                 Text(
-                  text = formatCoins(user.getEffectiveBalanceCoins()),
+                  text = formatCoins(user.getLeaderboardDisplayCoins()),
                   style = MaterialTheme.typography.titleMedium,
                   fontWeight = FontWeight.Bold,
                   color = Color(0xFF16A34A)

@@ -339,6 +339,7 @@ object TransactionType {
   const val TELEGRAM_JOIN = "TELEGRAM_JOIN"
   const val PROMO_CODE = "PROMO_CODE"
   const val ADMIN_MANUAL_BONUS = "ADMIN_MANUAL_BONUS"
+  const val SCRATCH_CARD = "SCRATCH_CARD"
 }
 
 data class TransactionRecord(
@@ -431,6 +432,93 @@ data class SpinEarnUiState(
   val errorMessage: String? = null
 )
 
+object ScratchCardConstants {
+  const val MIN_REWARD_COINS = 1L
+  const val MAX_REWARD_COINS = 100L
+  const val TIER_LOW_MAX_COINS = 40L
+  const val TIER_HIGH_MIN_COINS = 41L
+  const val LOW_TIER_PROBABILITY = 0.90
+  const val HIGH_TIER_PROBABILITY = 0.10
+  const val ADS_REQUIRED_PER_SCRATCH = 2
+  const val MAX_DAILY_SCRATCHES = 50L
+  const val REWARDED_PLACEMENT_ID = "BP_Rewarded_Android"
+  const val GAME_ID = "800430673"
+
+  /**
+   * Generates a reward between 1 and 100 coins with:
+   * - 90% probability: 1–40 coins
+   * - 10% probability: 41–100 coins
+   * - Legitimate user activity (completedTasksCount) provides subtle positive weighting without predictability.
+   */
+  fun calculateScratchReward(
+    completedTasksCount: Long = 0L,
+    randomRoll: Double = java.util.concurrent.ThreadLocalRandom.current().nextDouble(),
+    randomValue: Double = java.util.concurrent.ThreadLocalRandom.current().nextDouble()
+  ): Long {
+    val isHighTier = randomRoll >= LOW_TIER_PROBABILITY
+    return if (isHighTier) {
+      val taskBoost = (completedTasksCount.coerceIn(0L, 25L) * 1.5).toLong()
+      val baseMin = (TIER_HIGH_MIN_COINS + taskBoost).coerceAtMost(80L)
+      val spread = (MAX_REWARD_COINS - baseMin + 1L).coerceAtLeast(1L)
+      (baseMin + (randomValue * spread).toLong()).coerceIn(TIER_HIGH_MIN_COINS, MAX_REWARD_COINS)
+    } else {
+      val taskBoost = (completedTasksCount.coerceIn(0L, 20L) / 2L)
+      val baseMin = (MIN_REWARD_COINS + taskBoost).coerceAtMost(20L)
+      val spread = (TIER_LOW_MAX_COINS - baseMin + 1L).coerceAtLeast(1L)
+      (baseMin + (randomValue * spread).toLong()).coerceIn(MIN_REWARD_COINS, TIER_LOW_MAX_COINS)
+    }
+  }
+}
+
+data class ScratchCardSession(
+  @DocumentId val id: String = "",
+  val cardId: String = "",
+  val userId: String = "",
+  val dateKey: String = "",
+  val scratchNumber: Long = 1L,
+  val rewardCoins: Long = 0L,
+  val isFree: Boolean = true,
+  val status: String = "ACTIVE",
+  val claimed: Boolean = false,
+  @ServerTimestamp val createdAt: Timestamp? = null,
+  @ServerTimestamp val claimedAt: Timestamp? = null
+)
+
+data class ScratchDailyState(
+  val dateKey: String = "",
+  val scratchesCompletedToday: Long = 0L,
+  val adsWatchedForNextScratch: Long = 0L,
+  val hasUsedFreeScratchToday: Boolean = false,
+  val unlockedScratchesCount: Long = 0L,
+  val activeCardId: String = "",
+  val activeCardRewardCoins: Long = 0L,
+  val activeCardIsScratched: Boolean = false,
+  val activeCardIsClaimed: Boolean = false
+) {
+  val isDailyLimitReached: Boolean
+    get() = scratchesCompletedToday >= ScratchCardConstants.MAX_DAILY_SCRATCHES
+
+  val canScratchNow: Boolean
+    get() = !isDailyLimitReached && (!hasUsedFreeScratchToday || unlockedScratchesCount > 0L)
+
+  val adsRemainingForNextScratch: Int
+    get() = (ScratchCardConstants.ADS_REQUIRED_PER_SCRATCH - adsWatchedForNextScratch.toInt())
+      .coerceIn(0, ScratchCardConstants.ADS_REQUIRED_PER_SCRATCH)
+}
+
+data class ScratchCardUiState(
+  val isLoading: Boolean = false,
+  val isClaiming: Boolean = false,
+  val isAdLoading: Boolean = false,
+  val dailyState: ScratchDailyState = ScratchDailyState(),
+  val activeSession: ScratchCardSession? = null,
+  val revealedCoins: Long = 0L,
+  val isScratched: Boolean = false,
+  val showCongratulations: Boolean = false,
+  val errorMessage: String? = null,
+  val successMessage: String? = null
+)
+
 object DailyCheckInConstants {
   // 30-Day Coin Reward Schedule
   val REWARDS_COINS = listOf(
@@ -439,10 +527,6 @@ object DailyCheckInConstants {
     300L, 325L, 350L, 375L, 400L, 425L, 450L, 500L, 750L, 1000L
   )
 
-  // Legacy compatibility alias
-  val REWARDS_CENTS = REWARDS_COINS
-  const val TOTAL_7_DAY_CENTS = 430L
-
   const val AD_VERIFICATION_REQUIRED_MESSAGE =
     "Daily Check-in is pending. Advertisement completion is required after which rewards can be credited."
 
@@ -450,8 +534,6 @@ object DailyCheckInConstants {
     val index = (day - 1).coerceIn(0, 29)
     return REWARDS_COINS[index]
   }
-
-  fun getRewardForDay(day: Int): Long = getRewardCoinsForDay(day)
 }
 
 data class DailyCheckInState(
@@ -573,6 +655,13 @@ fun UserProfile.getEffectiveBalanceCoins(): Long {
   val combined = getEligibleWithdrawalCoins() + promotionalCoins
   return maxOf(balanceCoins, combined)
 }
+
+/**
+ * Returns the user's Coins value for public leaderboard sorting and display,
+ * preferring authoritative `balanceCoins` while keeping withdrawable `balanceCents` distinct.
+ */
+fun UserProfile.getLeaderboardDisplayCoins(): Long =
+  if (balanceCoins > 0L) balanceCoins else centsToCoins(balanceCents)
 
 data class TaskStep(
   val stepNumber: Int = 1,
@@ -1001,6 +1090,7 @@ object NotificationRewardType {
   const val PROMO_CODE_REWARD = "PROMO_CODE_REWARD"
   const val ADMIN_BONUS = "ADMIN_BONUS"
   const val TASK_REWARD = "TASK_REWARD"
+  const val SCRATCH_CARD_REWARD = "SCRATCH_CARD_REWARD"
 }
 
 data class TelegramJoinConfig(
@@ -1089,7 +1179,23 @@ data class PromoRedemptionRecord(
   val userId: String = "",
   val userName: String = "",
   val rewardCoins: Long = 0L,
+  val newPromotionalCoins: Long = 0L,
+  val newBalanceCoins: Long = 0L,
   @ServerTimestamp val redeemedAt: Timestamp? = null
+)
+
+data class PromoCodeStatusUpdateResult(
+  val success: Boolean = true,
+  val promoId: String = "",
+  val isActive: Boolean = false,
+  val status: String = PromoCodeStatus.INACTIVE
+)
+
+data class PromoAdminUiFeedback(
+  val isLoading: Boolean = false,
+  val lastCreatedCode: String = "",
+  val successMessage: String? = null,
+  val errorMessage: String? = null
 )
 
 data class PromoRedemptionUiState(
