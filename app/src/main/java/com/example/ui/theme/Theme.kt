@@ -49,131 +49,159 @@ object ThemePreferences {
   }
 }
 
-// TaskFlow Dark Theme
+// TaskFlow Dark Theme — Deep Navy & Slate
 private val DarkColorScheme =
   darkColorScheme(
-    primary = Color(0xFFA855F7),
-    onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFF3B0764),
-    onPrimaryContainer = Color(0xFFF3E8FF),
-    secondary = Color(0xFF06B6D4),
-    onSecondary = Color(0xFF000000),
-    secondaryContainer = Color(0xFF164E63),
-    onSecondaryContainer = Color(0xFFCFFAFE),
-    tertiary = Color(0xFFEC4899),
-    onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFF831843),
-    onTertiaryContainer = Color(0xFFFCE7F3),
-    background = Color(0xFF070A17),
+    primary = Color(0xFF60A5FA),
+    onPrimary = Color(0xFF0F172A),
+    primaryContainer = Color(0xFF1E3A8A),
+    onPrimaryContainer = Color(0xFFDBEAFE),
+    secondary = Color(0xFF94A3B8),
+    onSecondary = Color(0xFF0F172A),
+    secondaryContainer = Color(0xFF1E293B),
+    onSecondaryContainer = Color(0xFFE2E8F0),
+    tertiary = Color(0xFF2DD4BF),
+    onTertiary = Color(0xFF042F2E),
+    tertiaryContainer = Color(0xFF115E59),
+    onTertiaryContainer = Color(0xFFCCFBF1),
+    background = Color(0xFF0B1120),
     onBackground = Color(0xFFF8FAFC),
-    surface = Color(0xFF0F1428),
+    surface = Color(0xFF111827),
     onSurface = Color(0xFFF8FAFC),
-    surfaceVariant = Color(0xFF181F3B),
-    onSurfaceVariant = Color(0xFFCBD5E1),
-    error = Color(0xFFF43F5E),
+    surfaceVariant = Color(0xFF1E293B),
+    onSurfaceVariant = Color(0xFF94A3B8),
+    error = Color(0xFFF87171),
     onError = Color(0xFFFFFFFF),
-    errorContainer = Color(0xFF881337),
-    onErrorContainer = Color(0xFFFFE4E6),
-    outline = Color(0x60A855F7),
-    outlineVariant = Color(0x33A855F7)
+    errorContainer = Color(0xFF7F1D1D),
+    onErrorContainer = Color(0xFFFEE2E2),
+    outline = Color(0xFF334155),
+    outlineVariant = Color(0xFF1E293B)
   )
 
-// TaskFlow Light Minimal Professional Theme (Default)
+// TaskFlow Balanced Light Theme (Default) — Deep Navy Blue, Clean White & Subtle Neutral Slate
 private val LightColorScheme =
   lightColorScheme(
-    primary = Color(0xFF4F46E5),
+    primary = Color(0xFF1E3A8A),
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFEEF2FF),
-    onPrimaryContainer = Color(0xFF312E81),
-    secondary = Color(0xFF0D9488),
+    primaryContainer = Color(0xFFDBEAFE),
+    onPrimaryContainer = Color(0xFF1E3A8A),
+    secondary = Color(0xFF334155),
     onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFCCFBF1),
-    onSecondaryContainer = Color(0xFF134E4A),
-    tertiary = Color(0xFFD97706),
+    secondaryContainer = Color(0xFFE2E8F0),
+    onSecondaryContainer = Color(0xFF0F172A),
+    tertiary = Color(0xFF0F766E),
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFFEF3C7),
-    onTertiaryContainer = Color(0xFF78350F),
-    background = Color(0xFFF8FAFC),
+    tertiaryContainer = Color(0xFFCCFBF1),
+    onTertiaryContainer = Color(0xFF115E59),
+    background = Color(0xFFF1F5F9),
     onBackground = Color(0xFF0F172A),
     surface = Color(0xFFFFFFFF),
     onSurface = Color(0xFF0F172A),
-    surfaceVariant = Color(0xFFF1F5F9),
+    surfaceVariant = Color(0xFFF8FAFC),
     onSurfaceVariant = Color(0xFF475569),
     error = Color(0xFFDC2626),
     onError = Color(0xFFFFFFFF),
     errorContainer = Color(0xFFFEE2E2),
-    onErrorContainer = Color(0xFF7F1D1D),
+    onErrorContainer = Color(0xFF991B1B),
     outline = Color(0xFFCBD5E1),
     outlineVariant = Color(0xFFE2E8F0)
   )
-
 
 val TaskFlowTypography =
   Typography(
     displayLarge =
       TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.ExtraBold,
-        fontSize = 32.sp,
-        lineHeight = 38.sp,
-        letterSpacing = (-0.5).sp
+        fontFamily = SpaceGroteskFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 30.sp,
+        lineHeight = 36.sp,
+        letterSpacing = (-0.4).sp
+      ),
+    displayMedium =
+      TextStyle(
+        fontFamily = SpaceGroteskFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 25.sp,
+        lineHeight = 32.sp,
+        letterSpacing = (-0.25).sp
       ),
     headlineLarge =
       TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Bold,
-        fontSize = 26.sp,
-        lineHeight = 32.sp
+        fontFamily = SpaceGroteskFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 22.sp,
+        lineHeight = 28.sp
       ),
     headlineMedium =
       TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Bold,
-        fontSize = 21.sp,
-        lineHeight = 28.sp
+        fontFamily = SpaceGroteskFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 19.sp,
+        lineHeight = 25.sp
       ),
     titleLarge =
       TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = PlusJakartaSansFontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 18.sp,
-        lineHeight = 24.sp
+        fontSize = 17.sp,
+        lineHeight = 23.sp
       ),
     titleMedium =
       TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = PlusJakartaSansFontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp,
-        lineHeight = 22.sp
+        fontSize = 15.sp,
+        lineHeight = 21.sp
+      ),
+    titleSmall =
+      TextStyle(
+        fontFamily = PlusJakartaSansFontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 13.5.sp,
+        lineHeight = 19.sp
       ),
     bodyLarge =
       TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = PlusJakartaSansFontFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 15.sp,
         lineHeight = 22.sp
       ),
     bodyMedium =
       TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = PlusJakartaSansFontFamily,
         fontWeight = FontWeight.Normal,
-        fontSize = 14.sp,
-        lineHeight = 20.sp
+        fontSize = 13.5.sp,
+        lineHeight = 19.sp
+      ),
+    bodySmall =
+      TextStyle(
+        fontFamily = PlusJakartaSansFontFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 12.sp,
+        lineHeight = 17.sp
       ),
     labelLarge =
       TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = PlusJakartaSansFontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 14.sp,
+        fontSize = 13.5.sp,
         lineHeight = 18.sp
+      ),
+    labelMedium =
+      TextStyle(
+        fontFamily = PlusJakartaSansFontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 12.sp,
+        lineHeight = 16.sp
       ),
     labelSmall =
       TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = PlusJakartaSansFontFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
         lineHeight = 14.sp,
-        letterSpacing = 0.4.sp
+        letterSpacing = 0.2.sp
       )
   )
 
@@ -196,3 +224,4 @@ fun TaskFlowTheme(
     content = content
   )
 }
+

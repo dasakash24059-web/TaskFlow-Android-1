@@ -477,21 +477,21 @@ fun UserHomeScreen(
             modifier = Modifier.fillMaxWidth().padding(36.dp),
             contentAlignment = Alignment.Center
           ) {
-            CircularProgressIndicator(color = Color(0xFFA855F7))
+            CircularProgressIndicator(color = Color(0xFF1E3A8A))
           }
         }
       } else if (tasksState is UiState.Error) {
         item {
           Surface(
             shape = RoundedCornerShape(16.dp),
-            color = Color(0x30EF4444),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80F87171)),
+            color = MaterialTheme.colorScheme.errorContainer,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
             modifier = Modifier.fillMaxWidth()
           ) {
             Text(
               text = (tasksState as UiState.Error).message,
               style = MaterialTheme.typography.bodyMedium,
-              color = Color(0xFFFCA5A5),
+              color = MaterialTheme.colorScheme.onErrorContainer,
               modifier = Modifier.padding(16.dp)
             )
           }
@@ -561,13 +561,13 @@ private fun DailyCheckInCard(
     modifier =
       modifier
         .testTag("home_daily_checkin_card")
-        .clip(RoundedCornerShape(24.dp))
+        .clip(RoundedCornerShape(22.dp))
         .background(
           Brush.verticalGradient(
-            colors = listOf(Color(0xFF1D4ED8), Color(0xFF0284C7), Color(0xFF0F172A))
+            colors = listOf(Color(0xFF1E3A8A), Color(0xFF1D4ED8), Color(0xFF0F172A))
           )
         )
-        .border(1.5.dp, Color(0x8038BDF8), RoundedCornerShape(24.dp))
+        .border(1.dp, Color(0xFF3B82F6).copy(alpha = 0.45f), RoundedCornerShape(22.dp))
         .clickable {
           onClaimDailyCheckIn()
           onOpenCalendar()
@@ -579,17 +579,17 @@ private fun DailyCheckInCard(
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color.White.copy(alpha = 0.18f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x807DD3FC)),
-        modifier = Modifier.size(50.dp)
+        shape = RoundedCornerShape(14.dp),
+        color = Color.White.copy(alpha = 0.16f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
+        modifier = Modifier.size(46.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.LocalFireDepartment,
             contentDescription = "Daily Check-in",
-            tint = Color(0xFFFDE047),
-            modifier = Modifier.size(28.dp)
+            tint = Color(0xFFFBBF24),
+            modifier = Modifier.size(26.dp)
           )
         }
       }
@@ -597,7 +597,7 @@ private fun DailyCheckInCard(
       Text(
         text = "Daily Check-in",
         style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.ExtraBold,
+        fontWeight = FontWeight.Bold,
         textAlign = TextAlign.Center,
         lineHeight = 18.sp,
         color = Color.White
@@ -612,7 +612,7 @@ private fun DailyCheckInCard(
           },
         style = MaterialTheme.typography.labelSmall,
         fontSize = 10.sp,
-        color = Color(0xFFBAE6FD),
+        color = Color(0xFFDBEAFE),
         fontWeight = FontWeight.SemiBold,
         textAlign = TextAlign.Center
       )
@@ -630,13 +630,13 @@ private fun WatchAndEarnCard(
     modifier =
       modifier
         .testTag("home_watch_earn_card")
-        .clip(RoundedCornerShape(24.dp))
+        .clip(RoundedCornerShape(22.dp))
         .background(
           Brush.verticalGradient(
-            colors = listOf(Color(0xFF7C3AED), Color(0xFF4F46E5), Color(0xFF1E1B4B))
+            colors = listOf(Color(0xFF172554), Color(0xFF1E3A8A), Color(0xFF1D4ED8))
           )
         )
-        .border(1.5.dp, Color(0x80C084FC), RoundedCornerShape(24.dp))
+        .border(1.dp, Color(0xFF60A5FA).copy(alpha = 0.45f), RoundedCornerShape(22.dp))
   ) {
     Column(
       modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp),
@@ -650,8 +650,9 @@ private fun WatchAndEarnCard(
       ) {
         Surface(
           shape = CircleShape,
-          color = Color.White.copy(alpha = 0.2f),
-          modifier = Modifier.size(26.dp)
+          color = Color.White.copy(alpha = 0.18f),
+          border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
+          modifier = Modifier.size(28.dp)
         ) {
           Box(contentAlignment = Alignment.Center) {
             Icon(
@@ -666,7 +667,7 @@ private fun WatchAndEarnCard(
         Text(
           text = "Watch & Earn",
           style = MaterialTheme.typography.titleSmall,
-          fontWeight = FontWeight.ExtraBold,
+          fontWeight = FontWeight.Bold,
           color = Color.White,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
@@ -677,7 +678,7 @@ private fun WatchAndEarnCard(
         text = "1–200 Coins / Cycle",
         style = MaterialTheme.typography.labelSmall,
         color = Color(0xFFFDE047),
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.SemiBold,
         modifier = Modifier.testTag("watch_earn_badge")
       )
 
@@ -686,8 +687,8 @@ private fun WatchAndEarnCard(
         shape = RoundedCornerShape(50),
         colors =
           ButtonDefaults.buttonColors(
-            containerColor = Color.White.copy(alpha = 0.22f),
-            contentColor = Color.White
+            containerColor = Color.White,
+            contentColor = Color(0xFF1E3A8A)
           ),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
         modifier = Modifier.fillMaxWidth().height(34.dp).testTag("watch_ad_button")
@@ -695,8 +696,8 @@ private fun WatchAndEarnCard(
         Text(
           text = "Watch Now",
           style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.ExtraBold,
-          color = Color.White
+          fontWeight = FontWeight.Bold,
+          color = Color(0xFF1E3A8A)
         )
       }
     }
@@ -732,8 +733,8 @@ private fun WatchAdInfoDialog(
   AlertDialog(
     onDismissRequest = onDismiss,
     modifier = Modifier.testTag("watch_earn_dialog"),
-    shape = RoundedCornerShape(26.dp),
-    containerColor = Color(0xFF0F172A),
+    shape = RoundedCornerShape(24.dp),
+    containerColor = MaterialTheme.colorScheme.surface,
     title = {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -741,9 +742,13 @@ private fun WatchAdInfoDialog(
         horizontalArrangement = Arrangement.spacedBy(12.dp)
       ) {
         Surface(
-          shape = CircleShape,
-          color = Color(0x357C3AED),
-          border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80A855F7)),
+          shape = RoundedCornerShape(14.dp),
+          color = if (isReadyToClaim || isClaimed) Color(0xFFDCFCE7) else Color(0xFFDBEAFE),
+          border =
+            androidx.compose.foundation.BorderStroke(
+              1.dp,
+              if (isReadyToClaim || isClaimed) Color(0xFF86EFAC) else Color(0xFF93C5FD)
+            ),
           modifier = Modifier.size(44.dp)
         ) {
           Box(contentAlignment = Alignment.Center) {
@@ -752,8 +757,8 @@ private fun WatchAdInfoDialog(
                 if (isReadyToClaim || isClaimed) Icons.Default.CheckCircle
                 else Icons.Default.PlayArrow,
               contentDescription = null,
-              tint = if (isReadyToClaim || isClaimed) Color(0xFF34D399) else Color(0xFFC084FC),
-              modifier = Modifier.size(26.dp)
+              tint = if (isReadyToClaim || isClaimed) Color(0xFF16A34A) else Color(0xFF1E3A8A),
+              modifier = Modifier.size(24.dp)
             )
           }
         }
@@ -762,23 +767,23 @@ private fun WatchAdInfoDialog(
             text = "Watch & Earn Coins",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            color = Color.White
+            color = MaterialTheme.colorScheme.onSurface
           )
           Surface(
             shape = RoundedCornerShape(50),
-            color = Color(0x30F59E0B),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80FBBF24))
+            color = Color(0xFFFEF3C7),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B))
           ) {
             Text(
               text =
                 if (isReadyToClaim || isClaimed || watchEarnUiState.lastRewardCoins > 0L) {
                   "+${formatCoins(displayedRewardCoins)} Reward"
                 } else {
-                  "Instant Random Coin Reward"
+                  "1–200 Coins / Cycle"
                 },
               style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.Bold,
-              color = Color(0xFFFDE047),
+              fontWeight = FontWeight.SemiBold,
+              color = Color(0xFF92400E),
               modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
             )
           }
@@ -788,37 +793,32 @@ private fun WatchAdInfoDialog(
     text = {
       Column(
         modifier = Modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
       ) {
         // Daily Progress Card
         Surface(
           shape = RoundedCornerShape(14.dp),
-          color = Color(0x451E293B),
-          border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x50A855F7)),
+          color = Color(0xFFF8FAFC),
+          border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
           modifier = Modifier.fillMaxWidth()
         ) {
-          Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
           ) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically
-            ) {
-              Text(
-                text = "Today's Progress",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFFC084FC)
-              )
-              Text(
-                text = "Videos Watched: ${watchStats.videosWatched} / 25",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFFFDE047)
-              )
-            }
+            Text(
+              text = "Today's Progress",
+              style = MaterialTheme.typography.labelLarge,
+              fontWeight = FontWeight.SemiBold,
+              color = Color(0xFF334155)
+            )
+            Text(
+              text = "Videos Watched: ${watchStats.videosWatched} / 25",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Bold,
+              color = Color(0xFF1E3A8A)
+            )
           }
         }
 
@@ -826,8 +826,8 @@ private fun WatchAdInfoDialog(
         if (isLoadingAd || isClaiming) {
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color(0x300284C7),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8038BDF8)),
+            color = Color(0xFFEFF6FF),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF93C5FD)),
             modifier = Modifier.fillMaxWidth().testTag("watch_earn_loading_banner")
           ) {
             Row(
@@ -838,7 +838,7 @@ private fun WatchAdInfoDialog(
               CircularProgressIndicator(
                 modifier = Modifier.size(20.dp),
                 strokeWidth = 2.5.dp,
-                color = Color(0xFF38BDF8)
+                color = Color(0xFF1E3A8A)
               )
               Text(
                 text =
@@ -848,105 +848,97 @@ private fun WatchAdInfoDialog(
                   },
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
-                color = Color(0xFFBAE6FD)
+                color = Color(0xFF1E3A8A)
               )
             }
           }
         }
 
-        // Ready-to-Claim Reward Card: shows the exact random coin amount won from Video 1
-        // and plays Video 2 when Claim is tapped, then auto-credits the wallet.
+        // Ready-to-Claim Reward Card
         if (isReadyToClaim) {
           Surface(
-            shape = RoundedCornerShape(22.dp),
-            color = Color(0xFF1E293B),
-            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFFBBF24)),
+            shape = RoundedCornerShape(18.dp),
+            color = Color(0xFFF8FAFC),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF59E0B)),
             modifier =
               Modifier.fillMaxWidth()
                 .testTag("watch_earn_ready_to_claim_banner")
           ) {
             Column(
-              modifier = Modifier.fillMaxWidth().padding(18.dp),
+              modifier = Modifier.fillMaxWidth().padding(16.dp),
               horizontalAlignment = Alignment.CenterHorizontally,
               verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
               Surface(
                 shape = CircleShape,
-                color = Color(0x35F59E0B),
-                border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFFBBF24)),
-                modifier = Modifier.size(64.dp)
+                color = Color(0xFFFEF3C7),
+                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF59E0B)),
+                modifier = Modifier.size(56.dp)
               ) {
                 Box(contentAlignment = Alignment.Center) {
                   Icon(
                     imageVector = Icons.Default.EmojiEvents,
                     contentDescription = null,
-                    tint = Color(0xFFFBBF24),
-                    modifier = Modifier.size(36.dp)
+                    tint = Color(0xFFD97706),
+                    modifier = Modifier.size(30.dp)
                   )
                 }
               }
 
               Text(
-                text = "Congratulations!",
-                style = MaterialTheme.typography.titleLarge,
-                color = Color(0xFFFDE047),
-                fontWeight = FontWeight.ExtraBold,
+                text = "Reward Ready",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color(0xFF0F172A),
+                fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
               )
 
               Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF0F172A),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80A855F7)),
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFFFFFBEB),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFDE68A)),
                 modifier = Modifier.fillMaxWidth()
               ) {
                 Column(
-                  modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp, horizontal = 12.dp),
+                  modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 12.dp),
                   horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                   Text(
                     text = "YOU WON",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color(0xFF94A3B8),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF92400E),
                     fontWeight = FontWeight.Bold
                   )
-                  Spacer(modifier = Modifier.height(4.dp))
+                  Spacer(modifier = Modifier.height(2.dp))
                   Text(
                     text = "+${formatCoins(displayedRewardCoins)}",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = Color(0xFFFDE047),
-                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFFB45309),
+                    fontWeight = FontWeight.Bold,
                     modifier = Modifier.testTag("watch_earn_reward_coins_text")
                   )
                 }
               }
 
-              Text(
-                text = "Tap Claim below to watch the next video. As soon as it finishes, +${formatCoins(displayedRewardCoins)} will be added directly to your wallet!",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFFCBD5E1),
-                textAlign = TextAlign.Center
-              )
-
               Button(
                 onClick = onClaimVerifiedReward,
                 enabled = !isClaiming && !isLoadingAd,
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(14.dp),
                 colors =
                   ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF10B981),
+                    containerColor = Color(0xFF16A34A),
                     contentColor = Color.White
                   ),
                 modifier =
                   Modifier.fillMaxWidth()
-                    .height(52.dp)
+                    .height(48.dp)
                     .testTag("claim_watch_reward_button")
               ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                   text = "Claim +${formatCoins(displayedRewardCoins)}",
-                  fontWeight = FontWeight.ExtraBold
+                  fontWeight = FontWeight.Bold
                 )
               }
             }
@@ -957,8 +949,8 @@ private fun WatchAdInfoDialog(
         if (isClaimed) {
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color(0x2510B981),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x8034D399)),
+            color = Color(0xFFDCFCE7),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF86EFAC)),
             modifier = Modifier.fillMaxWidth().testTag("watch_earn_claimed_banner")
           ) {
             Text(
@@ -967,19 +959,19 @@ private fun WatchAdInfoDialog(
                   "Reward claimed successfully! +${formatCoins(displayedRewardCoins)} added to your wallet."
                 },
               style = MaterialTheme.typography.bodySmall,
-              fontWeight = FontWeight.Bold,
-              color = Color(0xFF6EE7B7),
+              fontWeight = FontWeight.SemiBold,
+              color = Color(0xFF166534),
               modifier = Modifier.padding(14.dp)
             )
           }
         }
 
-        // Error State Banner with Retry Option (Never exposes raw "NOT_FOUND")
+        // Error State Banner with Retry Option
         if (hasError && !watchEarnUiState.errorMessage.isNullOrBlank()) {
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color(0x30EF4444),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x80F87171)),
+            color = Color(0xFFFEE2E2),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFCA5A5)),
             modifier = Modifier.fillMaxWidth().testTag("watch_earn_error_banner")
           ) {
             Column(
@@ -1000,7 +992,7 @@ private fun WatchAdInfoDialog(
                 text = formattedErr,
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
-                color = Color(0xFFFCA5A5)
+                color = Color(0xFF991B1B)
               )
               if (!isLimitReached && !isLoadingAd && !isClaiming) {
                 OutlinedButton(
@@ -1011,7 +1003,7 @@ private fun WatchAdInfoDialog(
                   Icon(
                     Icons.Default.Refresh,
                     contentDescription = "Retry loading video",
-                    tint = Color(0xFFFCA5A5),
+                    tint = Color(0xFFDC2626),
                     modifier = Modifier.size(16.dp)
                   )
                   Spacer(modifier = Modifier.width(6.dp))
@@ -1019,7 +1011,7 @@ private fun WatchAdInfoDialog(
                     text = "Try Again",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFFCA5A5)
+                    color = Color(0xFFDC2626)
                   )
                 }
               }
@@ -1027,13 +1019,13 @@ private fun WatchAdInfoDialog(
           }
         }
 
-        // Watch Video 1 Button (hidden while Claim button is active for Video 2)
+        // Watch Video 1 Button
         if (!isReadyToClaim) {
           Button(
             onClick = onStartWatchVideo,
             enabled = !isLimitReached && !isLoadingAd && !isClaiming,
             shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E3A8A)),
             modifier = Modifier.fillMaxWidth().height(48.dp).testTag("watch_ad_action_button")
           ) {
             Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
@@ -1050,44 +1042,18 @@ private fun WatchAdInfoDialog(
             )
           }
         }
-
-        // Instructions
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-          Text(
-            text = "How Watch & Earn works:",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
-          )
-          Text(
-            text = "1. Tap Watch Video and watch the 1st video until completion.",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFFCBD5E1)
-          )
-          Text(
-            text = "2. Your exact random Coin reward appears immediately on the Claim screen.",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFFCBD5E1)
-          )
-          Text(
-            text = "3. Tap Claim to watch the 2nd video and auto-credit those Coins to your wallet!",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFFFDE047)
-          )
-        }
       }
     },
     confirmButton = {
-      Button(
+      OutlinedButton(
         onClick = onDismiss,
         enabled = !isLoadingAd && !isClaiming,
         shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
         modifier =
           Modifier.fillMaxWidth()
             .testTag("close_watch_dialog_button")
       ) {
-        Text("Close", fontWeight = FontWeight.Bold, color = Color.White)
+        Text("Close", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
       }
     }
   )
@@ -1102,13 +1068,13 @@ private fun SpinAndEarnCard(
     modifier =
       modifier
         .testTag("home_spin_earn_card")
-        .clip(RoundedCornerShape(24.dp))
+        .clip(RoundedCornerShape(22.dp))
         .background(
           Brush.verticalGradient(
-            colors = listOf(Color(0xFFD97706), Color(0xFFB45309), Color(0xFF1E1B4B))
+            colors = listOf(Color(0xFFB45309), Color(0xFFD97706), Color(0xFF78350F))
           )
         )
-        .border(1.5.dp, Color(0x90FBBF24), RoundedCornerShape(24.dp))
+        .border(1.dp, Color(0xFFFBBF24).copy(alpha = 0.5f), RoundedCornerShape(22.dp))
         .clickable(onClick = onClick)
   ) {
     Column(
@@ -1118,24 +1084,24 @@ private fun SpinAndEarnCard(
     ) {
       Surface(
         shape = CircleShape,
-        color = Color.White.copy(alpha = 0.2f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x90FDE047)),
-        modifier = Modifier.size(50.dp)
+        color = Color.White.copy(alpha = 0.18f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
+        modifier = Modifier.size(46.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.Refresh,
             contentDescription = "Spin & Earn",
             tint = Color(0xFFFDE047),
-            modifier = Modifier.size(28.dp)
+            modifier = Modifier.size(26.dp)
           )
         }
       }
       Spacer(modifier = Modifier.height(8.dp))
       Text(
-        text = "Spin &\nEarn",
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.ExtraBold,
+        text = "Spin & Earn",
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Bold,
         textAlign = TextAlign.Center,
         lineHeight = 18.sp,
         color = Color.White
@@ -1145,8 +1111,8 @@ private fun SpinAndEarnCard(
         text = "Win 10–150 Coins",
         style = MaterialTheme.typography.labelSmall,
         fontSize = 10.sp,
-        color = Color(0xFFFDE047),
-        fontWeight = FontWeight.Bold
+        color = Color(0xFFFEF3C7),
+        fontWeight = FontWeight.SemiBold
       )
     }
   }
@@ -1161,13 +1127,13 @@ private fun OfferWallCard(
     modifier =
       modifier
         .testTag("home_offer_wall_card")
-        .clip(RoundedCornerShape(24.dp))
+        .clip(RoundedCornerShape(22.dp))
         .background(
           Brush.verticalGradient(
-            colors = listOf(Color(0xFF059669), Color(0xFF047857), Color(0xFF0F172A))
+            colors = listOf(Color(0xFF065F46), Color(0xFF047857), Color(0xFF0F172A))
           )
         )
-        .border(1.5.dp, Color(0x8034D399), RoundedCornerShape(24.dp))
+        .border(1.dp, Color(0xFF34D399).copy(alpha = 0.45f), RoundedCornerShape(22.dp))
         .clickable(onClick = onClick)
   ) {
     Column(
@@ -1176,25 +1142,25 @@ private fun OfferWallCard(
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color.White.copy(alpha = 0.18f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x806EE7B7)),
-        modifier = Modifier.size(50.dp)
+        shape = RoundedCornerShape(14.dp),
+        color = Color.White.copy(alpha = 0.16f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
+        modifier = Modifier.size(46.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.Campaign,
             contentDescription = "Offer Wall",
             tint = Color(0xFFA7F3D0),
-            modifier = Modifier.size(28.dp)
+            modifier = Modifier.size(26.dp)
           )
         }
       }
       Spacer(modifier = Modifier.height(8.dp))
       Text(
-        text = "Offer\nWall",
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.ExtraBold,
+        text = "Offer Wall",
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Bold,
         textAlign = TextAlign.Center,
         lineHeight = 18.sp,
         color = Color.White
@@ -1204,8 +1170,8 @@ private fun OfferWallCard(
         text = "High Paying Tasks",
         style = MaterialTheme.typography.labelSmall,
         fontSize = 10.sp,
-        color = Color(0xFFA7F3D0),
-        fontWeight = FontWeight.Bold
+        color = Color(0xFFD1FAE5),
+        fontWeight = FontWeight.SemiBold
       )
     }
   }
@@ -1555,7 +1521,8 @@ private fun QuickStatChip(
 ) {
   Surface(
     shape = RoundedCornerShape(12.dp),
-    color = Color.White.copy(alpha = 0.08f),
+    color = Color(0xFFF8FAFC),
+    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
     modifier = modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
   ) {
     Column(
@@ -1571,7 +1538,7 @@ private fun QuickStatChip(
       Text(
         text = label,
         style = MaterialTheme.typography.labelSmall,
-        color = Color(0xFFCBD5E1)
+        color = Color(0xFF0F172A)
       )
     }
   }
@@ -2599,17 +2566,17 @@ fun SubmitProofModalDialog(
         if (task.referenceImages.isNotEmpty()) {
           Surface(
             shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f)),
+            color = Color(0xFFF1F5F9),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1D4ED8).copy(alpha = 0.35f)),
             modifier = Modifier.fillMaxWidth().testTag("reference_image_example_section")
           ) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
               Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF1E3A8A), modifier = Modifier.size(16.dp))
                 Text(
                   text = "ADMIN REFERENCE EXAMPLE (COMPARE WITH YOUR PROOF)",
                   style = MaterialTheme.typography.labelSmall,
-                  color = MaterialTheme.colorScheme.tertiary,
+                  color = Color(0xFF1E3A8A),
                   fontWeight = FontWeight.Bold
                 )
               }
@@ -2623,7 +2590,7 @@ fun SubmitProofModalDialog(
                       .size(100.dp)
                       .clip(RoundedCornerShape(12.dp))
                       .background(MaterialTheme.colorScheme.surface)
-                      .border(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+                      .border(1.dp, Color(0xFF1D4ED8).copy(alpha = 0.45f), RoundedCornerShape(12.dp)),
                     contentAlignment = Alignment.Center
                   ) {
                     AsyncImage(

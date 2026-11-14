@@ -432,7 +432,7 @@ private fun AuthenticatedWorkspace(
           activeUserTab == UserTab.PROFILE &&
           profileSubScreen != ProfileSubScreen.MAIN) ||
         (activePortal == PortalLoginTarget.USER_APP && activeUserTab != UserTab.HOME) ||
-        (activePortal == PortalLoginTarget.ADMIN_DASHBOARD && activeAdminTab != AdminTab.TASKS)
+        (activePortal == PortalLoginTarget.ADMIN_DASHBOARD && activeAdminTab != AdminTab.HOME)
   ) {
     when {
       selectedTaskId != null -> viewModel.selectTask(null)
@@ -454,8 +454,8 @@ private fun AuthenticatedWorkspace(
         viewModel.setProfileSubScreen(ProfileSubScreen.MAIN)
       activePortal == PortalLoginTarget.USER_APP && activeUserTab != UserTab.HOME ->
         viewModel.setUserTab(UserTab.HOME)
-      activePortal == PortalLoginTarget.ADMIN_DASHBOARD && activeAdminTab != AdminTab.TASKS ->
-        viewModel.setAdminTab(AdminTab.TASKS)
+      activePortal == PortalLoginTarget.ADMIN_DASHBOARD && activeAdminTab != AdminTab.HOME ->
+        viewModel.setAdminTab(AdminTab.HOME)
     }
   }
 
@@ -514,13 +514,17 @@ private fun AuthenticatedWorkspace(
         title = {
           Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
           ) {
-            TaskFlowBrandLogo(size = 32.dp)
+            TaskFlowBrandLogo(size = 30.dp)
             Text(
               text = stringResource(R.string.app_name),
               style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              softWrap = false,
+              overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
           }
         },
@@ -549,7 +553,8 @@ private fun AuthenticatedWorkspace(
           if (isAdminAuthorized) {
             Surface(
               shape = RoundedCornerShape(50),
-              color = MaterialTheme.colorScheme.surfaceVariant,
+              color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+              border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
               modifier =
                 Modifier.clip(RoundedCornerShape(50))
                   .clickable {
@@ -564,9 +569,9 @@ private fun AuthenticatedWorkspace(
                   .testTag("portal_mode_toggle_pill")
             ) {
               Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
               ) {
                 Icon(
                   imageVector =
@@ -577,7 +582,7 @@ private fun AuthenticatedWorkspace(
                     },
                   contentDescription = null,
                   tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(16.dp)
+                  modifier = Modifier.size(15.dp)
                 )
                 Text(
                   text =
@@ -586,13 +591,14 @@ private fun AuthenticatedWorkspace(
                     } else {
                       "User Mode"
                     },
-                  style = MaterialTheme.typography.labelLarge,
-                  color = MaterialTheme.colorScheme.onSurface
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.primary,
+                  maxLines = 1,
+                  softWrap = false
                 )
               }
             }
-
-            Spacer(modifier = Modifier.width(4.dp))
 
             IconButton(
               onClick = { viewModel.setShowSecuritySheet(true) },
@@ -608,25 +614,28 @@ private fun AuthenticatedWorkspace(
         },
         colors =
           TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.background
+            containerColor = MaterialTheme.colorScheme.surface
           )
       )
     },
     bottomBar = {
       if (activePortal == PortalLoginTarget.USER_APP || !isAdminAuthorized) {
-        NavigationBar {
+        NavigationBar(
+          containerColor = MaterialTheme.colorScheme.surface,
+          tonalElevation = 2.dp
+        ) {
           NavigationBarItem(
             selected = activeUserTab == UserTab.HOME,
             onClick = { viewModel.setUserTab(UserTab.HOME) },
             icon = { Icon(Icons.Default.Home, contentDescription = null) },
-            label = { Text(stringResource(R.string.nav_home)) },
+            label = { Text(stringResource(R.string.nav_home), maxLines = 1, softWrap = false) },
             modifier = Modifier.testTag("nav_user_home")
           )
           NavigationBarItem(
             selected = activeUserTab == UserTab.TRACKING,
             onClick = { viewModel.setUserTab(UserTab.TRACKING) },
             icon = { Icon(Icons.AutoMirrored.Filled.FactCheck, contentDescription = null) },
-            label = { Text(stringResource(R.string.nav_tasks)) },
+            label = { Text(stringResource(R.string.nav_tasks), maxLines = 1, softWrap = false) },
             modifier = Modifier.testTag("nav_user_tracking")
           )
           NavigationBarItem(
@@ -636,7 +645,7 @@ private fun AuthenticatedWorkspace(
               viewModel.setUserTab(UserTab.WALLET)
             },
             icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null) },
-            label = { Text(stringResource(R.string.nav_wallet)) },
+            label = { Text(stringResource(R.string.nav_wallet), maxLines = 1, softWrap = false) },
             modifier = Modifier.testTag("nav_user_wallet")
           )
           NavigationBarItem(
@@ -646,7 +655,7 @@ private fun AuthenticatedWorkspace(
               viewModel.setProfileSubScreen(ProfileSubScreen.MAIN)
             },
             icon = { Icon(Icons.Default.Person, contentDescription = null) },
-            label = { Text(stringResource(R.string.nav_profile)) },
+            label = { Text(stringResource(R.string.nav_profile), maxLines = 1, softWrap = false) },
             modifier = Modifier.testTag("nav_user_profile")
           )
         }

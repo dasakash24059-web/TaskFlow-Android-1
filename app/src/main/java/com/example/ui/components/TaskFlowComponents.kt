@@ -319,6 +319,247 @@ fun TaskFlowBrandLogo(
 }
 
 /**
+ * Recognizable custom vector/Canvas brand logo badge for Withdrawal & Gift Card partners:
+ * - UPI: Official BHIM UPI motif with crisp 'UPI' typography and tricolor orange/green double arrow.
+ * - Amazon: Signature dark charcoal/white badge with bold 'a' and golden-orange smile arrow from a to z.
+ * - Google Play: Official 4-part multicolor prism play triangle (Blue, Green, Yellow, Red).
+ * - Flipkart: Signature royal blue & bright yellow shopping bag with stylized 'f' emblem.
+ */
+@Composable
+fun WithdrawalBrandLogo(
+  methodKey: String,
+  modifier: Modifier = Modifier,
+  size: Dp = 48.dp
+) {
+  val norm = methodKey.lowercase(Locale.US)
+  val cornerShape = RoundedCornerShape(size * 0.28f)
+
+  when {
+    norm.contains("upi") -> {
+      Surface(
+        shape = cornerShape,
+        color = Color(0xFFFFFFFF),
+        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+        modifier = modifier.size(size)
+      ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(horizontal = 4.dp)
+          ) {
+            Text(
+              text = "UPI",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.ExtraBold,
+              color = Color(0xFF1E293B),
+              fontSize = (size.value * 0.29f).sp,
+              letterSpacing = (-0.5).sp
+            )
+            Spacer(modifier = Modifier.width(1.dp))
+            Canvas(modifier = Modifier.size(width = size * 0.24f, height = size * 0.36f)) {
+              val w = this.size.width
+              val h = this.size.height
+              val orangeTri =
+                Path().apply {
+                  moveTo(0f, h * 0.12f)
+                  lineTo(w * 0.72f, h * 0.50f)
+                  lineTo(0f, h * 0.88f)
+                  lineTo(w * 0.22f, h * 0.50f)
+                  close()
+                }
+              drawPath(path = orangeTri, color = Color(0xFFF97316))
+              val greenTri =
+                Path().apply {
+                  moveTo(w * 0.30f, h * 0.12f)
+                  lineTo(w, h * 0.50f)
+                  lineTo(w * 0.30f, h * 0.88f)
+                  lineTo(w * 0.52f, h * 0.50f)
+                  close()
+                }
+              drawPath(path = greenTri, color = Color(0xFF16A34A))
+            }
+          }
+        }
+      }
+    }
+
+    norm.contains("amazon") -> {
+      Surface(
+        shape = cornerShape,
+        color = Color(0xFF232F3E),
+        border = BorderStroke(1.dp, Color(0xFF37475A)),
+        modifier = modifier.size(size)
+      ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+          Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+          ) {
+            Text(
+              text = "a",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.ExtraBold,
+              color = Color.White,
+              fontSize = (size.value * 0.44f).sp,
+              lineHeight = (size.value * 0.44f).sp
+            )
+            Canvas(modifier = Modifier.size(width = size * 0.56f, height = size * 0.20f)) {
+              val w = this.size.width
+              val h = this.size.height
+              val smilePath =
+                Path().apply {
+                  moveTo(w * 0.08f, h * 0.25f)
+                  cubicTo(w * 0.35f, h * 0.95f, w * 0.68f, h * 0.95f, w * 0.92f, h * 0.30f)
+                }
+              drawPath(
+                path = smilePath,
+                color = Color(0xFFFF9900),
+                style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round)
+              )
+              val arrowHead =
+                Path().apply {
+                  moveTo(w * 0.76f, h * 0.20f)
+                  lineTo(w * 0.94f, h * 0.28f)
+                  lineTo(w * 0.84f, h * 0.68f)
+                }
+              drawPath(
+                path = arrowHead,
+                color = Color(0xFFFF9900),
+                style = Stroke(width = 2.2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+              )
+            }
+          }
+        }
+      }
+    }
+
+    norm.contains("google") || norm.contains("play") -> {
+      Surface(
+        shape = cornerShape,
+        color = Color(0xFFFFFFFF),
+        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+        modifier = modifier.size(size)
+      ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+          Canvas(modifier = Modifier.size(size * 0.56f)) {
+            val w = this.size.width
+            val h = this.size.height
+            val cx = w * 0.54f
+            val cy = h * 0.50f
+
+            // Left blue section
+            val bluePath =
+              Path().apply {
+                moveTo(w * 0.12f, h * 0.08f)
+                lineTo(cx, cy)
+                lineTo(w * 0.12f, h * 0.92f)
+                close()
+              }
+            drawPath(path = bluePath, color = Color(0xFF4285F4))
+
+            // Top green section
+            val greenPath =
+              Path().apply {
+                moveTo(w * 0.12f, h * 0.08f)
+                lineTo(w * 0.68f, h * 0.36f)
+                lineTo(cx, cy)
+                close()
+              }
+            drawPath(path = greenPath, color = Color(0xFF34A853))
+
+            // Bottom red section
+            val redPath =
+              Path().apply {
+                moveTo(w * 0.12f, h * 0.92f)
+                lineTo(cx, cy)
+                lineTo(w * 0.68f, h * 0.64f)
+                close()
+              }
+            drawPath(path = redPath, color = Color(0xFFEA4335))
+
+            // Right yellow tip
+            val yellowPath =
+              Path().apply {
+                moveTo(cx, cy)
+                lineTo(w * 0.68f, h * 0.36f)
+                lineTo(w * 0.92f, h * 0.50f)
+                lineTo(w * 0.68f, h * 0.64f)
+                close()
+              }
+            drawPath(path = yellowPath, color = Color(0xFFFBBC05))
+          }
+        }
+      }
+    }
+
+    norm.contains("flipkart") -> {
+      Surface(
+        shape = cornerShape,
+        color = Color(0xFF2874F0),
+        border = BorderStroke(1.dp, Color(0xFF1D4ED8)),
+        modifier = modifier.size(size)
+      ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+          Canvas(modifier = Modifier.size(size * 0.64f)) {
+            val w = this.size.width
+            val h = this.size.height
+            // Yellow shopping bag body
+            drawRoundRect(
+              color = Color(0xFFFFE500),
+              topLeft = Offset(w * 0.14f, h * 0.24f),
+              size = Size(w * 0.72f, h * 0.66f),
+              cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
+            )
+            // Bag handle arc
+            drawArc(
+              color = Color.White,
+              startAngle = 180f,
+              sweepAngle = 180f,
+              useCenter = false,
+              topLeft = Offset(w * 0.32f, h * 0.08f),
+              size = Size(w * 0.36f, h * 0.28f),
+              style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round)
+            )
+            // Royal blue 'f' stroke inside bag
+            val fPath =
+              Path().apply {
+                moveTo(w * 0.60f, h * 0.36f)
+                cubicTo(w * 0.46f, h * 0.36f, w * 0.44f, h * 0.44f, w * 0.44f, h * 0.80f)
+                moveTo(w * 0.34f, h * 0.54f)
+                lineTo(w * 0.60f, h * 0.54f)
+              }
+            drawPath(
+              path = fPath,
+              color = Color(0xFF2874F0),
+              style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+            )
+          }
+        }
+      }
+    }
+
+    else -> {
+      Surface(
+        shape = cornerShape,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = modifier.size(size)
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.MonetizationOn,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(size * 0.5f)
+          )
+        }
+      }
+    }
+  }
+}
+
+/**
  * Renders an image from an HTTPS URL, content:// URI, or inline data:image/...;base64,... string.
  */
 @Composable

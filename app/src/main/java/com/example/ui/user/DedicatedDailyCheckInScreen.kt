@@ -158,8 +158,8 @@ fun DedicatedDailyCheckInScreen(
       // 1. Hero Banner + Separate Prominent Claim Button
       item {
         NeonGlassCard(
-          shape = RoundedCornerShape(24.dp),
-          borderColor = Color(0xFFC7D2FE),
+          shape = RoundedCornerShape(22.dp),
+          borderColor = Color(0xFFCBD5E1),
           backgroundColor = MaterialTheme.colorScheme.surface,
           modifier = Modifier.fillMaxWidth().testTag("daily_checkin_hero_card")
         ) {
@@ -176,7 +176,7 @@ fun DedicatedDailyCheckInScreen(
                 Text(
                   text = "30-DAY COIN REWARD CYCLE",
                   style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFF4F46E5),
+                  color = Color(0xFF1E3A8A),
                   fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(2.dp))
@@ -189,7 +189,7 @@ fun DedicatedDailyCheckInScreen(
                     },
                   style = MaterialTheme.typography.titleLarge,
                   color = MaterialTheme.colorScheme.onSurface,
-                  fontWeight = FontWeight.ExtraBold
+                  fontWeight = FontWeight.Bold
                 )
               }
               Surface(
@@ -201,7 +201,7 @@ fun DedicatedDailyCheckInScreen(
                   text = "Day $nextClaimDay / 30",
                   style = MaterialTheme.typography.labelSmall,
                   color = Color(0xFF92400E),
-                  fontWeight = FontWeight.ExtraBold,
+                  fontWeight = FontWeight.Bold,
                   modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                 )
               }
@@ -210,7 +210,7 @@ fun DedicatedDailyCheckInScreen(
             // Status / Timer Notice
             Surface(
               shape = RoundedCornerShape(12.dp),
-              color = Color(0xFFF1F5F9),
+              color = Color(0xFFF8FAFC),
               border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
               modifier = Modifier.fillMaxWidth()
             ) {
@@ -222,13 +222,13 @@ fun DedicatedDailyCheckInScreen(
                 Icon(
                   imageVector = Icons.Default.Schedule,
                   contentDescription = null,
-                  tint = Color(0xFFD97706),
+                  tint = Color(0xFF1E3A8A),
                   modifier = Modifier.size(16.dp)
                 )
                 Text(
                   text =
                     if (dailyCheckInState.canCheckInToday) {
-                      "Tap Claim below to watch a short video and collect +${formatCoins(todayRewardCoins)}!"
+                      "Claim today's +${formatCoins(todayRewardCoins)} streak reward below."
                     } else {
                       "Next daily check-in unlocks in $timeRemainingToTomorrow"
                     },
@@ -246,7 +246,7 @@ fun DedicatedDailyCheckInScreen(
               shape = RoundedCornerShape(14.dp),
               colors =
                 ButtonDefaults.buttonColors(
-                  containerColor = Color(0xFF059669),
+                  containerColor = Color(0xFF1E3A8A),
                   contentColor = Color.White,
                   disabledContainerColor = Color(0xFFE2E8F0),
                   disabledContentColor = Color(0xFF64748B)
@@ -278,7 +278,7 @@ fun DedicatedDailyCheckInScreen(
                 Text(
                   text = "Claim Day $nextClaimDay (+${formatCoins(todayRewardCoins)})",
                   style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.ExtraBold
+                  fontWeight = FontWeight.Bold
                 )
               } else {
                 Icon(
@@ -306,7 +306,7 @@ fun DedicatedDailyCheckInScreen(
           verticalAlignment = Alignment.CenterVertically
         ) {
           Text(
-            text = "30-Day Schedule (5 × 6 Grid)",
+            text = "30-Day Schedule",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
@@ -316,7 +316,7 @@ fun DedicatedDailyCheckInScreen(
             verticalAlignment = Alignment.CenterVertically
           ) {
             GridLegendDot(color = Color(0xFF059669), label = "Claimed")
-            GridLegendDot(color = Color(0xFF0284C7), label = "Today")
+            GridLegendDot(color = Color(0xFF1E3A8A), label = "Today")
             GridLegendDot(color = Color(0xFF64748B), label = "Locked")
           }
         }
@@ -365,41 +365,30 @@ fun DedicatedDailyCheckInScreen(
         }
       }
 
-      // 4. Rules & Streak Explanation Card
+      // 4. Concise Milestone Summary Card
       item {
         NeonGlassCard(
-          shape = RoundedCornerShape(20.dp),
+          shape = RoundedCornerShape(16.dp),
           borderColor = MaterialTheme.colorScheme.outlineVariant,
           backgroundColor = MaterialTheme.colorScheme.surface,
           modifier = Modifier.fillMaxWidth().testTag("daily_checkin_rules_card")
         ) {
-          Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
           ) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-              Icon(
-                imageVector = Icons.Default.Info,
-                contentDescription = null,
-                tint = Color(0xFF4F46E5),
-                modifier = Modifier.size(18.dp)
-              )
-              Text(
-                text = "Daily Check-in Rules",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.Bold
-              )
-            }
+            Icon(
+              imageVector = Icons.Default.EmojiEvents,
+              contentDescription = null,
+              tint = Color(0xFFD97706),
+              modifier = Modifier.size(20.dp)
+            )
             Text(
-              text =
-                "• 30-day repeating Coin schedule with milestone bonuses on Days 5, 10, 15, 20, 25, and 1,000 Coins on Day 30.\n• Tap Claim to watch a short rewarded video and receive today's Coins.\n• Missing a day resets your streak to Day 1.",
+              text = "Milestone bonuses on Days 5, 10, 15, 20, 25 & 1,000 Coins on Day 30.",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
-              lineHeight = 19.sp
+              fontWeight = FontWeight.Medium
             )
           }
         }

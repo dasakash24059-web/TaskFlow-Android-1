@@ -486,34 +486,19 @@ fun AdminWithdrawalRequestsSection(
             ) {
               Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.weight(1f)
               ) {
-                Surface(
-                  shape = RoundedCornerShape(10.dp),
-                  color = AdminBlueTint,
-                  modifier = Modifier.size(40.dp)
-                ) {
-                  Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                      imageVector =
-                        when {
-                          WithdrawalMethodType.isUpi(req.method) -> Icons.Default.QrCode2
-                          WithdrawalMethodType.isGiftCard(req.method) -> Icons.Default.CardGiftcard
-                          else -> Icons.Default.AccountBalance
-                        },
-                      contentDescription = null,
-                      tint = AdminBluePrimary,
-                      modifier = Modifier.size(20.dp)
-                    )
-                  }
-                }
+                com.example.ui.components.WithdrawalBrandLogo(
+                  methodKey = req.method,
+                  size = 42.dp
+                )
                 Column(modifier = Modifier.weight(1f)) {
                   Text(
                     text = req.userName.ifBlank { "TaskFlow User" },
                     style = MaterialTheme.typography.titleMedium,
                     color = AdminTextDark,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.testTag("admin_withdrawal_user_$reqId")
                   )
                   Text(
@@ -523,7 +508,7 @@ fun AdminWithdrawalRequestsSection(
                     modifier = Modifier.testTag("admin_withdrawal_method_$reqId")
                   )
                   Text(
-                    text = "ID: $reqId • ${formatCoins(coinsVal)}" +
+                    text = formatCoins(coinsVal) +
                       if (req.upiId.isNotBlank()) " • UPI: ${req.upiId}" else "",
                     style = MaterialTheme.typography.labelSmall,
                     color = AdminTextMuted,
@@ -544,7 +529,7 @@ fun AdminWithdrawalRequestsSection(
                         text = displayStatus,
                         style = MaterialTheme.typography.labelSmall,
                         color = statusFg,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
                       )
                     }

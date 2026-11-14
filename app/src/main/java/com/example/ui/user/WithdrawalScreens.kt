@@ -113,8 +113,8 @@ fun WithdrawalMainScreen(
           methodKey = WithdrawalMethodType.UPI,
           route = WithdrawalScreenRoute.UPI,
           icon = Icons.Default.QrCode2,
-          accentColor = Color(0xFF4F46E5),
-          containerTint = Color(0xFFEEF2FF),
+          accentColor = Color(0xFF1E3A8A),
+          containerTint = Color(0xFFDBEAFE),
           testTag = "withdrawal_option_upi"
         ),
         MethodTileMeta(
@@ -131,7 +131,7 @@ fun WithdrawalMainScreen(
           methodKey = WithdrawalMethodType.GOOGLE_PLAY_GIFT_CARD,
           route = WithdrawalScreenRoute.GOOGLE_PLAY_GIFT_CARD,
           icon = Icons.Default.PlayArrow,
-          accentColor = Color(0xFF0D9488),
+          accentColor = Color(0xFF0F766E),
           containerTint = Color(0xFFCCFBF1),
           testTag = "withdrawal_option_google_play"
         ),
@@ -140,7 +140,7 @@ fun WithdrawalMainScreen(
           methodKey = WithdrawalMethodType.FLIPKART_GIFT_CARD,
           route = WithdrawalScreenRoute.FLIPKART_GIFT_CARD,
           icon = Icons.Default.ShoppingBag,
-          accentColor = Color(0xFF2563EB),
+          accentColor = Color(0xFF1D4ED8),
           containerTint = Color(0xFFDBEAFE),
           testTag = "withdrawal_option_flipkart"
         )
@@ -177,7 +177,7 @@ fun WithdrawalMainScreen(
           Text(
             text = "Withdraw",
             style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.ExtraBold,
+            fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
           )
         }
@@ -190,7 +190,7 @@ fun WithdrawalMainScreen(
           Text(
             text = formatCoins(totalBalanceCoins),
             style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.ExtraBold,
+            fontWeight = FontWeight.Bold,
             color = Color(0xFFB45309),
             modifier =
               Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
@@ -260,7 +260,7 @@ fun WithdrawalMainScreen(
               Text(
                 text = "Withdrawal History",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface
               )
               Text(
@@ -292,19 +292,19 @@ private fun WithdrawalMethodGridCard(
     modifier =
       modifier
         .height(152.dp)
-        .clip(RoundedCornerShape(20.dp))
+        .clip(RoundedCornerShape(18.dp))
         .clickable(onClick = onClick)
         .testTag(meta.testTag),
-    shape = RoundedCornerShape(20.dp),
+    shape = RoundedCornerShape(18.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     border =
       BorderStroke(
         width = 1.dp,
         color =
-          if (enabled) meta.accentColor.copy(alpha = 0.25f)
-          else MaterialTheme.colorScheme.outlineVariant
+          if (enabled) MaterialTheme.colorScheme.outlineVariant
+          else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
       ),
-    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
   ) {
     Column(
       modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -313,22 +313,12 @@ private fun WithdrawalMethodGridCard(
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.Top
       ) {
-        Surface(
-          shape = RoundedCornerShape(14.dp),
-          color = if (enabled) meta.containerTint else MaterialTheme.colorScheme.surfaceVariant,
-          modifier = Modifier.size(46.dp)
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = meta.icon,
-              contentDescription = meta.title,
-              tint = if (enabled) meta.accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(24.dp)
-            )
-          }
-        }
+        com.example.ui.components.WithdrawalBrandLogo(
+          methodKey = meta.methodKey,
+          size = 48.dp
+        )
         if (!enabled) {
           Surface(
             shape = RoundedCornerShape(50),
@@ -338,17 +328,24 @@ private fun WithdrawalMethodGridCard(
               text = "Unavailable",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onErrorContainer,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
             )
           }
+        } else {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+          )
         }
       }
 
       Text(
         text = meta.title,
         style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.SemiBold,
         color =
           if (enabled) MaterialTheme.colorScheme.onSurface
           else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -409,7 +406,8 @@ fun UpiRedemptionScreen(
       ) {
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp)
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+          modifier = Modifier.weight(1f)
         ) {
           IconButton(
             onClick = onBack,
@@ -420,10 +418,16 @@ fun UpiRedemptionScreen(
               contentDescription = "Back"
             )
           }
+          com.example.ui.components.WithdrawalBrandLogo(
+            methodKey = WithdrawalMethodType.UPI,
+            size = 38.dp
+          )
           Text(
             text = "UPI Withdrawal",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.ExtraBold
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
           )
         }
         NeonCoinBadge(coins = totalBalanceCoins)
@@ -432,7 +436,7 @@ fun UpiRedemptionScreen(
       Text(
         text = "Select Amount",
         style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.SemiBold
       )
 
       Row(
@@ -446,7 +450,7 @@ fun UpiRedemptionScreen(
             denomination = denom,
             selected = selectedRupees == denom.amountRupees,
             available = available,
-            accentColor = Color(0xFF4F46E5),
+            accentColor = Color(0xFF1E3A8A),
             onClick = {
               if (available) {
                 selectedRupees = denom.amountRupees
@@ -486,7 +490,7 @@ fun UpiRedemptionScreen(
           Text(
             text = "Review Summary",
             style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           SummaryRow("Method", "UPI")
           SummaryRow("Amount", "₹${selectedDenom.amountRupees}")
@@ -524,10 +528,10 @@ fun UpiRedemptionScreen(
           onSubmit(selectedDenom.amountRupees, cleanedUpi)
         },
         enabled = !isBusy && isSelectedAvailable,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         colors =
           ButtonDefaults.buttonColors(
-            containerColor = Color(0xFF4F46E5),
+            containerColor = Color(0xFF1E3A8A),
             contentColor = Color.White
           ),
         modifier = Modifier.fillMaxWidth().height(52.dp).testTag("upi_submit_button")
@@ -542,7 +546,7 @@ fun UpiRedemptionScreen(
           Text(
             text = "Submit UPI Request",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
         }
       }
@@ -573,12 +577,7 @@ fun GiftCardRedemptionScreen(
 
   val denominations = WithdrawalCatalog.GIFT_CARD_DENOMINATIONS
   val methodTitle = WithdrawalMethodType.displayLabel(method)
-  val accentColor =
-    when (method) {
-      WithdrawalMethodType.AMAZON_GIFT_CARD -> Color(0xFFD97706)
-      WithdrawalMethodType.GOOGLE_PLAY_GIFT_CARD -> Color(0xFF0D9488)
-      else -> Color(0xFF2563EB)
-    }
+  val accentColor = Color(0xFF1E3A8A)
 
   var selectedRupees by rememberSaveable(method) {
     mutableStateOf(
@@ -611,7 +610,7 @@ fun GiftCardRedemptionScreen(
       ) {
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
           modifier = Modifier.weight(1f)
         ) {
           IconButton(
@@ -623,10 +622,14 @@ fun GiftCardRedemptionScreen(
               contentDescription = "Back"
             )
           }
+          com.example.ui.components.WithdrawalBrandLogo(
+            methodKey = method,
+            size = 38.dp
+          )
           Text(
             text = methodTitle,
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.ExtraBold,
+            fontWeight = FontWeight.Bold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
           )
@@ -637,7 +640,7 @@ fun GiftCardRedemptionScreen(
       Text(
         text = "Select Gift Card Value",
         style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.SemiBold
       )
 
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -673,7 +676,7 @@ fun GiftCardRedemptionScreen(
           Text(
             text = "Redemption Summary",
             style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           SummaryRow("Gift Card", methodTitle)
           SummaryRow("Value", "₹${selectedDenom.amountRupees}")
@@ -704,7 +707,7 @@ fun GiftCardRedemptionScreen(
           onSubmit(selectedDenom.amountRupees)
         },
         enabled = !isBusy && isSelectedAvailable,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         colors =
           ButtonDefaults.buttonColors(
             containerColor = accentColor,
@@ -722,7 +725,7 @@ fun GiftCardRedemptionScreen(
           Text(
             text = "Redeem ₹${selectedDenom.amountRupees} Gift Card",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
         }
       }
@@ -767,7 +770,7 @@ private fun DenominationCard(
         Text(
           text = "₹${denomination.amountRupees}",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.ExtraBold,
+          fontWeight = FontWeight.Bold,
           color =
             if (available) MaterialTheme.colorScheme.onSurface
             else MaterialTheme.colorScheme.onSurfaceVariant
@@ -775,7 +778,7 @@ private fun DenominationCard(
         Text(
           text = if (available) formatCoins(denomination.amountCoins) else "Currently Unavailable",
           style = MaterialTheme.typography.bodyMedium,
-          fontWeight = FontWeight.SemiBold,
+          fontWeight = FontWeight.Medium,
           color =
             when {
               !available -> MaterialTheme.colorScheme.error
@@ -789,7 +792,7 @@ private fun DenominationCard(
           imageVector = Icons.Default.CheckCircle,
           contentDescription = "Selected",
           tint = accentColor,
-          modifier = Modifier.size(24.dp)
+          modifier = Modifier.size(22.dp)
         )
       }
     }
@@ -811,7 +814,7 @@ private fun SummaryRow(label: String, value: String) {
     Text(
       text = value,
       style = MaterialTheme.typography.bodyMedium,
-      fontWeight = FontWeight.Bold,
+      fontWeight = FontWeight.SemiBold,
       color = MaterialTheme.colorScheme.onSurface
     )
   }
@@ -887,7 +890,7 @@ fun WithdrawalConfirmationScreen(
       Text(
         text = "Request Submitted Successfully!",
         style = MaterialTheme.typography.headlineSmall,
-        fontWeight = FontWeight.ExtraBold,
+        fontWeight = FontWeight.Bold,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onBackground
       )
@@ -933,7 +936,7 @@ fun WithdrawalConfirmationScreen(
                 text = request.requestId.ifBlank { request.id },
                 style = MaterialTheme.typography.labelMedium,
                 fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.testTag("withdrawal_confirm_request_id")
               )
             }
@@ -945,14 +948,14 @@ fun WithdrawalConfirmationScreen(
 
       Button(
         onClick = onViewHistory,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         modifier =
           Modifier.fillMaxWidth().height(50.dp).testTag("withdrawal_confirm_history_button")
       ) {
         Text(
           text = "View Withdrawal History",
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
       }
 
@@ -960,7 +963,7 @@ fun WithdrawalConfirmationScreen(
 
       OutlinedButton(
         onClick = onDone,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth().height(48.dp).testTag("withdrawal_confirm_done_button")
       ) {
         Text("Back to Wallet", fontWeight = FontWeight.SemiBold)
@@ -1021,7 +1024,7 @@ fun WithdrawalHistoryScreen(
         Text(
           text = "Withdrawal History",
           style = MaterialTheme.typography.headlineSmall,
-          fontWeight = FontWeight.ExtraBold
+          fontWeight = FontWeight.Bold
         )
       }
 
@@ -1073,7 +1076,7 @@ fun WithdrawalHistoryScreen(
                 Text(
                   text = "No Withdrawal Requests Found",
                   style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
               }
             }
@@ -1091,7 +1094,7 @@ fun WithdrawalHistoryScreen(
                 "Completed" -> Color(0xFFDCFCE7) to Color(0xFF15803D)
                 "Rejected" -> Color(0xFFFEE2E2) to Color(0xFFB91C1C)
                 "Delayed" -> Color(0xFFFFEDD5) to Color(0xFFC2410C)
-                "Processing", "Under Review" -> Color(0xFFDBEAFE) to Color(0xFF1D4ED8)
+                "Processing", "Under Review" -> Color(0xFFDBEAFE) to Color(0xFF1E3A8A)
                 else -> Color(0xFFFEF3C7) to Color(0xFFB45309)
               }
 
@@ -1110,17 +1113,27 @@ fun WithdrawalHistoryScreen(
                   horizontalArrangement = Arrangement.SpaceBetween,
                   verticalAlignment = Alignment.CenterVertically
                 ) {
-                  Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                      text = "${req.getEffectiveMethodLabel()} • ₹${req.getEffectiveAmountRupees()}",
-                      style = MaterialTheme.typography.titleMedium,
-                      fontWeight = FontWeight.Bold
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.weight(1f)
+                  ) {
+                    com.example.ui.components.WithdrawalBrandLogo(
+                      methodKey = req.method,
+                      size = 42.dp
                     )
-                    Text(
-                      text = "${formatCoins(req.getEffectiveAmountCoins())} • $dateStr",
-                      style = MaterialTheme.typography.bodySmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                      Text(
+                        text = "${req.getEffectiveMethodLabel()} • ₹${req.getEffectiveAmountRupees()}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                      )
+                      Text(
+                        text = "${formatCoins(req.getEffectiveAmountCoins())} • $dateStr",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                      )
+                    }
                   }
                   Surface(
                     shape = RoundedCornerShape(50),
@@ -1130,19 +1143,12 @@ fun WithdrawalHistoryScreen(
                     Text(
                       text = displayStatus,
                       style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.Bold,
+                      fontWeight = FontWeight.SemiBold,
                       color = badgeFg,
                       modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                   }
                 }
-
-                Text(
-                  text = "Request ID: $reqId",
-                  style = MaterialTheme.typography.labelSmall,
-                  fontFamily = FontFamily.Monospace,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
 
                 if (req.upiId.isNotBlank()) {
                   Text(

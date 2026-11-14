@@ -48,8 +48,11 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Task
+import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -61,18 +64,25 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -96,6 +106,7 @@ import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TaskStep
 import com.example.data.model.TransactionRecord
+import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalAvailabilityConfig
 import com.example.data.model.WithdrawalMethod
@@ -103,6 +114,7 @@ import com.example.data.model.centsToCoins
 import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
 import com.example.data.model.formatVisibleUserEmail
+import com.example.data.model.getEffectiveBalanceCoins
 import com.example.data.model.isValidImageUrlOrDataUri
 import com.example.data.model.isValidTaskUrl
 import com.example.data.repository.encodeGalleryImageAsDataUri
@@ -427,71 +439,181 @@ fun AdminDashboardScreen(
   val pendingUsersCount =
     registeredUsers.count { it.approvalStatus.equals("pending", ignoreCase = true) }
 
-  BackHandler(enabled = currentTab != AdminTab.HOME) {
-    navigateToTab(AdminTab.HOME)
+  val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+  val drawerScope = rememberCoroutineScope()
+
+  BackHandler(enabled = drawerState.isOpen || currentTab != AdminTab.HOME) {
+    if (drawerState.isOpen) {
+      drawerScope.launch { drawerState.close() }
+    } else {
+      navigateToTab(AdminTab.HOME)
+    }
   }
 
-  Scaffold(
-    containerColor = AdminWhiteBg,
-    floatingActionButtonPosition = androidx.compose.material3.FabPosition.Start,
-    floatingActionButton = {
-      if (currentTab == AdminTab.TASKS || currentTab == AdminTab.OVERVIEW) {
-        FloatingActionButton(
-          onClick = {
-            editingTask = null
-            preselectedAssignee = null
-            showTaskModal = true
-          },
-          containerColor = AdminBluePrimary,
-          contentColor = Color.White,
-          modifier = Modifier.testTag("admin_create_task_fab")
+  ModalNavigationDrawer(
+    drawerState = drawerState,
+    drawerContent = {
+      ModalDrawerSheet(
+        drawerContainerColor = AdminWhiteBg,
+        modifier = Modifier.width(290.dp).testTag("admin_navigation_drawer")
+      ) {
+        Column(
+          modifier =
+            Modifier.fillMaxSize()
+              .verticalScroll(rememberScrollState())
+              .padding(vertical = 12.dp)
         ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+          // Drawer Header
+          Surface(
+            color = AdminBluePrimary,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)
           ) {
-            Icon(imageVector = Icons.Default.Add, contentDescription = "Create Task")
-            Text("New Task", style = MaterialTheme.typography.labelLarge)
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(14.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+              Surface(
+                shape = CircleShape,
+                color = Color.White.copy(alpha = 0.18f),
+                modifier = Modifier.size(40.dp)
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  Icon(
+                    imageVector = Icons.Default.AdminPanelSettings,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                  )
+                }
+              }
+              Column {
+                Text(
+                  text = "TaskFlow Admin",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = Color.White,
+                  fontWeight = FontWeight.Bold
+                )
+                Text(
+                  text = "Mobile Control Center",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color(0xFFDBEAFE)
+                )
+              }
+            }
+          }
+
+          Spacer(modifier = Modifier.height(6.dp))
+
+          NavigationDrawerItem(
+            label = { Text("Dashboard Home", fontWeight = FontWeight.SemiBold) },
+            icon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
+            selected = currentTab == AdminTab.HOME,
+            onClick = {
+              navigateToTab(AdminTab.HOME)
+              drawerScope.launch { drawerState.close() }
+            },
+            colors =
+              NavigationDrawerItemDefaults.colors(
+                selectedContainerColor = AdminBlueTint,
+                selectedIconColor = AdminBluePrimary,
+                selectedTextColor = AdminBluePrimary
+              ),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+          )
+
+          HorizontalDivider(
+            color = AdminBorderColor,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+          )
+
+          ADMIN_10_MAIN_SECTIONS.forEach { section ->
+            val isSelected = currentTab == section.tab
+            NavigationDrawerItem(
+              label = { Text(section.label, fontWeight = FontWeight.Medium) },
+              icon = { Icon(section.icon, contentDescription = null) },
+              selected = isSelected,
+              onClick = {
+                navigateToTab(section.tab)
+                drawerScope.launch { drawerState.close() }
+              },
+              colors =
+                NavigationDrawerItemDefaults.colors(
+                  selectedContainerColor = AdminBlueTint,
+                  selectedIconColor = AdminBluePrimary,
+                  selectedTextColor = AdminBluePrimary
+                ),
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+            )
           }
         }
       }
     }
-  ) { innerPadding ->
-    Column(
-      modifier =
-        Modifier.fillMaxSize()
-          .background(AdminWhiteBg)
-          .padding(innerPadding)
-          .padding(horizontal = 16.dp, vertical = 8.dp)
-    ) {
-      if (currentTab == AdminTab.HOME) {
-        AdminControlCenterHomeScreen(
-          users = registeredUsers,
-          tasks = activeManagedTasks,
-          campaigns = campaigns,
-          reviewTasks = mergedReviewTasks,
-          withdrawalRequests = withdrawalRequests,
-          transactions = transactions,
-          activityLogs = activityLogs,
-          onSelectSection = navigateToTab
-        )
-      } else {
-        // Dedicated Management Page Header with Back Navigation to Dashboard Home
-        AdminDedicatedPageHeader(
-          activeTab = currentTab,
-          onBackToHome = { navigateToTab(AdminTab.HOME) }
-        )
+  ) {
+    Scaffold(
+      containerColor = AdminWhiteBg,
+      floatingActionButtonPosition = androidx.compose.material3.FabPosition.Start,
+      floatingActionButton = {
+        if (currentTab == AdminTab.TASKS || currentTab == AdminTab.OVERVIEW) {
+          FloatingActionButton(
+            onClick = {
+              editingTask = null
+              preselectedAssignee = null
+              showTaskModal = true
+            },
+            containerColor = AdminBluePrimary,
+            contentColor = Color.White,
+            modifier = Modifier.testTag("admin_create_task_fab")
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 16.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              Icon(imageVector = Icons.Default.Add, contentDescription = "Create Task")
+              Text("New Task", style = MaterialTheme.typography.labelLarge)
+            }
+          }
+        }
+      }
+    ) { innerPadding ->
+      Column(
+        modifier =
+          Modifier.fillMaxSize()
+            .background(AdminWhiteBg)
+            .padding(innerPadding)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+      ) {
+        if (currentTab == AdminTab.HOME) {
+          AdminControlCenterHomeScreen(
+            users = registeredUsers,
+            tasks = activeManagedTasks,
+            campaigns = campaigns,
+            reviewTasks = mergedReviewTasks,
+            withdrawalRequests = withdrawalRequests,
+            transactions = transactions,
+            activityLogs = activityLogs,
+            onSelectSection = navigateToTab,
+            onOpenDrawer = { drawerScope.launch { drawerState.open() } }
+          )
+        } else {
+          // Dedicated Management Page Header with Back Navigation to Dashboard Home & Drawer Trigger
+          AdminDedicatedPageHeader(
+            activeTab = currentTab,
+            onBackToHome = { navigateToTab(AdminTab.HOME) },
+            onOpenDrawer = { drawerScope.launch { drawerState.open() } }
+          )
 
-        Spacer(modifier = Modifier.height(6.dp))
+          Spacer(modifier = Modifier.height(6.dp))
 
-        // Ultra-compact live metrics strip on dedicated pages
-        AdminMetricsBanner(
-          totalTasks = tasks.size,
-          pendingReviews = pendingSubmissionsCount,
-          approvedSubmissions = approvedSubmissionsCount,
-          totalUsers = registeredUsers.size
-        )
+          // Ultra-compact live metrics strip on dedicated pages
+          AdminMetricsBanner(
+            totalTasks = tasks.size,
+            pendingReviews = pendingSubmissionsCount,
+            approvedSubmissions = approvedSubmissionsCount,
+            totalUsers = registeredUsers.size
+          )
 
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -533,13 +655,25 @@ fun AdminDashboardScreen(
             )
           }
           AdminTab.SUBMISSIONS -> {
-            AdminSubmissionsTabContent(
-              tasks = mergedReviewTasks,
-              withdrawalRequests = withdrawalRequests,
-              selectedFilter = submissionFilter,
-              onSelectFilter = onSelectSubmissionFilter,
-              onReviewSubmission = onReviewSubmission
-            )
+            if (mergedReviewTasks.isEmpty() && withdrawalRequests.any { it.isDemo }) {
+              LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                contentPadding = PaddingValues(bottom = 24.dp)
+              ) {
+                item {
+                  AdminWithdrawalRequestsSection(withdrawalRequests = withdrawalRequests)
+                }
+              }
+            } else {
+              AdminSubmissionsTabContent(
+                tasks = mergedReviewTasks,
+                withdrawalRequests = withdrawalRequests,
+                selectedFilter = submissionFilter,
+                onSelectFilter = onSelectSubmissionFilter,
+                onReviewSubmission = onReviewSubmission
+              )
+            }
           }
           AdminTab.VERIFICATION_FRAUD -> {
             AdminVerificationFraudSection(
@@ -644,6 +778,7 @@ fun AdminDashboardScreen(
         }
       }
     }
+  }
   }
 }
 
@@ -808,9 +943,37 @@ private fun AdminTasksTabContent(
     verticalArrangement = Arrangement.spacedBy(12.dp),
     contentPadding = PaddingValues(bottom = 88.dp)
   ) {
-    if (withdrawalRequests.isNotEmpty()) {
-      item {
-        AdminWithdrawalRequestsSection(withdrawalRequests = withdrawalRequests)
+    // Task Status Summary Strip at the TOP of Tasks Management
+    item {
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+      ) {
+        listOf(
+          "ALL" to "Total (${tasks.size})",
+          "ACTIVE" to "Active ($activeTasksCount)",
+          "PAUSED" to "Paused ($pausedTasksCount)",
+          "COMPLETED" to "Completed ($completedTasksCount)"
+        ).forEach { (key, label) ->
+          FilterChip(
+            selected = taskFilter == key,
+            onClick = { taskFilter = key },
+            label = { Text(label) }
+          )
+        }
+        Surface(
+          shape = RoundedCornerShape(8.dp),
+          color = AdminAmberTint,
+          modifier = Modifier.align(Alignment.CenterVertically)
+        ) {
+          Text(
+            text = "Pending Proofs: $pendingReviewCount",
+            style = MaterialTheme.typography.labelSmall,
+            color = AdminAmberWarning,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+          )
+        }
       }
     }
 
@@ -1051,40 +1214,6 @@ private fun AdminTasksTabContent(
         }
       }
     }
-
-    // Task Status Summary Strip
-    item {
-      Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-      ) {
-        listOf(
-          "ALL" to "Total (${tasks.size})",
-          "ACTIVE" to "Active ($activeTasksCount)",
-          "PAUSED" to "Paused ($pausedTasksCount)",
-          "COMPLETED" to "Completed ($completedTasksCount)"
-        ).forEach { (key, label) ->
-          FilterChip(
-            selected = taskFilter == key,
-            onClick = { taskFilter = key },
-            label = { Text(label) }
-          )
-        }
-        Surface(
-          shape = RoundedCornerShape(8.dp),
-          color = AdminAmberTint,
-          modifier = Modifier.align(Alignment.CenterVertically)
-        ) {
-          Text(
-            text = "Pending Proofs: $pendingReviewCount",
-            style = MaterialTheme.typography.labelSmall,
-            color = AdminAmberWarning,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-          )
-        }
-      }
-    }
   }
 }
 
@@ -1101,7 +1230,6 @@ internal fun AdminSubmissionsTabContent(
     remember(tasks, selectedFilter) {
       when (selectedFilter) {
         "all" -> tasks.filter { it.status != TaskStatus.PENDING }
-        "withdrawals" -> emptyList()
         else -> tasks.filter { it.status == selectedFilter }
       }
     }
@@ -1111,8 +1239,7 @@ internal fun AdminSubmissionsTabContent(
       TaskStatus.SUBMITTED to "Needs Review (${tasks.count { it.status == TaskStatus.SUBMITTED }})",
       TaskStatus.APPROVED to "Approved (${tasks.count { it.status == TaskStatus.APPROVED }})",
       TaskStatus.REJECTED to "Rejected (${tasks.count { it.status == TaskStatus.REJECTED }})",
-      "all" to "All Submissions (${tasks.count { it.status != TaskStatus.PENDING }})",
-      "withdrawals" to "Withdrawal Requests (${withdrawalRequests.size})"
+      "all" to "All Submissions (${tasks.count { it.status != TaskStatus.PENDING }})"
     )
 
   Column(modifier = Modifier.fillMaxSize()) {
@@ -1137,34 +1264,26 @@ internal fun AdminSubmissionsTabContent(
       verticalArrangement = Arrangement.spacedBy(14.dp),
       contentPadding = PaddingValues(bottom = 24.dp)
     ) {
-      if (selectedFilter == "withdrawals" || withdrawalRequests.isNotEmpty()) {
+      if (filtered.isEmpty()) {
         item {
-          AdminWithdrawalRequestsSection(withdrawalRequests = withdrawalRequests)
-        }
-      }
-
-      if (selectedFilter != "withdrawals") {
-        if (filtered.isEmpty()) {
-          item {
-            Box(
-              modifier = Modifier.fillMaxWidth().padding(24.dp),
-              contentAlignment = Alignment.Center
-            ) {
-              Text(
-                text = "No submissions in this queue.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-              )
-            }
-          }
-        } else {
-          items(filtered, key = { it.id }) { task ->
-            SubmissionReviewCard(
-              task = task,
-              isFlaggedSuspicious = suspiciousSubmissionIds.contains(task.id),
-              onReview = { approve, feedback -> onReviewSubmission(task, approve, feedback) }
+          Box(
+            modifier = Modifier.fillMaxWidth().padding(24.dp),
+            contentAlignment = Alignment.Center
+          ) {
+            Text(
+              text = "No submissions in this queue.",
+              style = MaterialTheme.typography.bodyLarge,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
             )
           }
+        }
+      } else {
+        items(filtered, key = { it.id }) { task ->
+          SubmissionReviewCard(
+            task = task,
+            isFlaggedSuspicious = suspiciousSubmissionIds.contains(task.id),
+            onReview = { approve, feedback -> onReviewSubmission(task, approve, feedback) }
+          )
         }
       }
     }
@@ -1179,6 +1298,7 @@ private fun SubmissionReviewCard(
 ) {
   var feedbackInput by rememberSaveable(task.id) { mutableStateOf(task.adminFeedback) }
   var showFullSizeImage by rememberSaveable(task.id) { mutableStateOf(false) }
+  var showTechnicalDetails by rememberSaveable(task.id) { mutableStateOf(false) }
   val isReviewable = task.status == TaskStatus.SUBMITTED
   val submissionDateStr =
     task.updatedAt?.toDate()?.let {
@@ -1192,6 +1312,36 @@ private fun SubmissionReviewCard(
       title = "Proof Screenshot • ${task.title}",
       storagePath = task.proofStoragePath,
       onDismiss = { showFullSizeImage = false }
+    )
+  }
+
+  if (showTechnicalDetails) {
+    AlertDialog(
+      onDismissRequest = { showTechnicalDetails = false },
+      modifier = Modifier.testTag("submission_technical_details_dialog_${task.id}"),
+      title = {
+        Text(
+          text = "Submission Technical Details",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.Bold
+        )
+      },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          AdminDetailInfoRow(label = "Submitted By", value = task.assignedUserName)
+          AdminDetailInfoRow(label = "User UID", value = task.assignedUserId)
+          AdminDetailInfoRow(label = "Task ID", value = task.id)
+          if (task.proofStoragePath.isNotBlank()) {
+            AdminDetailInfoRow(label = "Storage Ref", value = task.proofStoragePath)
+          }
+          AdminDetailInfoRow(label = "Submitted At", value = submissionDateStr)
+        }
+      },
+      confirmButton = {
+        TextButton(onClick = { showTechnicalDetails = false }) {
+          Text("Close")
+        }
+      }
     )
   }
 
@@ -1255,41 +1405,50 @@ private fun SubmissionReviewCard(
 
       Spacer(modifier = Modifier.height(10.dp))
 
-      // Submission Metadata: User Name, User UID, Task ID, and Submission Date/Time
+      // Clean Submission Metadata Summary (Raw IDs moved to secondary Technical Details dialog; testTags preserved)
       Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
         modifier = Modifier.fillMaxWidth()
       ) {
-        Column(
-          modifier = Modifier.padding(12.dp),
-          verticalArrangement = Arrangement.spacedBy(4.dp)
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
         ) {
-          Text(
-            text = "User Name: ${task.assignedUserName}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.testTag("review_user_name_${task.id}")
-          )
-          Text(
-            text = "User UID: ${task.assignedUserId}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.testTag("review_user_uid_${task.id}")
-          )
-          Text(
-            text = "Task ID: ${task.id}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.testTag("review_task_id_${task.id}")
-          )
-          Text(
-            text = "Submitted: $submissionDateStr",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.testTag("review_submission_date_${task.id}")
-          )
+          Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+          ) {
+            Text(
+              text = "Member: ${task.assignedUserName}",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurface,
+              fontWeight = FontWeight.SemiBold,
+              modifier = Modifier.testTag("review_user_name_${task.id}")
+            )
+            Text(
+              text = "Submitted: $submissionDateStr",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.testTag("review_submission_date_${task.id}")
+            )
+            Row {
+              Box(modifier = Modifier.size(1.dp).testTag("review_user_uid_${task.id}"))
+              Box(modifier = Modifier.size(1.dp).testTag("review_task_id_${task.id}"))
+            }
+          }
+          TextButton(
+            onClick = { showTechnicalDetails = true },
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+            modifier = Modifier.testTag("review_technical_details_btn_${task.id}")
+          ) {
+            Text(
+              text = "Details",
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.SemiBold
+            )
+          }
         }
       }
 
@@ -1386,15 +1545,7 @@ private fun SubmissionReviewCard(
             }
 
             if (task.proofStoragePath.isNotBlank()) {
-              Spacer(modifier = Modifier.height(6.dp))
-              Text(
-                text = "Storage Ref: ${task.proofStoragePath}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.testTag("review_proof_storage_path_${task.id}")
-              )
+              Box(modifier = Modifier.size(1.dp).testTag("review_proof_storage_path_${task.id}"))
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -1698,7 +1849,13 @@ private fun AdminUsersTabContent(
           AdminDetailInfoRow(label = "User ID", value = uid)
           AdminDetailInfoRow(label = "Role", value = user.role.uppercase(Locale.US))
           AdminDetailInfoRow(label = "Approval Status", value = user.approvalStatus.uppercase(Locale.US))
-          AdminDetailInfoRow(label = "Available Balance", value = formatRewardInr(user.balanceCents))
+          val userBalanceCoinsText =
+            if (user.balanceCents > 0L) {
+              "${formatCoins(user.getEffectiveBalanceCoins())} (${formatRewardInr(user.balanceCents)})"
+            } else {
+              formatCoins(user.getEffectiveBalanceCoins())
+            }
+          AdminDetailInfoRow(label = "Available Balance", value = userBalanceCoinsText)
           AdminDetailInfoRow(label = "Completed Tasks", value = "${user.completedTasksCount}")
           if (user.assignedTaskId.isNotBlank()) {
             AdminDetailInfoRow(label = "Assigned Task ID", value = user.assignedTaskId)
@@ -1731,8 +1888,11 @@ private fun AdminUsersTabContent(
                 )
               } else {
                 userTaskHistory.take(5).forEach { sub ->
+                  val subCoins = formatCoins(sub.getEffectiveRewardCoins())
+                  val subSecondaryInr =
+                    if (sub.rewardCents > 0L) " • ${formatRewardInr(sub.rewardCents)}" else ""
                   Text(
-                    text = "• ${sub.title} — ${TaskStatus.label(sub.status)} (${formatRewardInr(sub.rewardCents)})",
+                    text = "• ${sub.title} — ${TaskStatus.label(sub.status)} ($subCoins$subSecondaryInr)",
                     style = MaterialTheme.typography.bodySmall
                   )
                 }
@@ -1764,8 +1924,15 @@ private fun AdminUsersTabContent(
                 )
               } else {
                 userRewardHistory.take(5).forEach { tx ->
+                  val isDebit =
+                    tx.type == TransactionType.DEMO_WITHDRAWAL ||
+                      tx.type == TransactionType.WITHDRAWAL_DEBIT
+                  val sign = if (isDebit) "-" else "+"
+                  val txCoins = formatCoins(tx.getEffectiveAmountCoins())
+                  val txSecondaryInr =
+                    if (tx.amountCents > 0L) " (${formatRewardInr(tx.amountCents)})" else ""
                   Text(
-                    text = "• ${tx.title}: +${formatRewardInr(tx.amountCents)}",
+                    text = "• ${tx.title}: $sign$txCoins$txSecondaryInr",
                     style = MaterialTheme.typography.bodySmall
                   )
                 }

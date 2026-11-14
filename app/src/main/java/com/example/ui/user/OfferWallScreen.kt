@@ -128,7 +128,7 @@ fun OfferWallScreen(
       item {
         NeonGlassCard(
           modifier = Modifier.fillMaxWidth(),
-          borderColor = Color(0xFFA7F3D0),
+          borderColor = Color(0xFFCBD5E1),
           backgroundColor = MaterialTheme.colorScheme.surface
         ) {
           Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
@@ -140,7 +140,7 @@ fun OfferWallScreen(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-              text = "Complete verified mobile app installs, website registrations, and surveys to earn up to 5,000 Coins per offer.",
+              text = "Complete verified app installs, web signups, and surveys to earn bonus Coins.",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -158,16 +158,16 @@ fun OfferWallScreen(
             FilterChip(
               selected = selectedCategory == cat,
               onClick = { selectedCategory = cat },
-              label = { Text(cat, fontWeight = FontWeight.Bold) },
+              label = { Text(cat, fontWeight = FontWeight.SemiBold) },
               colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = Color(0xFF059669),
+                selectedContainerColor = Color(0xFF1E3A8A),
                 selectedLabelColor = Color.White,
                 containerColor = MaterialTheme.colorScheme.surface,
                 labelColor = MaterialTheme.colorScheme.onSurfaceVariant
               ),
               border = FilterChipDefaults.filterChipBorder(
                 borderColor = MaterialTheme.colorScheme.outlineVariant,
-                selectedBorderColor = Color(0xFF059669),
+                selectedBorderColor = Color(0xFF1E3A8A),
                 enabled = true,
                 selected = selectedCategory == cat
               )
@@ -205,7 +205,7 @@ fun OfferWallScreen(
               )
               Spacer(modifier = Modifier.height(6.dp))
               Text(
-                text = "Check back soon or select another category above to view high-reward tasks.",
+                text = "Select another category above to view available offers.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
               )
@@ -251,7 +251,7 @@ fun OfferWallScreen(
                   Text(
                     text = appOrSiteLabel,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF059669),
+                    color = Color(0xFF1E3A8A),
                     fontWeight = FontWeight.SemiBold
                   )
                 }
@@ -274,14 +274,14 @@ fun OfferWallScreen(
               ) {
                 Surface(
                   shape = RoundedCornerShape(50),
-                  color = Color(0xFFECFDF5),
-                  border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF6EE7B7))
+                  color = Color(0xFFF1F5F9),
+                  border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFCBD5E1))
                 ) {
                   Text(
                     text = offer.category.ifBlank { "Verified Offer" },
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF047857),
-                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF334155),
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                   )
                 }
@@ -290,7 +290,7 @@ fun OfferWallScreen(
                   onClick = { onSelectOffer(offer.id) },
                   shape = RoundedCornerShape(12.dp),
                   colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF059669),
+                    containerColor = Color(0xFF1E3A8A),
                     contentColor = Color.White
                   )
                 ) {

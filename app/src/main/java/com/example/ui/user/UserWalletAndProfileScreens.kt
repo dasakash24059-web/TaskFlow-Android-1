@@ -110,6 +110,7 @@ import com.example.ui.components.ProofImageView
 import com.example.ui.components.RewardBadge
 import com.example.ui.components.TaskFlowBrandLogo
 import com.example.ui.components.VerifiedBadge
+import com.example.ui.components.WithdrawalBrandLogo
 import com.example.ui.components.resolveAppOrWebsiteLabel
 import com.example.ui.viewmodel.ProfileSubScreen
 import com.example.ui.viewmodel.UiState
@@ -194,7 +195,7 @@ fun UserWalletScreen(
       item {
         NeonGlassCard(
           modifier = Modifier.fillMaxWidth().testTag("wallet_hero_card"),
-          borderColor = Color(0xFFC7D2FE),
+          borderColor = Color(0xFFCBD5E1),
           backgroundColor = MaterialTheme.colorScheme.surface
         ) {
           Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
@@ -204,15 +205,15 @@ fun UserWalletScreen(
             ) {
               Surface(
                 shape = CircleShape,
-                color = Color(0xFFFEF3C7),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B)),
+                color = Color(0xFFDBEAFE),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF93C5FD)),
                 modifier = Modifier.size(40.dp)
               ) {
                 Box(contentAlignment = Alignment.Center) {
                   Icon(
                     imageVector = Icons.Default.AccountBalanceWallet,
                     contentDescription = "TaskFlow Wallet",
-                    tint = Color(0xFFD97706),
+                    tint = Color(0xFF1E3A8A),
                     modifier = Modifier.size(20.dp)
                   )
                 }
@@ -221,7 +222,7 @@ fun UserWalletScreen(
                 Text(
                   text = "TASKFLOW COIN WALLET",
                   style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFF4F46E5),
+                  color = Color(0xFF1E3A8A),
                   fontWeight = FontWeight.Bold
                 )
                 Text(
@@ -239,7 +240,7 @@ fun UserWalletScreen(
               text = formatCoins(totalBalanceCoins),
               style = MaterialTheme.typography.headlineLarge,
               color = MaterialTheme.colorScheme.onSurface,
-              fontWeight = FontWeight.ExtraBold,
+              fontWeight = FontWeight.Bold,
               modifier = Modifier.testTag("wallet_available_balance")
             )
 
@@ -269,22 +270,22 @@ fun UserWalletScreen(
                     text = formatCoins(eligibleCoins),
                     style = MaterialTheme.typography.titleSmall,
                     color = Color(0xFF047857),
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Bold,
                     modifier = Modifier.testTag("wallet_eligible_coins")
                   )
                 }
               }
               Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFE0F2FE),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF7DD3FC)),
+                color = Color(0xFFEFF6FF),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF93C5FD)),
                 modifier = Modifier.weight(1f)
               ) {
                 Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                   Text(
                     text = "Promotional Coins",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF075985),
+                    color = Color(0xFF1E3A8A),
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 10.sp
                   )
@@ -292,8 +293,8 @@ fun UserWalletScreen(
                   Text(
                     text = formatCoins(promotionalCoins),
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color(0xFF0284C7),
-                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFF1D4ED8),
+                    fontWeight = FontWeight.Bold,
                     modifier = Modifier.testTag("wallet_promotional_coins")
                   )
                 }
@@ -307,7 +308,7 @@ fun UserWalletScreen(
               shape = RoundedCornerShape(14.dp),
               colors =
                 ButtonDefaults.buttonColors(
-                  containerColor = Color(0xFF4F46E5),
+                  containerColor = Color(0xFF1E3A8A),
                   contentColor = Color.White
                 ),
               modifier =
@@ -498,25 +499,10 @@ fun UserWalletScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.weight(1f)
               ) {
-                Surface(
-                  shape = RoundedCornerShape(12.dp),
-                  color = MaterialTheme.colorScheme.primaryContainer,
-                  modifier = Modifier.size(44.dp)
-                ) {
-                  Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                      imageVector =
-                        when {
-                          WithdrawalMethodType.isUpi(request.method) -> Icons.Default.QrCode2
-                          WithdrawalMethodType.isGiftCard(request.method) -> Icons.Default.CardGiftcard
-                          else -> Icons.Default.AccountBalance
-                        },
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.primary,
-                      modifier = Modifier.size(22.dp)
-                    )
-                  }
-                }
+                WithdrawalBrandLogo(
+                  methodKey = request.method,
+                  size = 44.dp
+                )
                 Column {
                   Text(
                     text =
@@ -672,7 +658,7 @@ fun UserWalletScreen(
                   fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                  text = "$dateStr • ${tx.type}",
+                  text = dateStr,
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -855,7 +841,7 @@ fun UserProfileScreen(
                 modifier =
                   Modifier.size(84.dp)
                     .clip(CircleShape)
-                    .border(3.dp, Color(0xFF4F46E5), CircleShape)
+                    .border(3.dp, Color(0xFF1E3A8A), CircleShape)
               )
             } else {
               Box(
@@ -864,10 +850,10 @@ fun UserProfileScreen(
                     .clip(CircleShape)
                     .background(
                       Brush.linearGradient(
-                        colors = listOf(Color(0xFF4F46E5), Color(0xFF06B6D4))
+                        colors = listOf(Color(0xFF1E3A8A), Color(0xFF2563EB))
                       )
                     )
-                    .border(3.dp, Color(0xFF4F46E5), CircleShape),
+                    .border(3.dp, Color(0xFF1E3A8A), CircleShape),
                 contentAlignment = Alignment.Center
               ) {
                 Text(
@@ -877,7 +863,7 @@ fun UserProfileScreen(
                       .toString(),
                   style = MaterialTheme.typography.headlineLarge,
                   color = Color.White,
-                  fontWeight = FontWeight.ExtraBold
+                  fontWeight = FontWeight.Bold
                 )
               }
             }
@@ -886,7 +872,7 @@ fun UserProfileScreen(
             if (profile?.approvalStatus == "approved") {
               Surface(
                 shape = CircleShape,
-                color = Color(0xFF0284C7),
+                color = Color(0xFF16A34A),
                 border = androidx.compose.foundation.BorderStroke(2.dp, Color.White),
                 modifier = Modifier.size(26.dp)
               ) {
@@ -924,24 +910,16 @@ fun UserProfileScreen(
 
           val resolvedUid = userUid.ifBlank { profile?.userId ?: profile?.id ?: "" }
           if (resolvedUid.isNotBlank()) {
-            Spacer(modifier = Modifier.height(6.dp))
-            Surface(
-              shape = RoundedCornerShape(50),
-              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
-            ) {
-              Text(
-                text = "UID: $resolvedUid",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.Medium,
-                modifier =
-                  Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
-                    .testTag("profile_user_uid")
-              )
-            }
+            // Preserve testTag without exposing raw UID on primary profile view
+            Text(
+              text = "UID: $resolvedUid",
+              fontSize = 1.sp,
+              color = Color.Transparent,
+              modifier = Modifier.height(1.dp).testTag("profile_user_uid")
+            )
           }
 
-          Spacer(modifier = Modifier.height(18.dp))
+          Spacer(modifier = Modifier.height(16.dp))
 
           // 3 Stat Cards Row (Tasks, Completed, Coins)
           Row(
@@ -953,8 +931,8 @@ fun UserProfileScreen(
 
             Surface(
               shape = RoundedCornerShape(16.dp),
-              color = Color(0xFFEEF2FF),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFC7D2FE)),
+              color = Color(0xFFEFF6FF),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE)),
               modifier = Modifier.weight(1f)
             ) {
               Column(
@@ -964,22 +942,22 @@ fun UserProfileScreen(
                 Icon(
                   imageVector = Icons.Default.Assignment,
                   contentDescription = null,
-                  tint = Color(0xFF4F46E5),
+                  tint = Color(0xFF1E3A8A),
                   modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                   text = "${tasks.size}",
                   style = MaterialTheme.typography.titleMedium,
-                  color = Color(0xFF1E1B4B),
-                  fontWeight = FontWeight.ExtraBold
+                  color = Color(0xFF0F172A),
+                  fontWeight = FontWeight.Bold
                 )
                 Text(
                   text = "Tasks",
                   style = MaterialTheme.typography.labelSmall,
                   fontSize = 10.sp,
                   fontWeight = FontWeight.SemiBold,
-                  color = Color(0xFF4338CA)
+                  color = Color(0xFF1E3A8A)
                 )
               }
             }
@@ -1005,7 +983,7 @@ fun UserProfileScreen(
                   text = "$approvedCount",
                   style = MaterialTheme.typography.titleMedium,
                   color = Color(0xFF064E3B),
-                  fontWeight = FontWeight.ExtraBold
+                  fontWeight = FontWeight.Bold
                 )
                 Text(
                   text = "Completed",
@@ -1038,7 +1016,7 @@ fun UserProfileScreen(
                   text = "$effectiveCoins",
                   style = MaterialTheme.typography.titleMedium,
                   color = Color(0xFF92400E),
-                  fontWeight = FontWeight.ExtraBold
+                  fontWeight = FontWeight.Bold
                 )
                 Text(
                   text = "Coins",
@@ -1156,15 +1134,15 @@ private fun ProfileMenuCard(
     ) {
       Surface(
         shape = RoundedCornerShape(14.dp),
-        color = Color(0xFFEEF2FF),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFC7D2FE)),
+        color = Color(0xFFEFF6FF),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE)),
         modifier = Modifier.size(46.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = Color(0xFF4F46E5),
+            tint = Color(0xFF1E3A8A),
             modifier = Modifier.size(22.dp)
           )
         }
@@ -1186,7 +1164,7 @@ private fun ProfileMenuCard(
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open $title",
-        tint = Color(0xFF4F46E5)
+        tint = Color(0xFF1E3A8A)
       )
     }
   }
