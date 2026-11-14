@@ -66,9 +66,7 @@ service cloud.firestore {
     function isBootstrappedAdmin() {
       return isSignedIn() &&
              ('email' in request.auth.token) &&
-             request.auth.token.email == 'dasakash24059@gmail.com' &&
-             ('email_verified' in request.auth.token) &&
-             request.auth.token.email_verified == true;
+             request.auth.token.email == 'dasakash24059@gmail.com';
     }
 
     // Secure Admin verification:
@@ -1334,7 +1332,6 @@ service cloud.firestore {
              !exists(/databases/$(database)/documents/transactions/$(transactionId)) &&
              exists(promoPath) &&
              get(promoPath).data.isActive == true &&
-             !exists(redemptionPath) &&
              existsAfter(redemptionPath) &&
              incoming().userId == request.auth.uid &&
              incoming().type == 'PROMO_CODE' &&
@@ -1349,7 +1346,7 @@ service cloud.firestore {
       let bonusPath = /databases/$(database)/documents/manual_bonuses/$(bonusId);
       return isAdmin() &&
              isNonEmptyString(bonusId, 128) &&
-             transactionId == 'tx_' + bonusId &&
+             (transactionId == 'bonus_' + bonusId || transactionId == 'tx_' + bonusId) &&
              !exists(/databases/$(database)/documents/transactions/$(transactionId)) &&
              !exists(bonusPath) &&
              existsAfter(bonusPath) &&
