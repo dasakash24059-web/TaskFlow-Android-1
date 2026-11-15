@@ -1097,7 +1097,7 @@ object NotificationRewardType {
 }
 
 data class TelegramTaskItem(
-  @DocumentId val id: String = "",
+  val id: String = "",
   val taskId: String = "",
   val title: String = "",
   val channelUrl: String = "",
@@ -1117,7 +1117,7 @@ data class TelegramTaskItem(
 }
 
 data class TelegramTaskClaimRecord(
-  @DocumentId val id: String = "",
+  val id: String = "",
   val claimId: String = "",
   val taskId: String = "",
   val taskTitle: String = "",
@@ -1210,7 +1210,7 @@ object PromoCodeStatus {
 }
 
 data class PromoCodeItem(
-  @DocumentId val id: String = "",
+  val id: String = "",
   val code: String = "",
   val rewardCoins: Long = 0L,
   val maxSlots: Long = 1L,
@@ -1250,7 +1250,7 @@ data class PromoCodeItem(
 }
 
 data class PromoRedemptionRecord(
-  @DocumentId val id: String = "",
+  val id: String = "",
   val promoId: String = "",
   val code: String = "",
   val userId: String = "",
@@ -1285,7 +1285,7 @@ data class PromoRedemptionUiState(
 )
 
 data class ManualBonusRecord(
-  @DocumentId val id: String = "",
+  val id: String = "",
   val targetUserId: String = "",
   val targetUserName: String = "",
   val targetUserEmail: String = "",

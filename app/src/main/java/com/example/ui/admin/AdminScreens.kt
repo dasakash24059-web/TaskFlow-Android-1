@@ -2099,7 +2099,12 @@ private fun AdminUsersTabContent(
         }
       }
     } else {
-      items(filteredUsers, key = { it.userId.ifBlank { it.id } }) { user ->
+      val uniqueFilteredUsers =
+        filteredUsers.distinctBy { it.userId.ifBlank { it.id.ifBlank { it.email } } }
+      items(
+        uniqueFilteredUsers,
+        key = { it.userId.ifBlank { it.id.ifBlank { it.email.ifBlank { "user_${it.hashCode()}" } } } }
+      ) { user ->
         val uid = user.userId.ifBlank { user.id }
         val statusUpper = user.approvalStatus.uppercase(Locale.US)
         val statusColor = when (user.approvalStatus.lowercase(Locale.US)) {

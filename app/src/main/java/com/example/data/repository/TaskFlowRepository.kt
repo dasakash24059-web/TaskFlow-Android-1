@@ -1185,7 +1185,6 @@ class FirebaseRewardCloudFunctionsClient(
               tx.set(
                 redemptionRef,
                 mapOf(
-                  "id" to "${code}_$uid",
                   "promoId" to code,
                   "code" to code,
                   "userId" to uid,
@@ -1373,23 +1372,30 @@ class FirebaseRewardCloudFunctionsClient(
         val reason = map?.get("reason")?.toString().orEmpty().ifEmpty { "Special Admin Bonus" }
         val key = map?.get("idempotencyKey")?.toString().orEmpty().ifEmpty { randomSuffix }
         val adminUid = authProvider().currentUser?.uid?.trim().orEmpty()
+        val adminEmail = authProvider().currentUser?.email?.trim().orEmpty()
         var newBalance = amount
+        var newPromoCoins = amount
+        var resolvedTargetName = "TaskFlow Member"
+        var resolvedTargetEmail = ""
         if (targetUid.isNotBlank() && amount > 0L) {
           runCatching {
             firestore.runTransaction { tx ->
               val userRef = firestore.collection("users").document(targetUid)
               val userSnap = tx.get(userRef)
+              resolvedTargetName =
+                (userSnap.getString("displayName") ?: "TaskFlow Member").trim().ifEmpty { "TaskFlow Member" }
+              resolvedTargetEmail = (userSnap.getString("email") ?: "").trim()
               val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
               val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
               val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
               val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
-              val newPromo = curPromo + amount
-              newBalance = maxOf(curTotal + amount, curEligible + newPromo)
+              newPromoCoins = curPromo + amount
+              newBalance = maxOf(curTotal + amount, curEligible + newPromoCoins)
               tx.update(
                 userRef,
                 mapOf(
                   "balanceCoins" to newBalance,
-                  "promotionalCoins" to newPromo,
+                  "promotionalCoins" to newPromoCoins,
                   "lastRewardId" to rewardId,
                   "lastRewardType" to "BONUS",
                   "lastRewardAmountCoins" to amount,
@@ -1400,12 +1406,11 @@ class FirebaseRewardCloudFunctionsClient(
               tx.set(
                 bonusRef,
                 mapOf(
-                  "id" to key,
                   "targetUserId" to targetUid,
-                  "targetUserName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
-                  "targetUserEmail" to (userSnap.getString("email") ?: ""),
+                  "targetUserName" to resolvedTargetName,
+                  "targetUserEmail" to resolvedTargetEmail,
                   "adminId" to adminUid,
-                  "adminEmail" to (authProvider().currentUser?.email ?: ""),
+                  "adminEmail" to adminEmail,
                   "amountCoins" to amount,
                   "reason" to reason,
                   "idempotencyKey" to key,
@@ -1417,11 +1422,11 @@ class FirebaseRewardCloudFunctionsClient(
                 txRef,
                 mapOf(
                   "userId" to targetUid,
-                  "userName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
-                  "type" to "MANUAL_BONUS",
+                  "userName" to resolvedTargetName,
+                  "type" to TransactionType.ADMIN_MANUAL_BONUS,
                   "title" to "Admin Bonus: $reason",
                   "amountCoins" to amount,
-                  "amountCents" to 0L,
+                  "amountCents" to coinsToCents(amount),
                   "status" to "CREDITED",
                   "referenceId" to key,
                   "createdAt" to FieldValue.serverTimestamp()
@@ -1434,7 +1439,9 @@ class FirebaseRewardCloudFunctionsClient(
                   "userId" to targetUid,
                   "title" to "Bonus Coins Credited!",
                   "body" to "Admin credited $amount Coins to your account: $reason",
-                  "type" to "NOTIFICATION",
+                  "type" to NotificationRewardType.ADMIN_BONUS,
+                  "rewardCoins" to amount,
+                  "referenceId" to key,
                   "isRead" to false,
                   "createdAt" to FieldValue.serverTimestamp()
                 )
@@ -1448,9 +1455,15 @@ class FirebaseRewardCloudFunctionsClient(
           "success" to true,
           "id" to key,
           "targetUserId" to targetUid,
+          "targetUserName" to resolvedTargetName,
+          "targetUserEmail" to resolvedTargetEmail,
+          "adminId" to adminUid,
+          "adminEmail" to adminEmail,
           "amountCoins" to amount,
           "reason" to reason,
-          "idempotencyKey" to key
+          "idempotencyKey" to key,
+          "newPromotionalCoins" to newPromoCoins,
+          "newBalanceCoins" to newBalance
         )
       }
       else -> mapOf("success" to true)
@@ -2618,6 +2631,110 @@ class TaskFlowRepository(
     }
   }
 
+  private fun <T> DocumentSnapshot.toObjectSafe(clazz: Class<T>): T? {
+    if (!exists()) return null
+    return try {
+      toObject(clazz)
+    } catch (e: Throwable) {
+      Log.w("TaskFlowRepository", "Safe fallback for ${clazz.simpleName} on doc $id: ${e.message}")
+      null
+    }
+  }
+
+  private fun DocumentSnapshot.toUserProfileSafe(): UserProfile? {
+    if (!exists()) return null
+    return try {
+      val parsed = toObject(UserProfile::class.java)
+      if (parsed != null) {
+        parsed.copy(
+          id = id.ifBlank { parsed.userId },
+          userId = parsed.userId.ifBlank { id }
+        )
+      } else {
+        null
+      }
+    } catch (e: Throwable) {
+      Log.w("TaskFlowRepository", "Fallback parsing UserProfile for doc $id: ${e.message}")
+      val resolvedUid =
+        (runCatching { getString("userId") }.getOrNull()?.trim().orEmpty()).ifEmpty { id }
+      UserProfile(
+        id = id.ifBlank { resolvedUid },
+        userId = resolvedUid,
+        email = runCatching { getString("email") }.getOrNull()?.trim().orEmpty(),
+        displayName = runCatching { getString("displayName") }.getOrNull()?.trim().orEmpty(),
+        photoUrl = runCatching { getString("photoUrl") }.getOrNull()?.trim().orEmpty(),
+        role = runCatching { getString("role") }.getOrNull()?.trim().orEmpty().ifEmpty { "user" },
+        approvalStatus =
+          runCatching { getString("approvalStatus") }.getOrNull()?.trim().orEmpty().ifEmpty { "approved" },
+        balanceCents = runCatching { getLong("balanceCents") }.getOrNull() ?: 0L,
+        balanceCoins = runCatching { getLong("balanceCoins") }.getOrNull() ?: 0L,
+        eligibleCoins = runCatching { getLong("eligibleCoins") }.getOrNull() ?: 0L,
+        promotionalCoins = runCatching { getLong("promotionalCoins") }.getOrNull() ?: 0L,
+        virtualPoints = runCatching { getLong("virtualPoints") }.getOrNull() ?: 0L,
+        completedTasksCount = runCatching { getLong("completedTasksCount") }.getOrNull() ?: 0L,
+        assignedTaskId = runCatching { getString("assignedTaskId") }.getOrNull()?.trim().orEmpty(),
+        lastCheckInDate = runCatching { getString("lastCheckInDate") }.getOrNull()?.trim().orEmpty(),
+        checkInStreak = runCatching { getLong("checkInStreak") }.getOrNull() ?: 0L,
+        lastFreeSpinAt = runCatching { getTimestamp("lastFreeSpinAt") }.getOrNull(),
+        extraSpinVideosWatched = runCatching { getLong("extraSpinVideosWatched") }.getOrNull() ?: 0L,
+        extraSpinAvailable = runCatching { getBoolean("extraSpinAvailable") }.getOrNull() ?: false,
+        telegramJoinedVerified =
+          runCatching { getBoolean("telegramJoinedVerified") }.getOrNull() ?: false,
+        telegramRewardClaimed =
+          runCatching { getBoolean("telegramRewardClaimed") }.getOrNull() ?: false,
+        telegramUserId = runCatching { getString("telegramUserId") }.getOrNull()?.trim().orEmpty(),
+        lastCheckInTimestamp = runCatching { getTimestamp("lastCheckInTimestamp") }.getOrNull(),
+        createdAt = runCatching { getTimestamp("createdAt") }.getOrNull(),
+        updatedAt = runCatching { getTimestamp("updatedAt") }.getOrNull()
+      )
+    }
+  }
+
+  private fun DocumentSnapshot.toTransactionRecordSafe(): TransactionRecord? {
+    if (!exists()) return null
+    return try {
+      toObject(TransactionRecord::class.java)?.copy(id = id)
+    } catch (e: Throwable) {
+      Log.w("TaskFlowRepository", "Fallback parsing TransactionRecord for doc $id: ${e.message}")
+      TransactionRecord(
+        id = id,
+        userId = runCatching { getString("userId") }.getOrNull()?.trim().orEmpty(),
+        userName = runCatching { getString("userName") }.getOrNull()?.trim().orEmpty(),
+        type =
+          runCatching { getString("type") }.getOrNull()?.trim().orEmpty()
+            .ifEmpty { TransactionType.DAILY_CHECKIN },
+        title = runCatching { getString("title") }.getOrNull()?.trim().orEmpty(),
+        amountCents = runCatching { getLong("amountCents") }.getOrNull() ?: 0L,
+        amountCoins = runCatching { getLong("amountCoins") }.getOrNull() ?: 0L,
+        status =
+          runCatching { getString("status") }.getOrNull()?.trim().orEmpty().ifEmpty { "CREDITED" },
+        referenceId = runCatching { getString("referenceId") }.getOrNull()?.trim().orEmpty(),
+        createdAt = runCatching { getTimestamp("createdAt") }.getOrNull()
+      )
+    }
+  }
+
+  private fun DocumentSnapshot.toNotificationItemSafe(): NotificationItem? {
+    if (!exists()) return null
+    return try {
+      toObject(NotificationItem::class.java)?.copy(id = id)
+    } catch (e: Throwable) {
+      Log.w("TaskFlowRepository", "Fallback parsing NotificationItem for doc $id: ${e.message}")
+      NotificationItem(
+        id = id,
+        userId = runCatching { getString("userId") }.getOrNull()?.trim().orEmpty(),
+        title = runCatching { getString("title") }.getOrNull()?.trim().orEmpty(),
+        body =
+          runCatching { getString("body") ?: getString("message") }.getOrNull()?.trim().orEmpty(),
+        type = runCatching { getString("type") }.getOrNull()?.trim().orEmpty().ifEmpty { "INFO" },
+        rewardCoins = runCatching { getLong("rewardCoins") }.getOrNull() ?: 0L,
+        isRead = runCatching { getBoolean("isRead") }.getOrNull() ?: false,
+        referenceId = runCatching { getString("referenceId") }.getOrNull()?.trim().orEmpty(),
+        createdAt = runCatching { getTimestamp("createdAt") }.getOrNull()
+      )
+    }
+  }
+
   fun observeAdminActivityLogs(isAdminAuthorized: Boolean): Flow<List<AdminActivityLog>> =
     callbackFlow {
       if (!isAdminAuthorized) {
@@ -2632,11 +2749,13 @@ class TaskFlowRepository(
             return@addSnapshotListener
           }
           val logs =
-            snapshot
-              ?.documents
-              ?.mapNotNull { it.toObject(AdminActivityLog::class.java) }
-              ?.sortedByDescending { it.createdAt?.seconds ?: (it.timestampMillis / 1000L) }
-              ?: emptyList()
+            runCatching {
+              snapshot
+                ?.documents
+                ?.mapNotNull { it.toObjectSafe(AdminActivityLog::class.java) }
+                ?.sortedByDescending { it.createdAt?.seconds ?: (it.timestampMillis / 1000L) }
+                ?: emptyList()
+            }.getOrDefault(emptyList())
           trySend(logs)
         }
       awaitClose { listener.remove() }
@@ -2839,7 +2958,7 @@ class TaskFlowRepository(
     }
 
     val updatedSnap = userDocRef.get().await()
-    updatedSnap.toObject(UserProfile::class.java)
+    updatedSnap.toUserProfileSafe()
       ?: error("Failed to deserialize UserProfile for $uid")
   }
 
@@ -2849,7 +2968,7 @@ class TaskFlowRepository(
   suspend fun getUserProfile(uid: String): Result<UserProfile?> = runCatching {
     require(uid.isNotBlank()) { "uid must not be blank" }
     val snap = usersCollection.document(uid).get().await()
-    snap.toObject(UserProfile::class.java)
+    snap.toUserProfileSafe()
   }
 
   /**
@@ -2863,7 +2982,7 @@ class TaskFlowRepository(
           close(error)
           return@addSnapshotListener
         }
-        trySend(snapshot?.toObject(UserProfile::class.java))
+        trySend(snapshot?.toUserProfileSafe())
       }
     awaitClose { listener.remove() }
   }
@@ -2906,9 +3025,9 @@ class TaskFlowRepository(
     }
 
   private fun DocumentSnapshot.toTaskItem(): TaskItem? {
-    val parsed = toObject(TaskItem::class.java) ?: return null
-    val explicitActive = getBoolean("isActive") ?: true
-    return parsed.copy(isActive = explicitActive)
+    val parsed = toObjectSafe(TaskItem::class.java) ?: return null
+    val explicitActive = runCatching { getBoolean("isActive") }.getOrNull() ?: true
+    return parsed.copy(id = id.ifBlank { parsed.id }, isActive = explicitActive)
   }
 
   /**
@@ -2933,11 +3052,13 @@ class TaskFlowRepository(
           return@addSnapshotListener
         }
         val items =
-          snapshot
-            ?.documents
-            ?.mapNotNull { it.toTaskItem() }
-            ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
-            ?: emptyList()
+          runCatching {
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toTaskItem() }
+              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+              ?: emptyList()
+          }.getOrDefault(emptyList())
         trySend(items)
       }
     awaitClose { listener.remove() }
@@ -2969,13 +3090,15 @@ class TaskFlowRepository(
             return@addSnapshotListener
           }
           val items =
-            snapshot
-              ?.documents
-              ?.mapNotNull { it.toObject(SubmissionItem::class.java) }
-              ?.sortedByDescending {
-                it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L
-              }
-              ?: emptyList()
+            runCatching {
+              snapshot
+                ?.documents
+                ?.mapNotNull { it.toObjectSafe(SubmissionItem::class.java) }
+                ?.sortedByDescending {
+                  it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L
+                }
+                ?: emptyList()
+            }.getOrDefault(emptyList())
           trySend(items)
         }
     awaitClose { listener.remove() }
@@ -2988,7 +3111,7 @@ class TaskFlowRepository(
     require(uid.isNotBlank()) { "uid must not be blank" }
     val snapshot = submissionsCollection.whereEqualTo("userId", uid).get().await()
     snapshot.documents
-      .mapNotNull { it.toObject(SubmissionItem::class.java) }
+      .mapNotNull { it.toObjectSafe(SubmissionItem::class.java) }
       .sortedByDescending { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
   }
 
@@ -3007,7 +3130,7 @@ class TaskFlowRepository(
   suspend fun getSubmissionById(submissionId: String): Result<SubmissionItem?> = runCatching {
     require(submissionId.isNotBlank()) { "submissionId must not be blank" }
     val snap = submissionsCollection.document(submissionId).get().await()
-    snap.toObject(SubmissionItem::class.java)
+    snap.toObjectSafe(SubmissionItem::class.java)
   }
 
   /**
@@ -3028,11 +3151,13 @@ class TaskFlowRepository(
             return@addSnapshotListener
           }
           val items =
-            snapshot
-              ?.documents
-              ?.mapNotNull { it.toTaskItem() }
-              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
-              ?: emptyList()
+            runCatching {
+              snapshot
+                ?.documents
+                ?.mapNotNull { it.toTaskItem() }
+                ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+                ?: emptyList()
+            }.getOrDefault(emptyList())
           trySend(items)
         }
       awaitClose { listener.remove() }
@@ -3058,13 +3183,15 @@ class TaskFlowRepository(
           return@addSnapshotListener
         }
         val items =
-          snapshot
-            ?.documents
-            ?.mapNotNull { it.toObject(SubmissionItem::class.java) }
-            ?.sortedByDescending {
-              it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L
-            }
-            ?: emptyList()
+          runCatching {
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toObjectSafe(SubmissionItem::class.java) }
+              ?.sortedByDescending {
+                it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L
+              }
+              ?: emptyList()
+          }.getOrDefault(emptyList())
         trySend(items)
       }
     awaitClose { listener.remove() }
@@ -3076,7 +3203,7 @@ class TaskFlowRepository(
   suspend fun getAdminSubmissions(): Result<List<SubmissionItem>> = runCatching {
     val snapshot = submissionsCollection.get().await()
     snapshot.documents
-      .mapNotNull { it.toObject(SubmissionItem::class.java) }
+      .mapNotNull { it.toObjectSafe(SubmissionItem::class.java) }
       .sortedByDescending { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
   }
 
@@ -3100,11 +3227,13 @@ class TaskFlowRepository(
           return@addSnapshotListener
         }
         val users =
-          snapshot
-            ?.documents
-            ?.mapNotNull { it.toObject(UserProfile::class.java) }
-            ?.sortedBy { it.displayName.lowercase(Locale.US) }
-            ?: emptyList()
+          runCatching {
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toUserProfileSafe() }
+              ?.sortedBy { it.displayName.lowercase(Locale.US) }
+              ?: emptyList()
+          }.getOrDefault(emptyList())
         trySend(users)
       }
     awaitClose { listener.remove() }
@@ -3914,11 +4043,13 @@ class TaskFlowRepository(
             return@addSnapshotListener
           }
           val items =
-            snapshot
-              ?.documents
-              ?.mapNotNull { it.toObject(AdminNotificationItem::class.java) }
-              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
-              ?: emptyList()
+            runCatching {
+              snapshot
+                ?.documents
+                ?.mapNotNull { it.toObjectSafe(AdminNotificationItem::class.java) }
+                ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+                ?: emptyList()
+            }.getOrDefault(emptyList())
           trySend(items)
         }
       awaitClose { listener.remove() }
@@ -3974,7 +4105,7 @@ class TaskFlowRepository(
         check(existingReqSnap.getString("userId") == uid) {
           "Withdrawal request ID collision detected. Please try again."
         }
-        return@runTransaction existingReqSnap.toObject(DemoWithdrawalRequest::class.java)
+        return@runTransaction existingReqSnap.toObjectSafe(DemoWithdrawalRequest::class.java)
           ?: DemoWithdrawalRequest(
             id = resolvedRequestId,
             requestId = resolvedRequestId,
@@ -4584,11 +4715,13 @@ class TaskFlowRepository(
             return@addSnapshotListener
           }
           val items =
-            snapshot
-              ?.documents
-              ?.mapNotNull { it.toObject(DemoWithdrawalRequest::class.java) }
-              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
-              ?: emptyList()
+            runCatching {
+              snapshot
+                ?.documents
+                ?.mapNotNull { it.toObjectSafe(DemoWithdrawalRequest::class.java) }
+                ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+                ?: emptyList()
+            }.getOrDefault(emptyList())
           trySend(items)
         }
     awaitClose { listener.remove() }
@@ -4602,7 +4735,7 @@ class TaskFlowRepository(
       require(uid.isNotBlank()) { "uid must not be blank" }
       val snap = withdrawalRequestsCollection.whereEqualTo("userId", uid).get().await()
       snap.documents
-        .mapNotNull { it.toObject(DemoWithdrawalRequest::class.java) }
+        .mapNotNull { it.toObjectSafe(DemoWithdrawalRequest::class.java) }
         .sortedByDescending { it.createdAt?.seconds ?: 0L }
     }
 
@@ -4626,11 +4759,13 @@ class TaskFlowRepository(
           return@addSnapshotListener
         }
         val items =
-          snapshot
-            ?.documents
-            ?.mapNotNull { it.toObject(DemoWithdrawalRequest::class.java) }
-            ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
-            ?: emptyList()
+          runCatching {
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toObjectSafe(DemoWithdrawalRequest::class.java) }
+              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+              ?: emptyList()
+          }.getOrDefault(emptyList())
         trySend(items)
       }
     awaitClose { listener.remove() }
@@ -4642,7 +4777,7 @@ class TaskFlowRepository(
   suspend fun getAdminWithdrawalRequests(): Result<List<DemoWithdrawalRequest>> = runCatching {
     val snap = withdrawalRequestsCollection.get().await()
     snap.documents
-      .mapNotNull { it.toObject(DemoWithdrawalRequest::class.java) }
+      .mapNotNull { it.toObjectSafe(DemoWithdrawalRequest::class.java) }
       .sortedByDescending { it.createdAt?.seconds ?: 0L }
   }
 
@@ -4689,11 +4824,13 @@ class TaskFlowRepository(
             return@addSnapshotListener
           }
           val items =
-            snapshot
-              ?.documents
-              ?.mapNotNull { it.toObject(TransactionRecord::class.java) }
-              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
-              ?: emptyList()
+            runCatching {
+              snapshot
+                ?.documents
+                ?.mapNotNull { it.toTransactionRecordSafe() }
+                ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+                ?: emptyList()
+            }.getOrDefault(emptyList())
           trySend(items)
         }
     awaitClose { listener.remove() }
@@ -4719,11 +4856,13 @@ class TaskFlowRepository(
           return@addSnapshotListener
         }
         val items =
-          snapshot
-            ?.documents
-            ?.mapNotNull { it.toObject(TransactionRecord::class.java) }
-            ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
-            ?: emptyList()
+          runCatching {
+            snapshot
+              ?.documents
+              ?.mapNotNull { it.toTransactionRecordSafe() }
+              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+              ?: emptyList()
+          }.getOrDefault(emptyList())
         trySend(items)
       }
     awaitClose { listener.remove() }
@@ -5135,7 +5274,7 @@ class TaskFlowRepository(
         userWatchStatsCollection(uid).document(dateKey).addSnapshotListener { snapshot, error ->
           if (error == null) {
             subStats =
-              snapshot?.toObject(com.example.data.model.WatchStats::class.java)
+              snapshot?.toObjectSafe(com.example.data.model.WatchStats::class.java)
                 ?: com.example.data.model.WatchStats(userId = uid, dateKey = dateKey)
             emitMerged()
           }
@@ -5146,7 +5285,7 @@ class TaskFlowRepository(
         watchStatsCollection.document(statId).addSnapshotListener { snapshot, error ->
           if (error == null) {
             topStats =
-              snapshot?.toObject(com.example.data.model.WatchStats::class.java)
+              snapshot?.toObjectSafe(com.example.data.model.WatchStats::class.java)
                 ?: com.example.data.model.WatchStats(userId = uid, dateKey = dateKey)
             emitMerged()
           } else if (subStats == null) {
@@ -5170,8 +5309,11 @@ class TaskFlowRepository(
         close(error)
         return@addSnapshotListener
       }
-      val items = snapshot?.documents?.mapNotNull { it.toObject(CampaignItem::class.java) }
-        ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+      val items =
+        runCatching {
+          snapshot?.documents?.mapNotNull { it.toObjectSafe(CampaignItem::class.java) }
+            ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+        }.getOrDefault(emptyList())
       trySend(items)
     }
     awaitClose { listener.remove() }
@@ -5321,8 +5463,11 @@ class TaskFlowRepository(
           trySend(emptyList())
           return@addSnapshotListener
         }
-        val items = snapshot?.documents?.mapNotNull { it.toObject(NotificationItem::class.java) }
-          ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+        val items =
+          runCatching {
+            snapshot?.documents?.mapNotNull { it.toNotificationItemSafe() }
+              ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+          }.getOrDefault(emptyList())
         trySend(items)
       }
     awaitClose { listener.remove() }
@@ -5350,8 +5495,11 @@ class TaskFlowRepository(
           trySend(emptyList())
           return@addSnapshotListener
         }
-        val items = snapshot?.documents?.mapNotNull { it.toObject(SupportTicket::class.java) }
-          ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+        val items =
+          runCatching {
+            snapshot?.documents?.mapNotNull { it.toObjectSafe(SupportTicket::class.java) }
+              ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+          }.getOrDefault(emptyList())
         trySend(items)
       }
     awaitClose { listener.remove() }
@@ -5363,8 +5511,11 @@ class TaskFlowRepository(
         close(error)
         return@addSnapshotListener
       }
-      val items = snapshot?.documents?.mapNotNull { it.toObject(SupportTicket::class.java) }
-        ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+      val items =
+        runCatching {
+          snapshot?.documents?.mapNotNull { it.toObjectSafe(SupportTicket::class.java) }
+            ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+        }.getOrDefault(emptyList())
       trySend(items)
     }
     awaitClose { listener.remove() }
@@ -5417,8 +5568,11 @@ class TaskFlowRepository(
         trySend(emptyList())
         return@addSnapshotListener
       }
-      val apps = snapshot?.documents?.mapNotNull { it.toObject(AppItem::class.java) }
-        ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+      val apps =
+        runCatching {
+          snapshot?.documents?.mapNotNull { it.toObjectSafe(AppItem::class.java) }
+            ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+        }.getOrDefault(emptyList())
       trySend(apps)
     }
     awaitClose { listener.remove() }
@@ -5460,7 +5614,7 @@ class TaskFlowRepository(
         trySend(null)
         return@addSnapshotListener
       }
-      trySend(snapshot.toObject(UserTaskProgress::class.java))
+      trySend(snapshot.toObjectSafe(UserTaskProgress::class.java))
     }
     awaitClose { listener.remove() }
   }
@@ -5932,6 +6086,34 @@ class TaskFlowRepository(
     }
   }
 
+  private fun DocumentSnapshot.toManualBonusRecord(): ManualBonusRecord? {
+    if (!exists()) return null
+    return try {
+      val resolvedId = (runCatching { getString("id") }.getOrNull()?.trim().orEmpty()).ifEmpty { id }
+      val resolvedKey =
+        (runCatching { getString("idempotencyKey") }.getOrNull()?.trim().orEmpty()).ifEmpty { resolvedId }
+      val rawAmount =
+        runCatching { getLong("amountCoins") }.getOrNull()
+          ?: (runCatching { get("amountCoins") }.getOrNull() as? Number)?.toLong()
+          ?: 0L
+      ManualBonusRecord(
+        id = resolvedId,
+        targetUserId = runCatching { getString("targetUserId") }.getOrNull()?.trim().orEmpty(),
+        targetUserName = runCatching { getString("targetUserName") }.getOrNull()?.trim().orEmpty(),
+        targetUserEmail = runCatching { getString("targetUserEmail") }.getOrNull()?.trim().orEmpty(),
+        adminId = runCatching { getString("adminId") }.getOrNull()?.trim().orEmpty(),
+        adminEmail = runCatching { getString("adminEmail") }.getOrNull()?.trim().orEmpty(),
+        amountCoins = rawAmount,
+        reason = runCatching { getString("reason") }.getOrNull()?.trim().orEmpty(),
+        idempotencyKey = resolvedKey,
+        createdAt = runCatching { getTimestamp("createdAt") }.getOrNull()
+      )
+    } catch (e: Throwable) {
+      Log.w("TaskFlowRepository", "Skipping malformed ManualBonusRecord $id: ${e.message}")
+      null
+    }
+  }
+
   fun observeManualBonuses(isAdminAuthorized: Boolean): Flow<List<ManualBonusRecord>> =
     callbackFlow {
       if (!isAdminAuthorized) {
@@ -5946,11 +6128,13 @@ class TaskFlowRepository(
             return@addSnapshotListener
           }
           val list =
-            snapshot
-              ?.documents
-              ?.mapNotNull { it.toObject(ManualBonusRecord::class.java) }
-              ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
-              ?: emptyList()
+            runCatching {
+              snapshot
+                ?.documents
+                ?.mapNotNull { it.toManualBonusRecord() }
+                ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+                ?: emptyList()
+            }.getOrDefault(emptyList())
           trySend(list)
         }
       awaitClose { listener.remove() }

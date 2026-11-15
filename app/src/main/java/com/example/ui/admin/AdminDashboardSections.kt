@@ -1638,7 +1638,18 @@ fun AdminCoinsRewardsSection(
         }
       }
     } else {
-      items(creditTransactions.take(40), key = { it.id }) { tx ->
+      val uniqueCreditTransactions =
+        creditTransactions
+          .take(40)
+          .mapIndexed { idx, tx ->
+            val safeId =
+              tx.id.ifBlank {
+                "tx_${idx}_${tx.userId}_${tx.referenceId}_${tx.createdAt?.seconds ?: 0L}_${tx.amountCoins}"
+              }
+            if (tx.id == safeId) tx else tx.copy(id = safeId)
+          }
+          .distinctBy { it.id }
+      items(uniqueCreditTransactions, key = { it.id }) { tx ->
         val dateText =
           tx.createdAt?.toDate()?.let {
             SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
@@ -3128,7 +3139,12 @@ fun AdminVerificationFraudSection(
             }
           }
         } else {
-          items(displayedUsers, key = { it.id.ifBlank { it.userId } }) { user ->
+          val uniqueDisplayedUsers =
+            displayedUsers.distinctBy { it.id.ifBlank { it.userId.ifBlank { it.email } } }
+          items(
+            uniqueDisplayedUsers,
+            key = { it.id.ifBlank { it.userId.ifBlank { it.email.ifBlank { "user_${it.hashCode()}" } } } }
+          ) { user ->
             val targetUid = user.userId.ifBlank { user.id }
             Card(
               modifier = Modifier.fillMaxWidth(),
@@ -3772,5 +3788,7 @@ internal fun buildCombinedActivityEntries(
     )
   }
 
-  return items.sortedByDescending { it.timestampMillis }
+  return items
+    .sortedByDescending { it.timestampMillis }
+    .distinctBy { it.id }
 }

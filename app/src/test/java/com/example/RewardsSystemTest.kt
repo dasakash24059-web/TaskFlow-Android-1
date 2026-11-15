@@ -1779,4 +1779,173 @@ class RewardsSystemTest {
         calls.map { it.first }
       )
     }
+
+  @Test
+  fun admin_selfManualBonus_and_documentWithIdField_doesNotCrashOnLoginOrDashboardLoad() {
+    val adminEmail = "dasakash24059@gmail.com"
+    val adminUid = "admin_dasakash_uid"
+    val regularUid = "regular_user_uid"
+    val ledger = SimulatedRewardsLedger()
+
+    // Seed pre-existing admin and regular user accounts + pre-existing transaction history
+    ledger.users[adminUid] =
+      UserProfile(
+        id = adminUid,
+        userId = adminUid,
+        email = adminEmail,
+        displayName = "Akash Das",
+        role = "admin",
+        approvalStatus = "approved",
+        balanceCoins = 1000L,
+        eligibleCoins = 1000L
+      )
+    ledger.users[regularUid] =
+      UserProfile(
+        id = regularUid,
+        userId = regularUid,
+        email = "member@example.com",
+        displayName = "Regular Member",
+        role = "user",
+        approvalStatus = "approved",
+        balanceCoins = 400L,
+        eligibleCoins = 400L
+      )
+    ledger.transactions.add(
+      TransactionRecord(
+        id = "tx_preexisting_1",
+        userId = adminUid,
+        userName = "Akash Das",
+        type = TransactionType.TASK_REWARD,
+        title = "Pre-existing Task Reward",
+        amountCoins = 1000L,
+        status = "CREDITED",
+        createdAt = Timestamp.now()
+      )
+    )
+
+    // 1. Verify existing Manual Bonus records in Firestore containing an explicit "id" field
+    // deserialize cleanly via Firebase CustomClassMapper without throwing RuntimeException
+    val existingFirestoreBonusMap =
+      mapOf(
+        "id" to "existing_bonus_doc_key",
+        "targetUserId" to adminUid,
+        "targetUserEmail" to adminEmail,
+        "targetUserName" to "Akash Das",
+        "amountCoins" to 250L,
+        "reason" to "Existing Firestore Manual Bonus",
+        "adminId" to adminUid,
+        "adminEmail" to adminEmail,
+        "idempotencyKey" to "existing_bonus_doc_key"
+      )
+    val parsedExistingBonus =
+      com.google.firebase.firestore.util.CustomClassMapper.convertToCustomClass(
+        existingFirestoreBonusMap,
+        ManualBonusRecord::class.java,
+        null
+      )
+    assertNotNull(parsedExistingBonus)
+    assertEquals("existing_bonus_doc_key", parsedExistingBonus.id)
+    assertEquals(adminUid, parsedExistingBonus.targetUserId)
+    assertEquals(250L, parsedExistingBonus.amountCoins)
+
+    listOf(
+      ManualBonusRecord::class.java,
+      PromoCodeItem::class.java,
+      PromoRedemptionRecord::class.java,
+      TelegramTaskItem::class.java,
+      TelegramTaskClaimRecord::class.java
+    ).forEach { clazz ->
+      val idField = clazz.getDeclaredField("id")
+      assertFalse(
+        "${clazz.simpleName}.id must not have @DocumentId to prevent Firestore CustomClassMapper crash when 'id' is stored in document",
+        idField.isAnnotationPresent(com.google.firebase.firestore.DocumentId::class.java)
+      )
+    }
+
+    // 2. Admin credits a manual bonus to their own user account (dasakash24059@gmail.com)
+    val bonusRecord =
+      ledger.creditAdminManualBonus(
+        adminId = adminUid,
+        adminEmail = adminEmail,
+        targetUserId = adminUid,
+        amountCoins = 500L,
+        reason = "Admin Self Test Bonus",
+        idempotencyKey = "self_bonus_key_1"
+      )
+    assertEquals(adminUid, bonusRecord.targetUserId)
+    assertEquals(adminEmail, bonusRecord.targetUserEmail)
+    assertEquals(adminUid, bonusRecord.adminId)
+    assertEquals(adminEmail, bonusRecord.adminEmail)
+    assertEquals(500L, bonusRecord.amountCoins)
+
+    // 3. Verify bonus is credited exactly once (duplicate submission with same idempotencyKey is blocked)
+    try {
+      ledger.creditAdminManualBonus(
+        adminId = adminUid,
+        adminEmail = adminEmail,
+        targetUserId = adminUid,
+        amountCoins = 500L,
+        reason = "Admin Self Test Bonus",
+        idempotencyKey = "self_bonus_key_1"
+      )
+      fail("Expected duplicate manual bonus with same idempotencyKey to be rejected")
+    } catch (expected: IllegalStateException) {
+      assertTrue(expected.message.orEmpty().contains("already been credited"))
+    }
+
+    // 4. Verify wallet balance, pre-existing transaction history, new transaction, notification,
+    // and combined admin activity logs remain consistent and intact
+    assertEquals(1500L, ledger.users[adminUid]?.getEffectiveBalanceCoins())
+    assertEquals(400L, ledger.users[regularUid]?.getEffectiveBalanceCoins())
+    assertEquals(2, ledger.transactions.size)
+    assertTrue(ledger.transactions.any { it.id == "tx_preexisting_1" && it.amountCoins == 1000L })
+    assertTrue(
+      ledger.transactions.any {
+        it.type == TransactionType.ADMIN_MANUAL_BONUS &&
+          it.userId == adminUid &&
+          it.amountCoins == 500L
+      }
+    )
+    val adminNotifs = ledger.notificationsByUser[adminUid].orEmpty()
+    assertEquals(1, adminNotifs.size)
+    assertEquals(NotificationRewardType.ADMIN_BONUS, adminNotifs.first().type)
+    assertEquals(500L, adminNotifs.first().rewardCoins)
+
+    val combinedLogs =
+      com.example.ui.admin.buildCombinedActivityEntries(
+        activityLogs = emptyList(),
+        reviewTasks = emptyList(),
+        tasks = emptyList(),
+        campaigns = emptyList(),
+        transactions = ledger.transactions,
+        users = ledger.users.values.toList()
+      )
+    assertEquals(combinedLogs.size, combinedLogs.map { it.id }.distinct().size)
+
+    // 5. Verify AdminCoinsRewardsSection renders with self-bonus transaction & manual bonus record
+    // without throwing any duplicate key or runtime exception
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        AdminCoinsRewardsSection(
+          users = ledger.users.values.toList(),
+          reviewTasks = emptyList(),
+          transactions = ledger.transactions,
+          telegramTasks = emptyList(),
+          telegramClaims = emptyList(),
+          telegramConfig = ledger.telegramConfig,
+          promoCodes = ledger.promoCodes.values.toList(),
+          manualBonuses = listOf(parsedExistingBonus) + ledger.manualBonuses.values.toList()
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule
+      .onNodeWithTag("admin_coins_rewards_section")
+      .performScrollToNode(hasTestTag("admin_manual_bonus_section"))
+    composeTestRule.onNodeWithTag("admin_manual_bonus_section").assertIsDisplayed()
+  }
 }
+
+
+
