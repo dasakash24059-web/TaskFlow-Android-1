@@ -68,6 +68,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -82,6 +83,28 @@ import com.example.ui.components.NeonGlassCard
 import com.example.ui.components.TaskFlowBrandLogo
 import java.util.Calendar
 import java.util.Locale
+import java.util.TimeZone
+import kotlinx.coroutines.delay
+
+internal fun computeIstMidnightCountdownMillis(nowMillis: Long): Long {
+  val istTz = TimeZone.getTimeZone("Asia/Kolkata")
+  val cal = Calendar.getInstance(istTz, Locale.US)
+  cal.timeInMillis = nowMillis
+  cal.set(Calendar.HOUR_OF_DAY, 0)
+  cal.set(Calendar.MINUTE, 0)
+  cal.set(Calendar.SECOND, 0)
+  cal.set(Calendar.MILLISECOND, 0)
+  cal.add(Calendar.DAY_OF_YEAR, 1)
+  return (cal.timeInMillis - nowMillis).coerceAtLeast(0L)
+}
+
+internal fun formatCountdownHms(diffMillis: Long): String {
+  val clamped = diffMillis.coerceAtLeast(0L)
+  val hours = clamped / (1000L * 60L * 60L)
+  val minutes = (clamped / (1000L * 60L)) % 60L
+  val seconds = (clamped / 1000L) % 60L
+  return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+}
 
 /**
  * Dedicated Daily Check-in Screen with a compact 5 columns × 6 rows 30-day grid
@@ -105,19 +128,17 @@ fun DedicatedDailyCheckInScreen(
   BackHandler(onBack = onBack)
   val context = LocalContext.current
 
-  val timeRemainingToTomorrow = remember {
-    val now = System.currentTimeMillis()
-    val cal = Calendar.getInstance()
-    cal.set(Calendar.HOUR_OF_DAY, 24)
-    cal.set(Calendar.MINUTE, 0)
-    cal.set(Calendar.SECOND, 0)
-    cal.set(Calendar.MILLISECOND, 0)
-    val diff = (cal.timeInMillis - now).coerceAtLeast(0L)
-    val hours = diff / (1000 * 60 * 60)
-    val minutes = (diff / (1000 * 60)) % 60
-    val seconds = (diff / 1000) % 60
-    String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+  var remainingCountdownMs by remember {
+    mutableLongStateOf(computeIstMidnightCountdownMillis(System.currentTimeMillis()))
   }
+  LaunchedEffect(dailyCheckInState.canCheckInToday) {
+    remainingCountdownMs = computeIstMidnightCountdownMillis(System.currentTimeMillis())
+    while (!dailyCheckInState.canCheckInToday) {
+      delay(1_000L)
+      remainingCountdownMs = computeIstMidnightCountdownMillis(System.currentTimeMillis())
+    }
+  }
+  val timeRemainingToTomorrow = formatCountdownHms(remainingCountdownMs)
 
   val nextClaimDay = dailyCheckInState.nextClaimDay.coerceIn(1, 30)
   val todayRewardCoins = DailyCheckInConstants.getRewardCoinsForDay(nextClaimDay)
@@ -326,32 +347,7 @@ fun DedicatedDailyCheckInScreen(
         }
       }
 
-      // 1B. Telegram Join Reward (Visible ONLY when active and NOT yet claimed by this user)
-      if (telegramRewardState.shouldShowInDailyRewards(telegramConfig)) {
-        item {
-          TelegramJoinRewardDailyCard(
-            config = telegramConfig,
-            rewardState = telegramRewardState,
-            isBusy = isBusy,
-            onOpenTelegramUrl = { url ->
-              if (onJoinTelegramChannel != null) {
-                onJoinTelegramChannel(url)
-              } else {
-                runCatching {
-                  val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                  }
-                  context.startActivity(intent)
-                }
-              }
-            },
-            onVerifyMembership = onVerifyTelegramMembership,
-            onClaimReward = onClaimTelegramReward
-          )
-        }
-      }
-
-      // 1C. Daily Promo Code Entry Card inside Daily Rewards
+      // 1B. Daily Promo Code Entry Card inside Daily Rewards
       item {
         DailyPromoCodeEntryCard(
           onOpenPromoCodeScreen = onOpenPromoCodeScreen

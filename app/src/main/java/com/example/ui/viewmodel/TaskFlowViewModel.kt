@@ -36,9 +36,13 @@ import com.example.data.model.SupportTicket
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TaskStep
-import com.example.data.model.TelegramJoinConfig
-import com.example.data.model.TelegramUserRewardState
+import com.example.data.model.TelegramAccountLinkStatus
+import com.example.data.model.TelegramTaskClaimRecord
+import com.example.data.model.TelegramTaskItem
+import com.example.data.model.TelegramUserTaskState
+import com.example.data.model.TelegramVerifyResult
 import com.example.data.model.TransactionRecord
+import com.example.data.model.selectNextTelegramTaskForUser
 import com.example.data.model.UserProfile
 import com.example.data.model.UserTaskProgress
 import com.example.data.model.UpdateDownloadProgress
@@ -2383,7 +2387,8 @@ class TaskFlowViewModel(
     subject: String,
     message: String,
     category: String = "General",
-    onSuccess: () -> Unit = {}
+    onSuccess: () -> Unit = {},
+    onResult: (Boolean) -> Unit = {}
   ) {
     val name = (userProfileState.value as? UiState.Success)?.data?.displayName ?: currentUserDisplayName
     val email = currentUserEmail
@@ -2400,8 +2405,10 @@ class TaskFlowViewModel(
         _bannerMessage.value = "Support ticket submitted. Our team will review it shortly."
         _showSupportTicketDialog.value = false
         onSuccess()
+        onResult(true)
       }.onFailure { err ->
         _bannerMessage.value = err.localizedMessage ?: "Failed to submit ticket."
+        onResult(false)
       }
       _isBusy.value = false
     }
@@ -2424,40 +2431,80 @@ class TaskFlowViewModel(
   // TELEGRAM JOIN REWARD, PROMO CODES & MANUAL BONUS
   // ==========================================
 
-  val telegramJoinConfigState: StateFlow<TelegramJoinConfig> =
+  @OptIn(ExperimentalCoroutinesApi::class)
+  val telegramTasksState: StateFlow<List<TelegramTaskItem>> =
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        repository.observeTelegramTasks(authorized)
+      }
+      .catch { emit(emptyList()) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  val telegramClaimsState: StateFlow<List<TelegramTaskClaimRecord>> =
+    isAdminAuthorized
+      .flatMapLatest { authorized ->
+        repository.observeTelegramClaims(currentUserId, authorized)
+      }
+      .catch { emit(emptyList()) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+  val telegramUserTaskStates: StateFlow<Map<String, TelegramUserTaskState>> =
     repository
-      .observeTelegramJoinConfig()
-      .catch { emit(TelegramJoinConfig()) }
-      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TelegramJoinConfig())
+      .observeTelegramUserTaskStates(currentUserId)
+      .catch { emit(emptyMap()) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
-  private val _telegramUserRewardOverride = MutableStateFlow<TelegramUserRewardState?>(null)
-
-  val telegramUserRewardState: StateFlow<TelegramUserRewardState> =
-    kotlinx.coroutines.flow.combine(
-      repository.observeTelegramUserRewardState(currentUserId).catch { emit(TelegramUserRewardState(userId = currentUserId)) },
-      userProfileState,
-      _telegramUserRewardOverride
-    ) { docState, profileUiState, overrideState ->
-      val profile = (profileUiState as? UiState.Success)?.data
-      val profileClaimed = profile?.telegramRewardClaimed ?: false
-      val profileVerified = profile?.telegramJoinedVerified ?: false
-      val mergedClaimed = docState.isClaimed || profileClaimed || (overrideState?.isClaimed == true)
-      val mergedVerified = docState.isMembershipVerified || profileVerified || (overrideState?.isMembershipVerified == true)
-      TelegramUserRewardState(
-        userId = currentUserId,
-        telegramUserId = overrideState?.telegramUserId?.ifBlank { docState.telegramUserId }
-          ?: docState.telegramUserId.ifBlank { profile?.telegramUserId.orEmpty() },
-        isMembershipVerified = mergedVerified,
-        isClaimed = mergedClaimed,
-        claimedCoins = maxOf(docState.claimedCoins, overrideState?.claimedCoins ?: 0L),
-        statusMessage = overrideState?.statusMessage ?: docState.statusMessage,
-        errorMessage = overrideState?.errorMessage ?: docState.errorMessage
+  val telegramAccountStatus: StateFlow<TelegramAccountLinkStatus> =
+    repository
+      .observeTelegramAccountStatus(currentUserId)
+      .catch { emit(TelegramAccountLinkStatus(userId = currentUserId)) }
+      .stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        TelegramAccountLinkStatus(userId = currentUserId)
       )
-    }.stateIn(
-      viewModelScope,
-      SharingStarted.WhileSubscribed(5_000),
-      TelegramUserRewardState(userId = currentUserId)
-    )
+
+  private val _telegramTaskFeedback = MutableStateFlow<Map<String, TelegramUserTaskState>>(emptyMap())
+
+  val telegramTaskUiStates: StateFlow<Map<String, TelegramUserTaskState>> =
+    kotlinx.coroutines.flow.combine(
+      telegramUserTaskStates,
+      telegramClaimsState,
+      _telegramTaskFeedback
+    ) { docStates, claims, feedbackMap ->
+      val claimedIds = claims.mapNotNull { it.taskId.takeIf { id -> id.isNotBlank() } }.toSet()
+      val mergedKeys = docStates.keys + feedbackMap.keys + claimedIds
+      buildMap {
+        mergedKeys.forEach { tId ->
+          val doc = docStates[tId]
+          val fb = feedbackMap[tId]
+          val claimed = (doc?.isClaimed == true) || (fb?.isClaimed == true) || claimedIds.contains(tId)
+          val verified = (doc?.isMembershipVerified == true) || (fb?.isMembershipVerified == true)
+          put(
+            tId,
+            TelegramUserTaskState(
+              taskId = tId,
+              userId = currentUserId,
+              isMembershipVerified = verified,
+              isClaimed = claimed,
+              rewardCoinsClaimed = maxOf(doc?.rewardCoinsClaimed ?: 0L, fb?.rewardCoinsClaimed ?: 0L),
+              statusMessage = fb?.statusMessage ?: doc?.statusMessage.orEmpty(),
+              errorMessage = fb?.errorMessage ?: doc?.errorMessage
+            )
+          )
+        }
+      }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+  val nextTelegramTaskState: StateFlow<TelegramTaskItem?> =
+    kotlinx.coroutines.flow.combine(
+      telegramTasksState,
+      telegramTaskUiStates,
+      telegramClaimsState
+    ) { tasks, userStates, claims ->
+      selectNextTelegramTaskForUser(tasks, userStates, claims)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
   @OptIn(ExperimentalCoroutinesApi::class)
   val promoCodesState: StateFlow<List<PromoCodeItem>> =
@@ -2499,31 +2546,39 @@ class TaskFlowViewModel(
   private val _scratchCardUiState = MutableStateFlow(ScratchCardUiState())
   val scratchCardUiState: StateFlow<ScratchCardUiState> = _scratchCardUiState.asStateFlow()
 
+  private var scratchDailyObserverJob: kotlinx.coroutines.Job? = null
+
   fun setScratchCardScreenVisible(visible: Boolean) {
     _isScratchCardScreenVisible.value = visible
     if (visible) {
       loadScratchCardDailyState()
     } else {
+      scratchDailyObserverJob?.cancel()
+      scratchDailyObserverJob = null
       clearScratchFeedback()
     }
   }
 
   fun loadScratchCardDailyState() {
     if (currentUserId.isBlank()) return
-    viewModelScope.launch {
-      repository.observeScratchDailyState(currentUserId).collect { daily ->
-        _scratchCardUiState.update { current ->
-          current.copy(dailyState = daily)
-        }
-        if (daily.canScratchNow && _scratchCardUiState.value.activeSession == null && !_scratchCardUiState.value.isLoading) {
-          prepareScratchCard()
+    scratchDailyObserverJob?.cancel()
+    scratchDailyObserverJob =
+      viewModelScope.launch {
+        repository.observeScratchDailyState(currentUserId).collect { daily ->
+          _scratchCardUiState.update { current ->
+            current.copy(dailyState = daily)
+          }
+          val snapshot = _scratchCardUiState.value
+          if (daily.canScratchNow && snapshot.activeSession == null && !snapshot.isLoading) {
+            prepareScratchCard()
+          }
         }
       }
-    }
   }
 
   fun prepareScratchCard() {
     if (currentUserId.isBlank()) return
+    if (_scratchCardUiState.value.isLoading) return
     viewModelScope.launch {
       _scratchCardUiState.update { it.copy(isLoading = true, errorMessage = null) }
       try {
@@ -2533,13 +2588,17 @@ class TaskFlowViewModel(
             isLoading = false,
             activeSession = session,
             revealedCoins = session.rewardCoins,
-            isScratched = (session.status == "SCRATCHED"),
-            showCongratulations = false
+            isScratched = (session.status == "SCRATCHED") || it.dailyState.activeCardIsScratched,
+            showCongratulations = false,
+            errorMessage = null
           )
         }
       } catch (e: Exception) {
         _scratchCardUiState.update {
-          it.copy(isLoading = false, errorMessage = e.message)
+          it.copy(
+            isLoading = false,
+            errorMessage = e.message ?: "Unable to prepare Scratch Card."
+          )
         }
       }
     }
@@ -2632,17 +2691,34 @@ class TaskFlowViewModel(
       _scratchCardUiState.update { it.copy(isClaiming = true, errorMessage = null) }
       try {
         val coins = repository.claimScratchCardReward(session.cardId)
-        _scratchCardUiState.update {
-          it.copy(
+        var shouldPrepareNextCard = false
+        _scratchCardUiState.update { current ->
+          val prevDaily = current.dailyState
+          val nextDaily =
+            prevDaily.copy(
+              scratchesCompletedToday = prevDaily.scratchesCompletedToday + 1L,
+              hasUsedFreeScratchToday = true,
+              activeCardId = "",
+              activeCardRewardCoins = 0L,
+              activeCardIsScratched = false,
+              activeCardIsClaimed = true
+            )
+          shouldPrepareNextCard =
+            !nextDaily.isDailyLimitReached && nextDaily.unlockedScratchesCount > 0L
+          current.copy(
             isClaiming = false,
             showCongratulations = false,
             activeSession = null,
             isScratched = false,
             revealedCoins = 0L,
+            dailyState = nextDaily,
+            errorMessage = null,
             successMessage = "Successfully claimed +${formatCoins(coins)} Coins!"
           )
         }
-        prepareScratchCard()
+        if (shouldPrepareNextCard) {
+          prepareScratchCard()
+        }
       } catch (e: Exception) {
         _scratchCardUiState.update {
           it.copy(isClaiming = false, errorMessage = e.message ?: "Failed to claim reward.")
@@ -2673,47 +2749,68 @@ class TaskFlowViewModel(
     }
   }
 
-  fun verifyTelegramMembership(
-    telegramUserId: String,
-    onSuccess: () -> Unit = {}
+  fun verifyTelegramTask(
+    taskId: String,
+    onOpenBotLink: (String) -> Unit = {},
+    onSuccess: (TelegramVerifyResult) -> Unit = {}
   ) {
     if (_isBusy.value) return
-    val cleanedTgId = telegramUserId.trim()
-    if (cleanedTgId.isEmpty() || !cleanedTgId.all { it.isDigit() }) {
-      val msg = "Please enter your numeric Telegram User ID to verify channel membership."
-      _telegramUserRewardOverride.value =
-        (telegramUserRewardState.value).copy(errorMessage = msg, statusMessage = "")
-      _bannerMessage.value = msg
-      return
-    }
+    val cleanTaskId = taskId.trim()
+    if (cleanTaskId.isEmpty()) return
     _isBusy.value = true
     viewModelScope.launch {
       try {
         repository
-          .verifyTelegramMembership(currentUserId, cleanedTgId)
-          .onSuccess {
-            val msg = "Telegram membership verified! You can now claim your reward."
-            _telegramUserRewardOverride.value =
-              telegramUserRewardState.value.copy(
-                telegramUserId = cleanedTgId,
-                isMembershipVerified = true,
-                statusMessage = msg,
-                errorMessage = null
-              )
-            _bannerMessage.value = msg
-            onSuccess()
+          .verifyTelegramTaskMembership(currentUserId, cleanTaskId)
+          .onSuccess { result ->
+            val currentState = telegramTaskUiStates.value[cleanTaskId] ?: TelegramUserTaskState(taskId = cleanTaskId, userId = currentUserId)
+            if (result.verified) {
+              val msg = result.message.ifBlank { "Telegram membership verified! Tap CLAIM to collect your coins." }
+              _telegramTaskFeedback.update { map ->
+                map + (cleanTaskId to currentState.copy(
+                  isMembershipVerified = true,
+                  statusMessage = msg,
+                  errorMessage = null
+                ))
+              }
+              _bannerMessage.value = msg
+              onSuccess(result)
+            } else if (result.needsAccountLink) {
+              val msg = result.message.ifBlank { "Open the Telegram bot, tap Start, then tap VERIFY again." }
+              _telegramTaskFeedback.update { map ->
+                map + (cleanTaskId to currentState.copy(
+                  isMembershipVerified = false,
+                  statusMessage = msg,
+                  errorMessage = null
+                ))
+              }
+              _bannerMessage.value = msg
+              if (result.botLinkUrl.isNotBlank()) {
+                onOpenBotLink(result.botLinkUrl)
+              }
+            } else {
+              val msg = result.message.ifBlank { "Please join the Telegram channel first, then tap VERIFY." }
+              _telegramTaskFeedback.update { map ->
+                map + (cleanTaskId to currentState.copy(
+                  isMembershipVerified = false,
+                  statusMessage = "",
+                  errorMessage = msg
+                ))
+              }
+              _bannerMessage.value = msg
+            }
           }
           .onFailure { err ->
-            val msg =
-              err.localizedMessage
-                ?: "Telegram membership verification failed. Please join the channel first."
-            _telegramUserRewardOverride.value =
-              telegramUserRewardState.value.copy(
-                telegramUserId = cleanedTgId,
+            val currentState = telegramTaskUiStates.value[cleanTaskId] ?: TelegramUserTaskState(taskId = cleanTaskId, userId = currentUserId)
+            val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
+              ?: "Telegram membership verification failed. Please join the channel first."
+            _telegramTaskFeedback.update { map ->
+              map + (cleanTaskId to currentState.copy(
                 isMembershipVerified = false,
                 statusMessage = "",
                 errorMessage = msg
-              )
+              ))
+            }
             _bannerMessage.value = msg
           }
       } finally {
@@ -2722,44 +2819,51 @@ class TaskFlowViewModel(
     }
   }
 
-  fun claimTelegramJoinReward(onSuccess: (Long) -> Unit = {}) {
+  fun claimTelegramTask(
+    taskId: String,
+    onSuccess: (Long) -> Unit = {}
+  ) {
     if (_isBusy.value) return
-    val currentTgState = telegramUserRewardState.value
-    if (currentTgState.isClaimed) {
-      _bannerMessage.value = "You have already claimed the Telegram Join Reward."
+    val cleanTaskId = taskId.trim()
+    if (cleanTaskId.isEmpty()) return
+    val currentState = telegramTaskUiStates.value[cleanTaskId] ?: TelegramUserTaskState(taskId = cleanTaskId, userId = currentUserId)
+    if (currentState.isClaimed) {
+      _bannerMessage.value = "You have already claimed this Telegram task."
       return
     }
-    if (!currentTgState.isMembershipVerified) {
-      val msg = "Please join the Telegram channel and verify your membership before claiming."
-      _telegramUserRewardOverride.value = currentTgState.copy(errorMessage = msg)
+    if (!currentState.isMembershipVerified) {
+      val msg = "Please join the channel and tap VERIFY before claiming."
+      _telegramTaskFeedback.update { map ->
+        map + (cleanTaskId to currentState.copy(errorMessage = msg))
+      }
       _bannerMessage.value = msg
       return
     }
-    val profile = (userProfileState.value as? UiState.Success)?.data
-    val resolvedName =
-      profile?.displayName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
 
     _isBusy.value = true
     viewModelScope.launch {
       try {
         repository
-          .claimTelegramJoinReward(currentUserId, resolvedName)
+          .claimTelegramTaskReward(currentUserId, cleanTaskId)
           .onSuccess { creditedCoins ->
-            _telegramUserRewardOverride.value =
-              currentTgState.copy(
+            _telegramTaskFeedback.update { map ->
+              map + (cleanTaskId to currentState.copy(
                 isMembershipVerified = true,
                 isClaimed = true,
-                claimedCoins = creditedCoins,
+                rewardCoinsClaimed = creditedCoins,
                 statusMessage = "Success! +${formatCoins(creditedCoins)} credited to your wallet.",
                 errorMessage = null
-              )
+              ))
+            }
             _bannerMessage.value =
               "Telegram Join Reward claimed! +${formatCoins(creditedCoins)} added to your wallet."
             onSuccess(creditedCoins)
           }
           .onFailure { err ->
-            val msg = err.localizedMessage ?: "Failed to claim Telegram Join Reward."
-            _telegramUserRewardOverride.value = currentTgState.copy(errorMessage = msg)
+            val msg = err.localizedMessage?.takeIf { it.isNotBlank() } ?: "Failed to claim Telegram task reward."
+            _telegramTaskFeedback.update { map ->
+              map + (cleanTaskId to currentState.copy(errorMessage = msg))
+            }
             _bannerMessage.value = msg
           }
       } finally {
@@ -2839,15 +2943,16 @@ class TaskFlowViewModel(
     }
   }
 
-  fun adminUpdateTelegramJoinConfig(
+  fun adminCreateTelegramTask(
+    title: String,
     channelUrl: String,
     channelChatId: String = "",
     rewardCoins: Long,
-    isActive: Boolean,
-    onSuccess: () -> Unit = {}
+    isActive: Boolean = true,
+    onSuccess: (TelegramTaskItem) -> Unit = {}
   ) {
     if (!isAdminAuthorized.value) {
-      _bannerMessage.value = "Only authorized administrators can update Telegram reward settings."
+      _bannerMessage.value = "Only authorized administrators can create Telegram tasks."
       return
     }
     if (_isBusy.value) return
@@ -2855,20 +2960,46 @@ class TaskFlowViewModel(
     viewModelScope.launch {
       try {
         repository
-          .updateTelegramJoinConfig(
+          .createTelegramTask(
+            title = title,
             channelUrl = channelUrl,
             channelChatId = channelChatId,
             rewardCoins = rewardCoins,
             isActive = isActive
           )
-          .onSuccess { cfg ->
+          .onSuccess { created ->
             _bannerMessage.value =
-              "Telegram Join Task saved (${formatCoins(cfg.rewardCoins)}, ${if (cfg.isActive) "Active" else "Inactive"})."
-            onSuccess()
+              "Telegram Join Task '${created.title}' created (+${formatCoins(created.rewardCoins)})."
+            onSuccess(created)
           }
           .onFailure { err ->
             _bannerMessage.value =
-              err.localizedMessage ?: "Failed to update Telegram Join Task settings."
+              err.localizedMessage ?: "Failed to create Telegram Join Task."
+          }
+      } finally {
+        _isBusy.value = false
+      }
+    }
+  }
+
+  fun adminToggleTelegramTaskActive(taskId: String, isActive: Boolean) {
+    if (!isAdminAuthorized.value) {
+      _bannerMessage.value = "Only authorized administrators can update Telegram tasks."
+      return
+    }
+    if (_isBusy.value) return
+    _isBusy.value = true
+    viewModelScope.launch {
+      try {
+        repository
+          .setTelegramTaskActiveStatus(taskId = taskId, isActive = isActive)
+          .onSuccess { active ->
+            _bannerMessage.value =
+              "Telegram task marked as ${if (active) "Active" else "Inactive"}."
+          }
+          .onFailure { err ->
+            _bannerMessage.value =
+              err.localizedMessage ?: "Failed to update Telegram task status."
           }
       } finally {
         _isBusy.value = false

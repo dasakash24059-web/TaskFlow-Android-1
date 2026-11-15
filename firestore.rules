@@ -260,87 +260,10 @@ service cloud.firestore {
              isTaskAndSubmissionApprovedForUser(incoming().assignedTaskId, userId);
     }
 
-    // Approved user updating Telegram membership verification state on their profile (no coin change)
-    function isValidOwnerTelegramVerificationUpdate(userId) {
-      return request.auth.uid == userId &&
-             isApprovedUser(userId) &&
-             changedKeys().hasOnly(['telegramJoinedVerified', 'telegramUserId', 'updatedAt']) &&
-             incoming().telegramJoinedVerified == true &&
-             isNonEmptyString(incoming().telegramUserId, 64) &&
-             incoming().balanceCents == existing().balanceCents &&
-             incoming().role == existing().role &&
-             incoming().approvalStatus == existing().approvalStatus &&
-             incoming().updatedAt is timestamp;
-    }
-
-    // Approved user atomically claiming one-time Telegram Join Reward after membership verification
-    function isAtomicTelegramRewardClaimForUser(userId) {
-      let cfgPath = /databases/$(database)/documents/app_config/telegram_join_config;
-      let statePath = /databases/$(database)/documents/users/$(userId)/telegram_reward/status;
-      let oldPromo = ('promotionalCoins' in existing() && existing().promotionalCoins is int) ? existing().promotionalCoins : 0;
-      let oldBalanceCents = ('balanceCents' in existing() && existing().balanceCents is int) ? existing().balanceCents : 0;
-      let oldCentsCoins = int((oldBalanceCents * 125) / 100);
-      let oldEligible = ('eligibleCoins' in existing() && existing().eligibleCoins is int && existing().eligibleCoins > oldCentsCoins)
-        ? existing().eligibleCoins
-        : oldCentsCoins;
-      let oldBalanceCoins = ('balanceCoins' in existing() && existing().balanceCoins is int && existing().balanceCoins > (oldEligible + oldPromo))
-        ? existing().balanceCoins
-        : (oldEligible + oldPromo);
-      let rewardCoins = exists(cfgPath) ? get(cfgPath).data.rewardCoins : 0;
-      return request.auth.uid == userId &&
-             isApprovedUser(userId) &&
-             exists(cfgPath) &&
-             get(cfgPath).data.isActive == true &&
-             rewardCoins is int &&
-             rewardCoins > 0 &&
-             (!('telegramRewardClaimed' in existing()) || existing().telegramRewardClaimed != true) &&
-             (!exists(statePath) || !('isClaimed' in get(statePath).data) || get(statePath).data.isClaimed != true) &&
-             existsAfter(statePath) &&
-             getAfter(statePath).data.isMembershipVerified == true &&
-             getAfter(statePath).data.isClaimed == true &&
-             getAfter(statePath).data.rewardCoinsClaimed == rewardCoins &&
-             changedKeys().hasOnly([
-               'promotionalCoins',
-               'balanceCoins',
-               'telegramJoinedVerified',
-               'telegramRewardClaimed',
-               'telegramUserId',
-               'updatedAt'
-             ]) &&
-             incoming().telegramJoinedVerified == true &&
-             incoming().telegramRewardClaimed == true &&
-             incoming().promotionalCoins == oldPromo + rewardCoins &&
-             incoming().balanceCoins == oldBalanceCoins + rewardCoins &&
-             incoming().balanceCents == existing().balanceCents &&
-             incoming().role == existing().role &&
-             incoming().approvalStatus == existing().approvalStatus &&
-             incoming().updatedAt is timestamp;
-    }
-
-
-    // Admin atomically crediting a custom Manual Bonus to a user's wallet while preserving existing balance
-    function isAtomicAdminManualBonusForUser(userId) {
-      let oldPromo = ('promotionalCoins' in existing() && existing().promotionalCoins is int) ? existing().promotionalCoins : 0;
-      let newPromo = ('promotionalCoins' in incoming() && incoming().promotionalCoins is int) ? incoming().promotionalCoins : oldPromo;
-      let bonusDelta = newPromo - oldPromo;
-      let oldBalanceCents = ('balanceCents' in existing() && existing().balanceCents is int) ? existing().balanceCents : 0;
-      let oldCentsCoins = int((oldBalanceCents * 125) / 100);
-      let oldEligible = ('eligibleCoins' in existing() && existing().eligibleCoins is int && existing().eligibleCoins > oldCentsCoins)
-        ? existing().eligibleCoins
-        : oldCentsCoins;
-      let oldBalanceCoins = ('balanceCoins' in existing() && existing().balanceCoins is int && existing().balanceCoins > (oldEligible + oldPromo))
-        ? existing().balanceCoins
-        : (oldEligible + oldPromo);
-      return isAdmin() &&
-             changedKeys().hasOnly(['promotionalCoins', 'balanceCoins', 'updatedAt']) &&
-             bonusDelta > 0 &&
-             bonusDelta <= 10000000 &&
-             incoming().balanceCoins == oldBalanceCoins + bonusDelta &&
-             incoming().balanceCents == existing().balanceCents &&
-             incoming().role == existing().role &&
-             incoming().approvalStatus == existing().approvalStatus &&
-             incoming().updatedAt is timestamp;
-    }
+    // Telegram Join Verification, Linking, Claims & Manual Bonus Credits are strictly
+    // server-authoritative via Cloud Functions using Admin SDK (`creditManualBonus`,
+    // `createTelegramTask`, `setTelegramTaskActiveStatus`, `verifyTelegramTaskMembership`,
+    // `claimTelegramTaskReward`).
 
     function expectedWithdrawalCoins(method, amountRupees) {
       return (method == 'UPI' && amountRupees == 200) ? 33000 :
@@ -451,6 +374,7 @@ service cloud.firestore {
       let afterBalanceCoins = ('balanceCoins' in afterUser && afterUser.balanceCoins is int && afterUser.balanceCoins > (afterEligible + afterPromo))
         ? afterUser.balanceCoins
         : (afterEligible + afterPromo);
+      let mustPreserveOrIncludeBalanceCoins = ('balanceCoins' in afterUser) || (resource != null && 'balanceCoins' in resource.data);
       return incoming().keys().hasAll([
                'userId',
                'displayName',
@@ -478,7 +402,11 @@ service cloud.firestore {
              incoming().completedTasksCount is int &&
              incoming().completedTasksCount == afterUser.completedTasksCount &&
              incoming().approvalStatus == afterUser.approvalStatus &&
-             (!('balanceCoins' in incoming()) || (incoming().balanceCoins is int && incoming().balanceCoins == afterBalanceCoins)) &&
+             (
+               mustPreserveOrIncludeBalanceCoins
+                 ? ('balanceCoins' in incoming() && incoming().balanceCoins is int && incoming().balanceCoins == afterBalanceCoins)
+                 : (!('balanceCoins' in incoming()) || (incoming().balanceCoins is int && incoming().balanceCoins == afterBalanceCoins))
+             ) &&
              incoming().updatedAt is timestamp;
     }
 
@@ -1216,44 +1144,7 @@ service cloud.firestore {
     }
 
 
-    function isValidTelegramJoinTransaction(transactionId) {
-      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
-      let cfgPath = /databases/$(database)/documents/app_config/telegram_join_config;
-      let statePath = /databases/$(database)/documents/users/$(request.auth.uid)/telegram_reward/status;
-      return isSignedIn() &&
-             isApprovedUser(request.auth.uid) &&
-             transactionId == 'tg_join_' + request.auth.uid &&
-             !exists(/databases/$(database)/documents/transactions/$(transactionId)) &&
-             exists(cfgPath) &&
-             get(cfgPath).data.isActive == true &&
-             incoming().userId == request.auth.uid &&
-             incoming().type == 'TELEGRAM_JOIN' &&
-             incoming().status == 'CREDITED' &&
-             incoming().amountCoins is int &&
-             incoming().amountCoins > 0 &&
-             incoming().amountCoins == get(cfgPath).data.rewardCoins &&
-             existsAfter(statePath) &&
-             getAfter(statePath).data.isClaimed == true &&
-             existsAfter(userPath);
-    }
 
-
-    function isValidAdminManualBonusTransaction(transactionId) {
-      let bonusId = incoming().referenceId;
-      let bonusPath = /databases/$(database)/documents/manual_bonuses/$(bonusId);
-      return isAdmin() &&
-             isNonEmptyString(bonusId, 128) &&
-             (transactionId == 'bonus_' + bonusId || transactionId == 'tx_' + bonusId) &&
-             !exists(/databases/$(database)/documents/transactions/$(transactionId)) &&
-             !exists(bonusPath) &&
-             existsAfter(bonusPath) &&
-             incoming().type == 'ADMIN_MANUAL_BONUS' &&
-             incoming().status == 'CREDITED' &&
-             incoming().amountCoins is int &&
-             incoming().amountCoins > 0 &&
-             getAfter(bonusPath).data.amountCoins == incoming().amountCoins &&
-             getAfter(bonusPath).data.userId == incoming().userId;
-    }
 
     function isValidAdminDoc(adminId) {
       return hasExactKeys(['userId', 'email', 'createdAt']) &&
@@ -1295,9 +1186,7 @@ service cloud.firestore {
           request.auth.uid == userId && (
             ('displayName' in changed && isValidOwnerDisplayNameUpdate(userId)) ||
             ('role' in changed && isBootstrapAdminSelfInit(userId)) ||
-            ('lastWithdrawalRequestId' in changed && isAtomicWithdrawalDebitForUser(userId)) ||
-            ('telegramRewardClaimed' in changed && isAtomicTelegramRewardClaimForUser(userId)) ||
-            ('telegramJoinedVerified' in changed && !('telegramRewardClaimed' in changed) && isValidOwnerTelegramVerificationUpdate(userId))
+            ('lastWithdrawalRequestId' in changed && isAtomicWithdrawalDebitForUser(userId))
           )
         ) || (
           isAdmin() && (
@@ -1305,8 +1194,7 @@ service cloud.firestore {
             ('displayName' in changed && isValidAdminDisplayNameUpdate()) ||
             ('assignedTaskId' in changed && !('balanceCents' in changed) && (isAtomicTaskAssignmentToUser(userId) || isAtomicTaskUnassignmentFromUser(userId))) ||
             ('balanceCents' in changed && 'assignedTaskId' in changed && isAtomicTaskApprovalForUser(userId)) ||
-            ('lastRefundedWithdrawalId' in changed && isAtomicAdminWithdrawalRefund(userId)) ||
-            ('promotionalCoins' in changed && !('balanceCents' in changed) && isAtomicAdminManualBonusForUser(userId))
+            ('lastRefundedWithdrawalId' in changed && isAtomicAdminWithdrawalRefund(userId))
           )
         )
       );
@@ -1320,10 +1208,22 @@ service cloud.firestore {
       allow update: if isValidUserUpdate(userId);
       allow delete: if false;
 
-      // One-time Telegram Join Reward membership & claim state (managed securely via Cloud Functions)
+      // Legacy Telegram Join Reward membership & claim state (server-authoritative only)
       match /telegram_reward/{docId} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow create, update, delete: if isAdmin();
+        allow write: if false;
+      }
+
+      // Per-user Telegram Task verification & claim states (server-authoritative via Cloud Functions)
+      match /telegram_task_states/{taskId} {
+        allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow write: if false;
+      }
+
+      // Masked Telegram account link status indicator for owner UI (no raw secrets/tokens)
+      match /telegram_account/{docId} {
+        allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow write: if false;
       }
 
       // Daily check-in records & per-user watch stats (Server-authoritative via Cloud Functions Admin SDK)
@@ -1343,10 +1243,10 @@ service cloud.firestore {
         allow write: if false;
       }
 
+      // Legacy ad_sessions subcollection locked down to Admin SDK / read-only
       match /ad_sessions/{sessionId} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow create, update: if isSignedIn() && request.auth.uid == userId && isApprovedUser(userId);
-        allow delete: if false;
+        allow write: if false;
       }
 
       // Per-user scratch card sessions & scratch daily stats (Server-authoritative via Cloud Functions Admin SDK)
@@ -1368,7 +1268,16 @@ service cloud.firestore {
                         (
                           request.auth.uid == userId &&
                           (!('userId' in incoming()) || incoming().userId == userId) &&
-                          (!('type' in incoming()) || !(incoming().type in ['PROMO_CODE_REWARD', 'SCRATCH_CARD_REWARD', 'ADMIN_BONUS']))
+                          (!('type' in incoming()) || !(incoming().type in [
+                            'PROMO_CODE_REWARD',
+                            'SCRATCH_CARD_REWARD',
+                            'ADMIN_BONUS',
+                            'TELEGRAM_REWARD',
+                            'DAILY_CHECKIN',
+                            'WATCH_EARN_REWARD',
+                            'SPIN_EARN_REWARD',
+                            'TASK_REWARD'
+                          ]))
                         )
                       );
         allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && changedKeys().hasOnly(['isRead']);
@@ -1395,9 +1304,7 @@ service cloud.firestore {
       allow create: if isSignedIn() && (
         isValidAdminTaskRewardTransaction() ||
         isValidWithdrawalDebitTransaction(transactionId) ||
-        isValidAdminWithdrawalRefundTransaction(transactionId) ||
-        isValidTelegramJoinTransaction(transactionId) ||
-        isValidAdminManualBonusTransaction(transactionId)
+        isValidAdminWithdrawalRefundTransaction(transactionId)
       );
       allow update, delete: if false;
     }
@@ -1531,16 +1438,51 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Admin Manual Bonus Credit Audit Trail
+    // Admin Manual Bonus Credit Audit Trail (Strictly server-authoritative via creditManualBonus)
     match /manual_bonuses/{bonusId} {
       allow get, list: if isAdmin();
-      allow create: if isAdmin() &&
-                    !exists(/databases/$(database)/documents/manual_bonuses/$(bonusId)) &&
-                    isNonEmptyString(incoming().userId, 128) &&
-                    incoming().amountCoins is int &&
-                    incoming().amountCoins > 0 &&
-                    isNonEmptyString(incoming().creditedByAdminId, 128);
+      allow write: if false;
+    }
+
+    // Admin Activity Audit Logs
+    match /admin_logs/{logId} {
+      allow get, list: if isAdmin();
+      allow create: if isAdmin();
       allow update, delete: if false;
+    }
+
+    // Multi-Task Telegram Join System (Server-authoritative via Cloud Functions Admin SDK)
+    match /telegram_tasks/{taskId} {
+      allow get, list: if isSignedIn() && (
+        isAdmin() ||
+        (resource != null && resource.data.isActive == true)
+      );
+      allow write: if false;
+    }
+
+    match /telegram_claims/{claimId} {
+      allow get, list: if isSignedIn() && (
+        isAdmin() ||
+        (resource != null && resource.data.userId == request.auth.uid)
+      );
+      allow write: if false;
+    }
+
+    // Sensitive Telegram Linking & Anti-Abuse Bindings (Strictly Server Admin SDK only)
+    match /telegram_accounts/{userId} {
+      allow read, write: if false;
+    }
+
+    match /telegram_bindings/{telegramUserId} {
+      allow read, write: if false;
+    }
+
+    match /telegram_link_tokens/{token} {
+      allow read, write: if false;
+    }
+
+    match /telegram_task_user_claims/{claimKey} {
+      allow read, write: if false;
     }
 
     // Default deny for all other paths

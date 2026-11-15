@@ -4,8 +4,11 @@ const {
   _generateScratchRewardCoins,
   _getTodayDateString,
   _verifyUnityS2SSignature,
-  _resolveUnityS2SSecret
+  _resolveUnityS2SSecret,
+  _DAILY_CHECK_IN_REWARDS_COINS,
+  _rewardHandlers
 } = require("./index.js");
+
 
 (async () => {
   console.log("Starting TaskFlow Scratch Card Backend Unit & Security Test Suite...");
@@ -489,7 +492,215 @@ const {
     /Daily scratch limit \(50\) reached/
   );
 
+  // =========================================================================
+  // TEST 11: Real Cloud Function Handlers (Step 9 Scratch Card Fixes)
+  // =========================================================================
+  console.log("Test 11: Real Scratch Card handlers (deterministic tx/notif, wallet consistency, toMillisSafe)...");
+  const {
+    handleRecordScratchAdWatch,
+    handleCreateScratchCardSession,
+    handleClaimScratchCardReward,
+    generateWatchEarnRewardCoins
+  } = _rewardHandlers;
+
+  function createHandlerMockDb() {
+    const store = new Map();
+    let autoId = 0;
+    const clone = (v) => (v === null || typeof v !== "object" ? v : v instanceof Date ? new Date(v.getTime()) : Array.isArray(v) ? v.map(clone) : Object.fromEntries(Object.entries(v).map(([k, val]) => [k, clone(val)])));
+    const resolve = (v, nowMs) => (v && v.__ts ? new Date(nowMs) : v && typeof v === "object" && !(v instanceof Date) && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).map(([k, val]) => [k, resolve(val, nowMs)])) : clone(v));
+    const docRef = (path) => ({
+      path,
+      id: path.split("/").pop(),
+      collection: (sub) => colRef(`${path}/${sub}`),
+      async get() {
+        const entry = store.get(path);
+        return { id: path.split("/").pop(), exists: Boolean(entry), data: () => (entry ? clone(entry.data) : undefined) };
+      },
+      async set(data, opts) {
+        const prev = store.get(path);
+        const res = resolve(data, Date.now());
+        store.set(path, { data: opts?.merge && prev ? { ...clone(prev.data), ...res } : res, version: (prev?.version || 0) + 1 });
+      }
+    });
+    const colRef = (path) => ({ path, doc: (id) => docRef(`${path}/${id || `auto_${++autoId}`}`) });
+    return {
+      store,
+      collection: (name) => colRef(name),
+      async runTransaction(fn) {
+        const pending = [];
+        const tx = {
+          async get(ref) {
+            const entry = store.get(ref.path);
+            return { id: ref.id, exists: Boolean(entry), data: () => (entry ? clone(entry.data) : undefined) };
+          },
+          set(ref, data, opts) { pending.push({ op: "set", path: ref.path, data: clone(data), merge: Boolean(opts?.merge) }); },
+          update(ref, data) { pending.push({ op: "update", path: ref.path, data: clone(data) }); }
+        };
+        const res = await fn(tx);
+        const nowMs = Date.now();
+        for (const w of pending) {
+          const prev = store.get(w.path);
+          const resolved = resolve(w.data, nowMs);
+          if (w.op === "update" || w.merge) {
+            store.set(w.path, { data: { ...(prev ? clone(prev.data) : {}), ...resolved }, version: (prev?.version || 0) + 1 });
+          } else {
+            store.set(w.path, { data: resolved, version: (prev?.version || 0) + 1 });
+          }
+        }
+        return res;
+      }
+    };
+  }
+
+  const fixedNow = Date.UTC(2026, 10, 15, 6, 0, 0);
+  const realToday = _getTodayDateString(new Date(fixedNow));
+  const mockDb = createHandlerMockDb();
+  const deps = {
+    db: mockDb,
+    now: () => fixedNow,
+    serverTimestamp: () => ({ __ts: true }),
+    random: () => 0.5,
+    cardIdGenerator: () => "card_step9_001"
+  };
+
+  // Seed user with explicit eligibleCoins > floor(balanceCents*125/100) + promotionalCoins
+  await mockDb.collection("users").doc("u_scratch").set({
+    userId: "u_scratch",
+    displayName: "Scratch Tester",
+    approvalStatus: "approved",
+    balanceCents: 800,         // ₹8.00 -> 1000 coins
+    eligibleCoins: 1200,       // explicit eligible > 1000
+    promotionalCoins: 150,     // total before claim = 1350
+    balanceCoins: 1350,
+    completedTasksCount: 4
+  });
+
+  // Step 11a: Create first free card
+  const createdCard1 = await handleCreateScratchCardSession({ auth: { uid: "u_scratch" }, data: {} }, deps);
+  assert.strictEqual(createdCard1.cardId, "card_step9_001");
+  assert.strictEqual(createdCard1.isFree, true);
+  assert.ok(createdCard1.rewardCoins >= 1 && createdCard1.rewardCoins <= 40);
+
+  // Step 11b: Claim card -> deterministic tx & notif, both body+message, eligibleCoins preserved, leaderboard updated
+  const claimed1 = await handleClaimScratchCardReward(
+    { auth: { uid: "u_scratch" }, data: { cardId: "card_step9_001" } },
+    deps
+  );
+  assert.strictEqual(claimed1.rewardCoins, createdCard1.rewardCoins);
+  assert.strictEqual(claimed1.newBalanceCoins, 1350 + createdCard1.rewardCoins);
+
+  const userAfterClaim = (await mockDb.collection("users").doc("u_scratch").get()).data();
+  assert.strictEqual(userAfterClaim.balanceCents, 800, "balanceCents must remain unchanged");
+  assert.strictEqual(userAfterClaim.eligibleCoins, 1200, "eligibleCoins must remain unchanged");
+  assert.strictEqual(userAfterClaim.promotionalCoins, 150 + createdCard1.rewardCoins);
+  assert.strictEqual(userAfterClaim.balanceCoins, 1350 + createdCard1.rewardCoins);
+
+  const txDoc = await mockDb.collection("transactions").doc("scratch_card_step9_001").get();
+  assert.strictEqual(txDoc.exists, true, "Deterministic transaction ID scratch_<cardId> must exist");
+  assert.strictEqual(txDoc.data().amountCoins, createdCard1.rewardCoins);
+  assert.strictEqual(txDoc.data().type, "SCRATCH_CARD");
+
+  const notifDoc = await mockDb.collection("users").doc("u_scratch").collection("notifications").doc("notif_scratch_card_step9_001").get();
+  assert.strictEqual(notifDoc.exists, true, "Deterministic notification ID notif_scratch_<cardId> must exist");
+  assert.ok(notifDoc.data().body && notifDoc.data().body.includes(`+${createdCard1.rewardCoins} Coins`));
+  assert.ok(notifDoc.data().message && notifDoc.data().message.includes(`+${createdCard1.rewardCoins} Coins`));
+
+  const lbDoc = await mockDb.collection("leaderboard").doc("u_scratch").get();
+  assert.strictEqual(lbDoc.data().balanceCents, 800);
+  assert.strictEqual(lbDoc.data().balanceCoins, 1350 + createdCard1.rewardCoins);
+
+  // Step 11c: Duplicate claim blocked both by session.claimed and existingTxDoc.exists
+  await assert.rejects(
+    () => handleClaimScratchCardReward({ auth: { uid: "u_scratch" }, data: { cardId: "card_step9_001" } }, deps),
+    /already been claimed/
+  );
+  // Even if session status were corrupted back to ACTIVE, deterministic existingTxDoc still blocks duplicate credit!
+  await mockDb.collection("users").doc("u_scratch").collection("scratch_sessions").doc("card_step9_001").set({
+    cardId: "card_step9_001",
+    userId: "u_scratch",
+    rewardCoins: 99,
+    claimed: false,
+    status: "ACTIVE"
+  });
+  await assert.rejects(
+    () => handleClaimScratchCardReward({ auth: { uid: "u_scratch" }, data: { cardId: "card_step9_001" } }, deps),
+    /already been claimed/
+  );
+
+  // Step 11d: toMillisSafe handles plain {_seconds, _nanoseconds} object in recordScratchAdWatch
+  await mockDb.collection("reward_sessions").doc("sess_plain_ts_1").set({
+    sessionId: "sess_plain_ts_1",
+    userId: "u_scratch",
+    rewardType: "SCRATCH_CARD_UNLOCK",
+    status: "VERIFIED",
+    s2sVerified: true,
+    used: false,
+    claimed: false,
+    expiresAt: { _seconds: Math.floor((fixedNow + 300000) / 1000), _nanoseconds: 0 }
+  });
+  const watchRes = await handleRecordScratchAdWatch(
+    { auth: { uid: "u_scratch" }, data: { sessionId: "sess_plain_ts_1" } },
+    deps
+  );
+  assert.strictEqual(watchRes.adsWatchedForNextScratch, 1);
+  assert.strictEqual(watchRes.unlockedScratchesCount, 0);
+  assert.strictEqual(watchRes.newlyUnlocked, false);
+
+  // =========================================================================
+  // TEST 12: Restored Reward Configuration Verification
+  // =========================================================================
+  console.log("Test 12: Verify Watch & Earn (63-125) and Daily Check-In 30-day schedule...");
+  const minWatch = generateWatchEarnRewardCoins(() => 0.0);
+  const maxWatch = generateWatchEarnRewardCoins(() => 0.999999);
+  assert.strictEqual(minWatch, 63);
+  assert.strictEqual(maxWatch, 125);
+  assert.strictEqual(_DAILY_CHECK_IN_REWARDS_COINS.length, 30);
+  assert.strictEqual(_DAILY_CHECK_IN_REWARDS_COINS[0], 25);
+  assert.strictEqual(_DAILY_CHECK_IN_REWARDS_COINS[6], 100);
+  assert.strictEqual(_DAILY_CHECK_IN_REWARDS_COINS[29], 1000);
+
+  // =========================================================================
+  // TEST 13: Corrupted active scratch card rewardCoins is strictly rejected
+  // =========================================================================
+  console.log("Test 13: Corrupted active scratch session rewardCoins must throw failed-precondition...");
+  await mockDb.collection("users").doc("u_corrupt_scratch").set({
+    userId: "u_corrupt_scratch",
+    displayName: "Corrupt Tester",
+    approvalStatus: "approved",
+    balanceCents: 0,
+    balanceCoins: 0,
+    promotionalCoins: 0
+  });
+  await mockDb
+    .collection("users")
+    .doc("u_corrupt_scratch")
+    .collection("scratch_stats")
+    .doc(realToday)
+    .set({
+      userId: "u_corrupt_scratch",
+      dateKey: realToday,
+      scratchesCompletedToday: 0,
+      activeCardId: "bad_card_1",
+      activeCardRewardCoins: 0
+    });
+  await mockDb
+    .collection("users")
+    .doc("u_corrupt_scratch")
+    .collection("scratch_sessions")
+    .doc("bad_card_1")
+    .set({
+      cardId: "bad_card_1",
+      userId: "u_corrupt_scratch",
+      rewardCoins: 0,
+      claimed: false,
+      status: "ACTIVE"
+    });
+  await assert.rejects(
+    () => handleCreateScratchCardSession({ auth: { uid: "u_corrupt_scratch" }, data: {} }, deps),
+    /Invalid active scratch card reward/
+  );
+
   console.log("\n========================================================");
-  console.log("ALL 10 SCRATCH CARD BACKEND TESTS PASSED SUCCESSFULLY! 🎉");
+  console.log("ALL 13 SCRATCH CARD BACKEND TESTS PASSED SUCCESSFULLY! 🎉");
   console.log("========================================================\n");
 })();

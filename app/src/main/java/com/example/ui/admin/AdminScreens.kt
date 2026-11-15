@@ -109,6 +109,8 @@ import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TaskStep
 import com.example.data.model.TelegramJoinConfig
+import com.example.data.model.TelegramTaskClaimRecord
+import com.example.data.model.TelegramTaskItem
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
@@ -210,11 +212,15 @@ fun AdminDashboardScreen(
    onRejectWithdrawalAndRefund: (String, String, () -> Unit) -> Unit = { _, _, _ -> },
    onUpdateWithdrawalAvailability: (WithdrawalAvailabilityConfig, () -> Unit) -> Unit = { _, _ -> },
    onMarkAdminNotificationRead: (String) -> Unit = {},
+   telegramTasks: List<TelegramTaskItem> = emptyList(),
+   telegramClaims: List<TelegramTaskClaimRecord> = emptyList(),
    telegramJoinConfig: TelegramJoinConfig = TelegramJoinConfig(),
    promoCodes: List<PromoCodeItem> = emptyList(),
    manualBonuses: List<ManualBonusRecord> = emptyList(),
    promoAdminFeedback: PromoAdminUiFeedback = PromoAdminUiFeedback(),
    onClearPromoFeedback: () -> Unit = {},
+   onCreateTelegramTask: (String, String, String, Long, Boolean) -> Unit = { _, _, _, _, _ -> },
+   onToggleTelegramTaskActive: (String, Boolean) -> Unit = { _, _ -> },
    onSaveTelegramConfig: (String, String, Long, Boolean) -> Unit = { _, _, _, _ -> },
    onCreatePromoCode: (String, Long, Long, Long, String, Boolean) -> Unit = { _, _, _, _, _, _ -> },
    onTogglePromoCodeActive: (String, Boolean) -> Unit = { _, _ -> },
@@ -739,12 +745,16 @@ fun AdminDashboardScreen(
               users = registeredUsers,
               reviewTasks = mergedReviewTasks,
               transactions = transactions,
+              telegramTasks = telegramTasks,
+              telegramClaims = telegramClaims,
               telegramConfig = telegramJoinConfig,
               promoCodes = promoCodes,
               manualBonuses = manualBonuses,
               isBusy = isWithdrawalBusy || promoAdminFeedback.isLoading,
               promoAdminFeedback = promoAdminFeedback,
               onClearPromoFeedback = onClearPromoFeedback,
+              onCreateTelegramTask = onCreateTelegramTask,
+              onToggleTelegramTaskActive = onToggleTelegramTaskActive,
               onSaveTelegramConfig = onSaveTelegramConfig,
               onCreatePromoCode = onCreatePromoCode,
               onTogglePromoCodeActive = onTogglePromoCodeActive,

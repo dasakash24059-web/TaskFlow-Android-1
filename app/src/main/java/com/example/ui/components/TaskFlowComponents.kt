@@ -1154,10 +1154,10 @@ fun FirebaseConfigSecurityDialog(
               "• PII isolation prevents non-admin users from reading other users' profiles."
         )
         ConfigSection(
-          title = "3. Manual Console / Server Steps Remaining",
+          title = "3. Auth, Server-Side Rewards & Withdrawals",
           body =
             "• Auth Providers: Google Sign-In via Credential Manager is active.\n" +
-              "• Server-Side Ledger / Payouts: Real payments/withdrawals are intentionally omitted and disabled."
+              "• Server-Side Ledger & Withdrawals: Promotional reward credits run through Cloud Functions; fixed-denomination UPI & Gift Card withdrawals execute atomic wallet debits and admin fulfilment review."
         )
       }
     },

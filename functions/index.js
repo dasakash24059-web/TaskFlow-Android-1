@@ -44,8 +44,12 @@ try {
 const unityS2SSecret = defineSecret("UNITY_S2S_SECRET");
 const unityAdsSecret = defineSecret("UNITY_ADS_SECRET");
 const telegramBotToken = defineSecret("TELEGRAM_BOT_TOKEN");
+const telegramWebhookSecret = defineSecret("TELEGRAM_WEBHOOK_SECRET");
 
-function resolveTelegramBotToken() {
+function resolveTelegramBotToken(deps = {}) {
+  if (typeof deps.botToken === "string" && deps.botToken.trim()) {
+    return deps.botToken.trim();
+  }
   const envToken = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
   if (envToken) return envToken;
   try {
@@ -55,25 +59,66 @@ function resolveTelegramBotToken() {
   return "";
 }
 
+function resolveTelegramWebhookSecret(deps = {}) {
+  if (typeof deps.webhookSecret === "string" && deps.webhookSecret.trim()) {
+    return deps.webhookSecret.trim();
+  }
+  const envSecret = (process.env.TELEGRAM_WEBHOOK_SECRET || "").trim();
+  if (envSecret) return envSecret;
+  try {
+    const val = (telegramWebhookSecret.value() || "").trim();
+    if (val) return val;
+  } catch (_) {}
+  return "";
+}
+
 const https = require("https");
 
-function callTelegramGetChatMember(botToken, chatId, userId) {
+function callTelegramApi(botToken, method, params = {}) {
   return new Promise((resolve, reject) => {
-    const url = `https://api.telegram.org/bot${encodeURIComponent(botToken)}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(userId)}`;
-    https.get(url, (res) => {
-      let data = "";
-      res.on("data", (chunk) => { data += chunk; });
-      res.on("end", () => {
-        try {
-          const json = JSON.parse(data);
-          resolve(json);
-        } catch (e) {
-          reject(new Error("Failed to parse Telegram API response"));
-        }
-      });
-    }).on("error", (err) => {
-      reject(err);
+    const search = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) {
+        search.append(k, String(v));
+      }
     });
+    const qs = search.toString();
+    const url = `https://api.telegram.org/bot${encodeURIComponent(botToken)}/${method}${qs ? `?${qs}` : ""}`;
+    https
+      .get(url, (res) => {
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            reject(new Error(`Failed to parse Telegram ${method} API response`));
+          }
+        });
+      })
+      .on("error", (err) => {
+        reject(err);
+      });
+  });
+}
+
+function callTelegramGetChatMember(botToken, chatId, userId) {
+  return callTelegramApi(botToken, "getChatMember", {
+    chat_id: chatId,
+    user_id: userId
+  });
+}
+
+function callTelegramGetMe(botToken) {
+  return callTelegramApi(botToken, "getMe");
+}
+
+function callTelegramGetUpdates(botToken, limit = 100) {
+  return callTelegramApi(botToken, "getUpdates", {
+    limit,
+    allowed_updates: JSON.stringify(["message"])
   });
 }
 
@@ -171,7 +216,8 @@ function syncLeaderboardProjection(
   oldBalanceCents,
   newBalanceCoins,
   completedTasksCount,
-  ts
+  ts,
+  approvalStatus = "approved"
 ) {
   const leaderboardRef = firestoreDb.collection("leaderboard").doc(userId);
   transaction.set(
@@ -182,7 +228,7 @@ function syncLeaderboardProjection(
       balanceCents: oldBalanceCents,
       balanceCoins: newBalanceCoins,
       completedTasksCount,
-      approvalStatus: "approved",
+      approvalStatus: approvalStatus || "approved",
       updatedAt: ts
     },
     { merge: true }
@@ -1611,130 +1657,753 @@ async function handleClaimSpinReward(request, deps = {}) {
 exports.claimSpinReward = onCall(async (request) => handleClaimSpinReward(request));
 
 
-exports.verifyTelegramMembership = onCall({ secrets: [telegramBotToken] }, async (request) => {
-  if (!request.auth || !request.auth.uid) {
-    throw new HttpsError("unauthenticated", "User must be logged in.");
-  }
-  const userId = request.auth.uid;
-  const telegramUserId = String(request.data?.telegramUserId || "").trim();
+// =========================================================================
+// TELEGRAM JOIN TASK SYSTEM (MULTI-TASK + CRYPTOGRAPHIC BOT LINKING + API VERIFY)
+// =========================================================================
 
-  if (!telegramUserId || !/^\d+$/.test(telegramUserId)) {
-    throw new HttpsError("invalid-argument", "Please enter a valid numeric Telegram User ID.");
+const TELEGRAM_MAX_REWARD_COINS = 10_000_000;
+const TELEGRAM_LINK_TOKEN_TTL_MS = 15 * 60 * 1000;
+
+function resolveTelegramChannelChatId(channelChatId, channelUrl) {
+  const explicit = String(channelChatId || "").trim();
+  if (explicit) {
+    if (explicit.startsWith("@") || explicit.startsWith("-")) {
+      return explicit;
+    }
+    return `@${explicit}`;
+  }
+  const cleanUrl = String(channelUrl || "").trim();
+  const match = /^https?:\/\/(?:t\.me|telegram\.me)\/([A-Za-z0-9_]{4,64})(?:\/.*)?$/i.exec(cleanUrl);
+  const handle = match ? match[1] : "";
+  if (!handle || handle.toLowerCase() === "joinchat" || handle.startsWith("+")) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Private invite links require an explicit Channel Chat ID (e.g., -1001234567890)."
+    );
+  }
+  return `@${handle}`;
+}
+
+function validateTelegramTaskUrl(rawUrl) {
+  const clean = String(rawUrl || "").trim();
+  if (!/^https:\/\/(?:t\.me|telegram\.me)\/[^\s]+$/i.test(clean) || clean.length > 500) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Please enter a valid HTTPS Telegram channel link (e.g., https://t.me/yourchannel)."
+    );
+  }
+  return clean;
+}
+
+function maskTelegramUsername(username, telegramUserId) {
+  const cleanName = String(username || "").trim().replace(/^@+/, "");
+  if (cleanName.length >= 2) {
+    return `@${cleanName.slice(0, 2)}***`;
+  }
+  const cleanId = String(telegramUserId || "").trim();
+  if (cleanId.length > 4) {
+    return `tg_***${cleanId.slice(-4)}`;
+  }
+  return cleanId ? `tg_***${cleanId}` : "Verified";
+}
+
+function parseTelegramChatMemberStatus(tgRes) {
+  if (!tgRes || typeof tgRes !== "object") {
+    throw new HttpsError(
+      "unavailable",
+      "Telegram API returned an empty response. Please try again."
+    );
+  }
+  if (!tgRes.ok) {
+    const desc = String(tgRes.description || "").toLowerCase();
+    if (
+      desc.includes("unauthorized") ||
+      tgRes.error_code === 401
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Telegram Bot token (TELEGRAM_BOT_TOKEN) is invalid or revoked on server."
+      );
+    }
+    if (
+      desc.includes("chat not found") ||
+      desc.includes("member list is inaccessible") ||
+      desc.includes("bot is not a member") ||
+      desc.includes("administrator") ||
+      desc.includes("not enough rights")
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Telegram bot setup incomplete: ensure the bot is added as an administrator in the target channel."
+      );
+    }
+    return false;
+  }
+  const result = tgRes.result || {};
+  const status = String(result.status || "").toLowerCase();
+  if (["member", "administrator", "creator"].includes(status)) {
+    return true;
+  }
+  if (status === "restricted" && result.is_member === true) {
+    return true;
+  }
+  return false;
+}
+
+function extractStartTokenFromText(rawText) {
+  const clean = String(rawText || "").trim();
+  const match = /^\/start(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]{8,128})$/i.exec(clean);
+  return match ? match[1] : "";
+}
+
+async function applyBotStartTokenUpdate({
+  firestoreDb,
+  nowMillis,
+  deps = {},
+  token,
+  fromUser
+}) {
+  const cleanToken = String(token || "").trim();
+  const telegramUserId = String(fromUser?.id || "").trim();
+  if (!cleanToken || !telegramUserId || !/^\d+$/.test(telegramUserId) || fromUser?.is_bot === true) {
+    return { linked: false, reason: "INVALID_PAYLOAD" };
+  }
+  const telegramUsername = String(fromUser?.username || "").trim().replace(/^@+/, "");
+  const masked = maskTelegramUsername(telegramUsername, telegramUserId);
+  const ts = getDefaultServerTimestamp(deps);
+
+  const tokenRef = firestoreDb.collection("telegram_link_tokens").doc(cleanToken);
+  const bindingRef = firestoreDb.collection("telegram_bindings").doc(telegramUserId);
+
+  return await firestoreDb.runTransaction(async (transaction) => {
+    const tokenSnap = await transaction.get(tokenRef);
+    if (!tokenSnap.exists) {
+      return { linked: false, reason: "TOKEN_NOT_FOUND" };
+    }
+    const tokenData = tokenSnap.data() || {};
+    const uid = String(tokenData.userId || "").trim();
+    if (!uid || tokenData.status !== "PENDING") {
+      return { linked: false, reason: "TOKEN_ALREADY_USED" };
+    }
+    const expiresAtMillis = Number(tokenData.expiresAtMillis || 0);
+    if (expiresAtMillis > 0 && expiresAtMillis <= nowMillis) {
+      transaction.update(tokenRef, { status: "EXPIRED", updatedAt: ts });
+      return { linked: false, reason: "TOKEN_EXPIRED" };
+    }
+
+    const accountRef = firestoreDb.collection("telegram_accounts").doc(uid);
+    const statusRef = firestoreDb
+      .collection("users")
+      .doc(uid)
+      .collection("telegram_account")
+      .doc("status");
+
+    const [bindingSnap, accountSnap] = await Promise.all([
+      transaction.get(bindingRef),
+      transaction.get(accountRef)
+    ]);
+
+    if (bindingSnap.exists) {
+      const boundUid = String(bindingSnap.data()?.userId || "").trim();
+      if (boundUid && boundUid !== uid) {
+        transaction.update(tokenRef, {
+          status: "CONFLICT",
+          conflictReason: "TELEGRAM_ACCOUNT_ALREADY_LINKED_TO_OTHER_USER",
+          updatedAt: ts
+        });
+        return { linked: false, reason: "TELEGRAM_ALREADY_BOUND" };
+      }
+    }
+
+    if (accountSnap.exists) {
+      const boundTgId = String(accountSnap.data()?.telegramUserId || "").trim();
+      if (boundTgId && boundTgId !== telegramUserId) {
+        transaction.update(tokenRef, {
+          status: "CONFLICT",
+          conflictReason: "USER_ALREADY_LINKED_DIFFERENT_TELEGRAM",
+          updatedAt: ts
+        });
+        return { linked: false, reason: "USER_ALREADY_BOUND" };
+      }
+    }
+
+    transaction.set(
+      accountRef,
+      {
+        userId: uid,
+        telegramUserId,
+        telegramUsername,
+        telegramUsernameMasked: masked,
+        linkedAt: accountSnap.exists ? accountSnap.data()?.linkedAt || ts : ts,
+        updatedAt: ts
+      },
+      { merge: true }
+    );
+
+    transaction.set(
+      bindingRef,
+      {
+        userId: uid,
+        telegramUserId,
+        telegramUsername,
+        telegramUsernameMasked: masked,
+        verifiedAt: ts
+      },
+      { merge: true }
+    );
+
+    transaction.set(
+      statusRef,
+      {
+        userId: uid,
+        isLinked: true,
+        telegramUsernameMasked: masked,
+        linkedAt: ts,
+        updatedAt: ts
+      },
+      { merge: true }
+    );
+
+    transaction.update(tokenRef, {
+      status: "USED",
+      telegramUserId,
+      usedAt: ts,
+      updatedAt: ts
+    });
+
+    return {
+      linked: true,
+      userId: uid,
+      telegramUserId,
+      telegramUsername,
+      telegramUsernameMasked: masked
+    };
+  });
+}
+
+async function handleTelegramBotWebhook(req, res, deps = {}) {
+  try {
+    if (req.method !== "POST") {
+      return res.status(405).send("Method Not Allowed");
+    }
+
+    const expectedSecret = resolveTelegramWebhookSecret(deps);
+    if (expectedSecret) {
+      const headerSecret = String(
+        req.headers?.["x-telegram-bot-api-secret-token"] ||
+          (typeof req.get === "function" ? req.get("X-Telegram-Bot-Api-Secret-Token") : "") ||
+          ""
+      ).trim();
+      if (!headerSecret || headerSecret !== expectedSecret) {
+        return res.status(401).json({ ok: false, error: "Invalid webhook secret" });
+      }
+    }
+
+    const firestoreDb = deps.db || db;
+    const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+    const update = req.body || {};
+    const message = update.message || update.edited_message || null;
+
+    if (message && typeof message.text === "string" && message.from) {
+      const token = extractStartTokenFromText(message.text);
+      if (token) {
+        await applyBotStartTokenUpdate({
+          firestoreDb,
+          nowMillis,
+          deps,
+          token,
+          fromUser: message.from
+        });
+      }
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("telegramBotWebhook error:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+exports.telegramBotWebhook = onRequest(
+  { secrets: [telegramBotToken, telegramWebhookSecret] },
+  async (req, res) => handleTelegramBotWebhook(req, res)
+);
+
+async function resolveOrSyncLinkedTelegramAccount({
+  firestoreDb,
+  botToken,
+  userId,
+  nowMillis,
+  deps = {}
+}) {
+  const accountSnap = await firestoreDb.collection("telegram_accounts").doc(userId).get();
+  if (accountSnap.exists && String(accountSnap.data()?.telegramUserId || "").trim()) {
+    return accountSnap.data();
   }
 
-  const configSnap = await db.collection("app_config").doc("telegram_join_config").get();
-  if (!configSnap.exists) {
-    throw new HttpsError("not-found", "Telegram Join config not found.");
-  }
-  const config = configSnap.data() || {};
-  if (config.isActive !== true) {
-    throw new HttpsError("failed-precondition", "Telegram Join Reward is currently inactive.");
-  }
+  const pendingSnap = await firestoreDb
+    .collection("telegram_link_tokens")
+    .where("userId", "==", userId)
+    .where("status", "==", "PENDING")
+    .get();
 
-  const channelChatId = String(config.channelChatId || "").trim();
-  if (!channelChatId) {
-    throw new HttpsError("failed-precondition", "Telegram channel identifier is not configured.");
-  }
-
-  const botToken = resolveTelegramBotToken();
-  if (!botToken) {
-    throw new HttpsError("internal", "Telegram Bot Token is not configured on server.");
-  }
-
-  const bindingRef = db.collection("telegram_bindings").doc(telegramUserId);
-  const bindingSnap = await bindingRef.get();
-  if (bindingSnap.exists) {
-    const boundUid = bindingSnap.data().userId;
-    if (boundUid && boundUid !== userId) {
-      throw new HttpsError("already-exists", "This Telegram ID is already linked to another TaskFlow account.");
+  const pendingTokens = new Set();
+  const docs = pendingSnap?.docs || [];
+  for (const docSnap of docs) {
+    const d = docSnap.data() || {};
+    if (!d.expiresAtMillis || Number(d.expiresAtMillis) > nowMillis) {
+      pendingTokens.add(String(d.token || docSnap.id));
     }
   }
 
-  const userRef = db.collection("users").doc(userId);
-  const userSnap = await userRef.get();
+  if (pendingTokens.size === 0) {
+    return null;
+  }
+
+  const getUpdatesFn =
+    typeof deps.getUpdates === "function" ? deps.getUpdates : callTelegramGetUpdates;
+  let updatesRes;
+  try {
+    updatesRes = await getUpdatesFn(botToken, 100);
+  } catch (_) {
+    updatesRes = null;
+  }
+
+  // If webhook is active (HTTP 409 conflict on getUpdates), webhook itself writes telegram_accounts/{uid}.
+  if (updatesRes && updatesRes.ok && Array.isArray(updatesRes.result)) {
+    const sorted = [...updatesRes.result].sort((a, b) => Number(b.update_id || 0) - Number(a.update_id || 0));
+    for (const upd of sorted) {
+      const msg = upd?.message || upd?.edited_message;
+      const token = extractStartTokenFromText(msg?.text);
+      if (token && pendingTokens.has(token) && msg?.from) {
+        const res = await applyBotStartTokenUpdate({
+          firestoreDb,
+          nowMillis,
+          deps,
+          token,
+          fromUser: msg.from
+        });
+        if (res.linked) {
+          return {
+            userId,
+            telegramUserId: res.telegramUserId,
+            telegramUsername: res.telegramUsername,
+            telegramUsernameMasked: res.telegramUsernameMasked
+          };
+        }
+        if (res.reason === "TELEGRAM_ALREADY_BOUND") {
+          throw new HttpsError(
+            "already-exists",
+            "This Telegram account is already linked to another TaskFlow user."
+          );
+        }
+      }
+    }
+  }
+
+  const refreshed = await firestoreDb.collection("telegram_accounts").doc(userId).get();
+  if (refreshed.exists && String(refreshed.data()?.telegramUserId || "").trim()) {
+    return refreshed.data();
+  }
+  return null;
+}
+
+async function handleCreateTelegramTask(request, deps = {}) {
+  const firestoreDb = deps.db || db;
+  const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+  const adminInfo = await verifyAdminAccess(
+    request,
+    firestoreDb,
+    "Only authorized administrators can manage Telegram tasks."
+  );
+
+  const data = request.data || {};
+  const channelUrl = validateTelegramTaskUrl(data.channelUrl);
+  const channelChatId = resolveTelegramChannelChatId(data.channelChatId, channelUrl);
+
+  const rawReward = data.rewardCoins;
+  if (
+    typeof rawReward !== "number" ||
+    !Number.isFinite(rawReward) ||
+    !Number.isInteger(rawReward) ||
+    rawReward < 1 ||
+    rawReward > TELEGRAM_MAX_REWARD_COINS
+  ) {
+    throw new HttpsError(
+      "invalid-argument",
+      `rewardCoins must be an integer between 1 and ${TELEGRAM_MAX_REWARD_COINS}.`
+    );
+  }
+
+  if (data.isActive !== undefined && typeof data.isActive !== "boolean") {
+    throw new HttpsError("invalid-argument", "isActive must be a boolean.");
+  }
+  const isActive = data.isActive === undefined ? true : data.isActive;
+
+  const fallbackTitle = channelChatId.startsWith("@")
+    ? `Join ${channelChatId}`
+    : "Join Telegram Channel";
+  const rawTitle = typeof data.title === "string" ? data.title.trim().slice(0, 100) : "";
+  const title = rawTitle || fallbackTitle;
+
+  const taskId =
+    typeof deps.taskIdGenerator === "function"
+      ? deps.taskIdGenerator()
+      : `tg_${crypto.randomBytes(8).toString("hex")}`;
+  const ts = getDefaultServerTimestamp(deps);
+
+  const taskRef = firestoreDb.collection("telegram_tasks").doc(taskId);
+  const logRef = firestoreDb.collection("admin_logs").doc();
+
+  await firestoreDb.runTransaction(async (transaction) => {
+    const existing = await transaction.get(taskRef);
+    if (existing.exists) {
+      throw new HttpsError("already-exists", "Telegram task ID collision; please retry.");
+    }
+    transaction.set(taskRef, {
+      taskId,
+      title,
+      channelUrl,
+      channelChatId,
+      rewardCoins: rawReward,
+      isActive,
+      claimsCount: 0,
+      createdBy: adminInfo.uid,
+      createdAt: ts,
+      updatedAt: ts
+    });
+    transaction.set(logRef, {
+      actionType: "REWARD",
+      title: `Created Telegram Join Task: ${title}`,
+      details: `Channel: ${channelUrl} (${channelChatId}) • Reward: ${rawReward} Coins • Active: ${isActive}`,
+      targetId: taskId,
+      adminId: adminInfo.uid,
+      timestampMillis: nowMillis,
+      createdAt: ts
+    });
+  });
+
+  return {
+    success: true,
+    taskId,
+    title,
+    channelUrl,
+    channelChatId,
+    rewardCoins: rawReward,
+    isActive,
+    claimsCount: 0,
+    createdBy: adminInfo.uid
+  };
+}
+
+async function handleSetTelegramTaskActiveStatus(request, deps = {}) {
+  const firestoreDb = deps.db || db;
+  const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+  const adminInfo = await verifyAdminAccess(
+    request,
+    firestoreDb,
+    "Only authorized administrators can update Telegram tasks."
+  );
+
+  const data = request.data || {};
+  const taskId = String(data.taskId || "").trim();
+  if (!taskId || taskId.length > 128) {
+    throw new HttpsError("invalid-argument", "Valid taskId is required.");
+  }
+  if (typeof data.isActive !== "boolean") {
+    throw new HttpsError("invalid-argument", "isActive must be a boolean.");
+  }
+  const targetActive = data.isActive;
+
+  const taskRef = firestoreDb.collection("telegram_tasks").doc(taskId);
+  const logRef = firestoreDb.collection("admin_logs").doc();
+  const ts = getDefaultServerTimestamp(deps);
+
+  return await firestoreDb.runTransaction(async (transaction) => {
+    const snap = await transaction.get(taskRef);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Telegram task not found.");
+    }
+    const existing = snap.data() || {};
+    transaction.update(taskRef, {
+      isActive: targetActive,
+      updatedBy: adminInfo.uid,
+      updatedAt: ts
+    });
+    transaction.set(logRef, {
+      actionType: "REWARD",
+      title: `Telegram Task ${targetActive ? "Activated" : "Deactivated"}: ${existing.title || taskId}`,
+      details: `Channel: ${existing.channelUrl || ""} • Active: ${targetActive}`,
+      targetId: taskId,
+      adminId: adminInfo.uid,
+      timestampMillis: nowMillis,
+      createdAt: ts
+    });
+    return {
+      success: true,
+      taskId,
+      isActive: targetActive
+    };
+  });
+}
+
+async function handleVerifyTelegramTaskMembership(request, deps = {}) {
+  if (!request.auth || !request.auth.uid) {
+    throw new HttpsError("unauthenticated", "User must be logged in.");
+  }
+  const firestoreDb = deps.db || db;
+  const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+  const userId = String(request.auth.uid).trim();
+  const taskId = String(request.data?.taskId || "").trim();
+
+  if (!taskId || taskId.length > 128) {
+    throw new HttpsError("invalid-argument", "Valid taskId is required.");
+  }
+
+  const botToken = resolveTelegramBotToken(deps);
+  if (!botToken) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Telegram Bot Token (TELEGRAM_BOT_TOKEN) is not configured on the server."
+    );
+  }
+
+  const userRef = firestoreDb.collection("users").doc(userId);
+  const taskRef = firestoreDb.collection("telegram_tasks").doc(taskId);
+  const claimRef = firestoreDb.collection("telegram_claims").doc(`${taskId}_${userId}`);
+  const stateRef = userRef.collection("telegram_task_states").doc(taskId);
+
+  const [userSnap, taskSnap, claimSnap, stateSnap] = await Promise.all([
+    userRef.get(),
+    taskRef.get(),
+    claimRef.get(),
+    stateRef.get()
+  ]);
+
   if (!userSnap.exists) {
     throw new HttpsError("not-found", "User profile not found.");
   }
-  const userData = userSnap.data() || {};
-  if (userData.telegramRewardClaimed === true) {
-    throw new HttpsError("already-exists", "You have already claimed the Telegram Join Reward.");
+  if (!taskSnap.exists) {
+    throw new HttpsError("not-found", "Telegram task not found.");
+  }
+  const task = taskSnap.data() || {};
+  if (task.isActive !== true) {
+    throw new HttpsError("failed-precondition", "This Telegram task is currently inactive.");
+  }
+  const channelChatId = resolveTelegramChannelChatId(task.channelChatId, task.channelUrl);
+
+  if (claimSnap.exists || stateSnap.data()?.isClaimed === true) {
+    throw new HttpsError("already-exists", "You have already claimed this Telegram task.");
   }
 
-  let tgRes;
-  try {
-    tgRes = await callTelegramGetChatMember(botToken, channelChatId, telegramUserId);
-  } catch (err) {
-    throw new HttpsError("internal", "Failed to communicate with Telegram API: " + err.message);
-  }
-
-  if (!tgRes || !tgRes.ok || !tgRes.result) {
-    throw new HttpsError("permission-denied", "Telegram membership verification failed. Please join the channel first.");
-  }
-
-  const status = tgRes.result.status;
-  const validStatuses = ["member", "administrator", "creator"];
-  const isRestrictedMember = status === "restricted" && tgRes.result.is_member === true;
-
-  if (!validStatuses.includes(status) && !isRestrictedMember) {
-    throw new HttpsError("permission-denied", "You are not a member of the Telegram channel yet.");
-  }
-
-  const statusDocRef = userRef.collection("telegram_reward").doc("status");
-  const batch = db.batch();
-
-  batch.set(statusDocRef, {
+  const linkedAccount = await resolveOrSyncLinkedTelegramAccount({
+    firestoreDb,
+    botToken,
     userId,
-    telegramUserId,
-    isMembershipVerified: true,
-    isClaimed: false,
-    rewardCoinsClaimed: Number(config.rewardCoins || 0),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
-  }, { merge: true });
-
-  batch.set(bindingRef, {
-    userId,
-    telegramUserId,
-    verifiedAt: admin.firestore.FieldValue.serverTimestamp()
-  }, { merge: true });
-
-  batch.update(userRef, {
-    telegramJoinedVerified: true,
-    telegramUserId,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    nowMillis,
+    deps
   });
 
-  await batch.commit();
+  if (!linkedAccount) {
+    const getMeFn = typeof deps.getMe === "function" ? deps.getMe : callTelegramGetMe;
+    let meRes;
+    try {
+      meRes = await getMeFn(botToken);
+    } catch (err) {
+      throw new HttpsError(
+        "unavailable",
+        `Failed to query Telegram Bot identity: ${err.message}`
+      );
+    }
+    const botUsername = String(meRes?.result?.username || "").trim().replace(/^@+/, "");
+    if (!meRes?.ok || !botUsername) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Telegram Bot setup incomplete: could not resolve bot username from TELEGRAM_BOT_TOKEN."
+      );
+    }
 
-  return { success: true, isMember: true, telegramUserId };
-});
+    const token =
+      typeof deps.linkTokenGenerator === "function"
+        ? deps.linkTokenGenerator()
+        : crypto.randomBytes(18).toString("base64url");
+    const ts = getDefaultServerTimestamp(deps);
+    await firestoreDb.collection("telegram_link_tokens").doc(token).set({
+      token,
+      userId,
+      taskId,
+      status: "PENDING",
+      expiresAtMillis: nowMillis + TELEGRAM_LINK_TOKEN_TTL_MS,
+      createdAt: ts,
+      updatedAt: ts
+    });
 
-exports.claimTelegramJoinReward = onCall({ secrets: [telegramBotToken] }, async (request) => {
+    const botLinkUrl = `https://t.me/${botUsername}?start=${encodeURIComponent(token)}`;
+    return {
+      success: true,
+      verified: false,
+      needsAccountLink: true,
+      taskId,
+      botUsername,
+      botLinkUrl,
+      message: `Tap Start in @${botUsername} on Telegram, then tap VERIFY again.`
+    };
+  }
+
+  const telegramUserId = String(linkedAccount.telegramUserId || "").trim();
+  const crossUserClaimSnap = await firestoreDb
+    .collection("telegram_task_user_claims")
+    .doc(`${taskId}_${telegramUserId}`)
+    .get();
+  if (crossUserClaimSnap.exists) {
+    throw new HttpsError(
+      "already-exists",
+      "This Telegram account has already claimed this Telegram task."
+    );
+  }
+
+  const getChatMemberFn =
+    typeof deps.getChatMember === "function" ? deps.getChatMember : callTelegramGetChatMember;
+  let tgRes;
+  try {
+    tgRes = await getChatMemberFn(botToken, channelChatId, telegramUserId);
+  } catch (err) {
+    throw new HttpsError("unavailable", `Failed to communicate with Telegram API: ${err.message}`);
+  }
+
+  const isMember = parseTelegramChatMemberStatus(tgRes);
+  if (!isMember) {
+    throw new HttpsError(
+      "permission-denied",
+      "You are not a member of this Telegram channel yet. Tap JOIN first, then VERIFY."
+    );
+  }
+
+  const ts = getDefaultServerTimestamp(deps);
+  await stateRef.set(
+    {
+      taskId,
+      userId,
+      isMembershipVerified: true,
+      isClaimed: false,
+      verifiedAt: ts,
+      updatedAt: ts
+    },
+    { merge: true }
+  );
+
+  return {
+    success: true,
+    verified: true,
+    needsAccountLink: false,
+    taskId,
+    telegramUsernameMasked: String(linkedAccount.telegramUsernameMasked || ""),
+    message: "Membership verified! Tap CLAIM to collect your reward."
+  };
+}
+
+async function handleClaimTelegramTaskReward(request, deps = {}) {
   if (!request.auth || !request.auth.uid) {
     throw new HttpsError("unauthenticated", "User must be logged in.");
   }
-  const userId = request.auth.uid;
-  const userRef = db.collection("users").doc(userId);
-  const statusDocRef = userRef.collection("telegram_reward").doc("status");
-  const configRef = db.collection("app_config").doc("telegram_join_config");
-  const txRef = db.collection("transactions").doc(`tg_join_${userId}`);
-  const notifRef = userRef.collection("notifications").doc(`notif_tg_join_${userId}`);
-  const leaderboardRef = db.collection("leaderboard").doc(userId);
+  const firestoreDb = deps.db || db;
+  const userId = String(request.auth.uid).trim();
+  const taskId = String(request.data?.taskId || "").trim();
 
-  return await db.runTransaction(async (transaction) => {
-    const configSnap = await transaction.get(configRef);
-    if (!configSnap.exists) {
-      throw new HttpsError("not-found", "Telegram Join configuration not found.");
+  if (!taskId || taskId.length > 128) {
+    throw new HttpsError("invalid-argument", "Valid taskId is required.");
+  }
+
+  const botToken = resolveTelegramBotToken(deps);
+  if (!botToken) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Telegram Bot Token (TELEGRAM_BOT_TOKEN) is not configured on the server."
+    );
+  }
+
+  const userRef = firestoreDb.collection("users").doc(userId);
+  const taskRef = firestoreDb.collection("telegram_tasks").doc(taskId);
+  const accountRef = firestoreDb.collection("telegram_accounts").doc(userId);
+  const stateRef = userRef.collection("telegram_task_states").doc(taskId);
+  const claimRef = firestoreDb.collection("telegram_claims").doc(`${taskId}_${userId}`);
+
+  const [taskPreSnap, accountPreSnap, statePreSnap] = await Promise.all([
+    taskRef.get(),
+    accountRef.get(),
+    stateRef.get()
+  ]);
+
+  if (!taskPreSnap.exists) {
+    throw new HttpsError("not-found", "Telegram task not found.");
+  }
+  const preTask = taskPreSnap.data() || {};
+  if (preTask.isActive !== true) {
+    throw new HttpsError("failed-precondition", "This Telegram task is no longer active.");
+  }
+  if (
+    !accountPreSnap.exists ||
+    !String(accountPreSnap.data()?.telegramUserId || "").trim() ||
+    statePreSnap.data()?.isMembershipVerified !== true
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Please join the Telegram channel and complete VERIFY before claiming."
+    );
+  }
+
+  const telegramUserId = String(accountPreSnap.data().telegramUserId).trim();
+  const telegramUsernameMasked =
+    String(accountPreSnap.data()?.telegramUsernameMasked || "").trim() ||
+    maskTelegramUsername("", telegramUserId);
+  const channelChatId = resolveTelegramChannelChatId(preTask.channelChatId, preTask.channelUrl);
+
+  // Live re-verification of membership right before crediting so users cannot leave right after verify.
+  const getChatMemberFn =
+    typeof deps.getChatMember === "function" ? deps.getChatMember : callTelegramGetChatMember;
+  let tgRes;
+  try {
+    tgRes = await getChatMemberFn(botToken, channelChatId, telegramUserId);
+  } catch (err) {
+    throw new HttpsError("unavailable", `Failed to verify Telegram membership: ${err.message}`);
+  }
+  if (!parseTelegramChatMemberStatus(tgRes)) {
+    throw new HttpsError(
+      "permission-denied",
+      "Channel membership check failed. Please remain in the channel and tap VERIFY again."
+    );
+  }
+
+  const tgUserClaimRef = firestoreDb
+    .collection("telegram_task_user_claims")
+    .doc(`${taskId}_${telegramUserId}`);
+  const txId = `tg_task_${taskId}_${userId}`;
+  const txRef = firestoreDb.collection("transactions").doc(txId);
+  const notifRef = userRef.collection("notifications").doc(`notif_${txId}`);
+  const ts = getDefaultServerTimestamp(deps);
+
+  return await firestoreDb.runTransaction(async (transaction) => {
+    const [taskSnap, userSnap, stateSnap, claimSnap, tgUserClaimSnap, txSnap] = await Promise.all([
+      transaction.get(taskRef),
+      transaction.get(userRef),
+      transaction.get(stateRef),
+      transaction.get(claimRef),
+      transaction.get(tgUserClaimRef),
+      transaction.get(txRef)
+    ]);
+
+    if (!taskSnap.exists) {
+      throw new HttpsError("not-found", "Telegram task not found.");
     }
-    const config = configSnap.data() || {};
-    if (config.isActive !== true) {
-      throw new HttpsError("failed-precondition", "Telegram Join Reward is currently inactive.");
+    const task = taskSnap.data() || {};
+    if (task.isActive !== true) {
+      throw new HttpsError("failed-precondition", "This Telegram task is currently inactive.");
     }
-    const rewardCoins = Number(config.rewardCoins || 0);
-    if (rewardCoins <= 0) {
-      throw new HttpsError("invalid-argument", "Invalid reward configuration.");
+    const rewardCoins = Number(task.rewardCoins || 0);
+    if (!Number.isInteger(rewardCoins) || rewardCoins <= 0 || rewardCoins > TELEGRAM_MAX_REWARD_COINS) {
+      throw new HttpsError("failed-precondition", "Invalid Telegram task reward configuration.");
     }
 
-    const userSnap = await transaction.get(userRef);
     if (!userSnap.exists) {
       throw new HttpsError("not-found", "User profile not found.");
     }
@@ -1742,88 +2411,143 @@ exports.claimTelegramJoinReward = onCall({ secrets: [telegramBotToken] }, async 
     if (userData.approvalStatus !== "approved") {
       throw new HttpsError("permission-denied", "Account must be approved before claiming rewards.");
     }
-    if (userData.telegramRewardClaimed === true) {
-      throw new HttpsError("already-exists", "You have already claimed the Telegram Join Reward.");
+
+    const stateData = stateSnap.exists ? stateSnap.data() || {} : {};
+    if (claimSnap.exists || stateData.isClaimed === true || txSnap.exists) {
+      throw new HttpsError("already-exists", "You have already claimed this Telegram task.");
+    }
+    if (tgUserClaimSnap.exists) {
+      throw new HttpsError("already-exists", "This Telegram account has already claimed this task.");
+    }
+    if (stateData.isMembershipVerified !== true) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Membership verification required before claiming."
+      );
     }
 
-    const statusSnap = await transaction.get(statusDocRef);
-    const statusData = statusSnap.exists ? statusSnap.data() || {} : {};
-    const isVerified = statusData.isMembershipVerified === true || userData.telegramJoinedVerified === true;
-    if (!isVerified || statusData.isClaimed === true) {
-      throw new HttpsError("failed-precondition", "Membership verification required before claiming.");
-    }
-
-    const existingTx = await transaction.get(txRef);
-    if (existingTx.exists) {
-      throw new HttpsError("already-exists", "Reward already claimed.");
-    }
-
-    const oldPromo = Number(userData.promotionalCoins || 0);
-    const oldBalanceCents = Number(userData.balanceCents || 0);
-    const oldEligible = Math.max(Number(userData.eligibleCoins || 0), Math.floor((oldBalanceCents * 125) / 100));
-    const oldBalanceCoins = Math.max(Number(userData.balanceCoins || 0), oldEligible + oldPromo);
-    const newPromo = oldPromo + rewardCoins;
-    const newBalanceCoins = oldBalanceCoins + rewardCoins;
-    const displayName = String(userData.displayName || "TaskFlow Member").trim() || "TaskFlow Member";
-    const telegramUserId = String(statusData.telegramUserId || userData.telegramUserId || "").trim();
+    const wallet = computeUpdatedPromoWallet(userData, rewardCoins);
+    const displayName =
+      String(userData.displayName || "TaskFlow Member").trim() || "TaskFlow Member";
+    const completedTasksCount = Number(userData.completedTasksCount || 0);
+    const taskTitle = String(task.title || "Join Telegram Channel").trim();
+    const channelUrl = String(task.channelUrl || "").trim();
 
     transaction.update(userRef, {
-      promotionalCoins: newPromo,
-      balanceCoins: newBalanceCoins,
-      telegramJoinedVerified: true,
-      telegramRewardClaimed: true,
-      telegramUserId,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      promotionalCoins: wallet.newPromo,
+      balanceCoins: wallet.newBalanceCoins,
+      updatedAt: ts
     });
 
-    transaction.set(statusDocRef, {
-      userId,
-      telegramUserId,
-      isMembershipVerified: true,
-      isClaimed: true,
-      rewardCoinsClaimed: rewardCoins,
-      claimedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
-
-    transaction.set(leaderboardRef, {
+    syncLeaderboardProjection(
+      transaction,
+      firestoreDb,
       userId,
       displayName,
-      balanceCoins: newBalanceCoins,
-      approvalStatus: "approved",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+      wallet.oldBalanceCents,
+      wallet.newBalanceCoins,
+      completedTasksCount,
+      ts,
+      userData.approvalStatus || "approved"
+    );
+
+    transaction.set(
+      stateRef,
+      {
+        taskId,
+        userId,
+        isMembershipVerified: true,
+        isClaimed: true,
+        rewardCoinsClaimed: rewardCoins,
+        claimedAt: ts,
+        updatedAt: ts
+      },
+      { merge: true }
+    );
+
+    transaction.set(claimRef, {
+      claimId: `${taskId}_${userId}`,
+      taskId,
+      taskTitle,
+      channelUrl,
+      userId,
+      userName: displayName,
+      telegramUsernameMasked,
+      rewardCoins,
+      claimedAt: ts
+    });
+
+    transaction.set(tgUserClaimRef, {
+      taskId,
+      telegramUserId,
+      userId,
+      rewardCoins,
+      claimedAt: ts
+    });
+
+    transaction.update(taskRef, {
+      claimsCount: Number(task.claimsCount || 0) + 1,
+      updatedAt: ts
+    });
 
     transaction.set(txRef, {
       userId,
       userName: displayName,
       type: "TELEGRAM_JOIN",
-      title: `Telegram Join Reward (+${rewardCoins} Coins)`,
+      title: `${taskTitle} (+${rewardCoins} Coins)`,
       amountCoins: rewardCoins,
       amountCents: Math.floor((rewardCoins * 100) / 125),
       status: "CREDITED",
-      referenceId: `tg_join_${userId}`,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+      referenceId: taskId,
+      createdAt: ts
     });
 
     transaction.set(notifRef, {
       userId,
       title: "Telegram Join Reward Credited 🎉",
-      message: `You earned +${rewardCoins} coins for joining our official Telegram channel!`,
+      body: `You earned +${rewardCoins} Coins for ${taskTitle}!`,
+      message: `You earned +${rewardCoins} Coins for ${taskTitle}!`,
       type: "TELEGRAM_REWARD",
       rewardCoins,
-      referenceId: `tg_join_${userId}`,
+      referenceId: taskId,
       isRead: false,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+      createdAt: ts
     });
 
     return {
       success: true,
+      taskId,
       rewardCoins,
-      newBalanceCoins
+      newPromotionalCoins: wallet.newPromo,
+      newBalanceCoins: wallet.newBalanceCoins
     };
   });
-});
+}
+
+exports.createTelegramTask = onCall(async (request) => handleCreateTelegramTask(request));
+exports.setTelegramTaskActiveStatus = onCall(async (request) =>
+  handleSetTelegramTaskActiveStatus(request)
+);
+exports.verifyTelegramTaskMembership = onCall(
+  { secrets: [telegramBotToken] },
+  async (request) => handleVerifyTelegramTaskMembership(request)
+);
+exports.claimTelegramTaskReward = onCall(
+  { secrets: [telegramBotToken] },
+  async (request) => handleClaimTelegramTaskReward(request)
+);
+
+exports._telegramHandlers = {
+  resolveTelegramChannelChatId,
+  parseTelegramChatMemberStatus,
+  extractStartTokenFromText,
+  applyBotStartTokenUpdate,
+  handleTelegramBotWebhook,
+  handleCreateTelegramTask,
+  handleSetTelegramTaskActiveStatus,
+  handleVerifyTelegramTaskMembership,
+  handleClaimTelegramTaskReward
+};
 
 /**
  * Generates server-side Scratch Card reward coins with configurable probability distribution:
@@ -1831,17 +2555,17 @@ exports.claimTelegramJoinReward = onCall({ secrets: [telegramBotToken] }, async 
  * - 10% probability: 41–100 coins
  * Considers completedTasksCount as an optional minor weighting boost to the minimum floor without making rewards predictable.
  */
-function generateScratchRewardCoins(completedTasksCount = 0) {
-  const isHighTier = Math.random() < 0.10;
+function generateScratchRewardCoins(completedTasksCount = 0, randomFn = Math.random) {
+  const isHighTier = randomFn() < 0.10;
   if (isHighTier) {
     // 10% probability: 41–100 coins
-    return Math.floor(Math.random() * (100 - 41 + 1)) + 41;
+    return Math.floor(randomFn() * (100 - 41 + 1)) + 41;
   }
   // 90% probability: 1–40 coins (task boost can increase base minimum up to 10)
   const taskBoost = Math.min(10, Math.floor((Number(completedTasksCount) || 0) / 2));
   const minCoins = Math.min(20, 1 + taskBoost);
   const maxCoins = 40;
-  return Math.floor(Math.random() * (maxCoins - minCoins + 1)) + minCoins;
+  return Math.floor(randomFn() * (maxCoins - minCoins + 1)) + minCoins;
 }
 
 /**
@@ -1850,26 +2574,33 @@ function generateScratchRewardCoins(completedTasksCount = 0) {
  * Verifies the ad session is S2S-verified, marks it consumed, and updates the user's daily scratch unlock progress.
  * Exactly two verified ads unlock one scratch card.
  */
-exports.recordScratchAdWatch = onCall(async (request) => {
+async function handleRecordScratchAdWatch(request, deps = {}) {
+  const firestoreDb = deps.db || db;
+  const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+
   if (!request.auth || !request.auth.uid) {
     throw new HttpsError("unauthenticated", "User must be logged in.");
   }
 
   const userId = request.auth.uid;
-  const sessionId = (request.data?.sessionId || "").trim();
+  const sessionId = String(request.data?.sessionId || "").trim();
   if (!sessionId) {
     throw new HttpsError("invalid-argument", "Session ID is required.");
   }
 
-  const userRef = db.collection("users").doc(userId);
-  const sessionRef = db.collection("reward_sessions").doc(sessionId);
+  const userRef = firestoreDb.collection("users").doc(userId);
+  const sessionRef = firestoreDb.collection("reward_sessions").doc(sessionId);
 
-  const now = new Date();
-  const today = getTodayDateString(now);
+  const today = getTodayDateString(new Date(nowMillis));
   const statsRef = userRef.collection("scratch_stats").doc(today);
 
-  return await db.runTransaction(async (transaction) => {
-    const userDoc = await transaction.get(userRef);
+  return await firestoreDb.runTransaction(async (transaction) => {
+    const [userDoc, sessionDoc, statsDoc] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(sessionRef),
+      transaction.get(statsRef)
+    ]);
+
     if (!userDoc.exists) {
       throw new HttpsError("not-found", "User profile not found.");
     }
@@ -1881,7 +2612,6 @@ exports.recordScratchAdWatch = onCall(async (request) => {
       );
     }
 
-    const sessionDoc = await transaction.get(sessionRef);
     if (!sessionDoc.exists) {
       throw new HttpsError("not-found", "Invalid reward session.");
     }
@@ -1905,7 +2635,8 @@ exports.recordScratchAdWatch = onCall(async (request) => {
       );
     }
 
-    if (!session.expiresAt || session.expiresAt.toMillis() < Date.now()) {
+    const expiresAtMillis = toMillisSafe(session.expiresAt);
+    if (expiresAtMillis === null || expiresAtMillis < nowMillis) {
       throw new HttpsError("deadline-exceeded", "Ad session has expired.");
     }
 
@@ -1916,7 +2647,6 @@ exports.recordScratchAdWatch = onCall(async (request) => {
       );
     }
 
-    const statsDoc = await transaction.get(statsRef);
     const statsData = statsDoc.exists ? statsDoc.data() || {} : {};
     const completedToday = Number(statsData.scratchesCompletedToday || 0);
 
@@ -1941,11 +2671,13 @@ exports.recordScratchAdWatch = onCall(async (request) => {
       newlyUnlocked = true;
     }
 
+    const ts = getDefaultServerTimestamp(deps);
+
     // 1. Mark ad session as consumed (atomic single-use)
     transaction.update(sessionRef, {
       status: "CONSUMED",
       used: true,
-      consumedAt: admin.firestore.FieldValue.serverTimestamp()
+      consumedAt: ts
     });
 
     // 2. Atomically update daily scratch stats
@@ -1957,7 +2689,7 @@ exports.recordScratchAdWatch = onCall(async (request) => {
         adsWatchedForNextScratch: finalWatched,
         unlockedScratchesCount: finalUnlocked,
         scratchesCompletedToday: completedToday,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        updatedAt: ts
       },
       { merge: true }
     );
@@ -1971,7 +2703,9 @@ exports.recordScratchAdWatch = onCall(async (request) => {
       dateKey: today
     };
   });
-});
+}
+
+exports.recordScratchAdWatch = onCall(async (request) => handleRecordScratchAdWatch(request));
 
 /**
  * CREATE SCRATCH CARD SESSION (Callable Function)
@@ -1984,20 +2718,27 @@ exports.recordScratchAdWatch = onCall(async (request) => {
  * - Persists session in `/users/{userId}/scratch_sessions/{cardId}`.
  * - Reopening returns the same active card without generating a new reward or consuming another unlock.
  */
-exports.createScratchCardSession = onCall(async (request) => {
+async function handleCreateScratchCardSession(request, deps = {}) {
+  const firestoreDb = deps.db || db;
+  const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+  const randomFn = typeof deps.random === "function" ? deps.random : Math.random;
+
   if (!request.auth || !request.auth.uid) {
     throw new HttpsError("unauthenticated", "User must be logged in.");
   }
 
   const userId = request.auth.uid;
-  const userRef = db.collection("users").doc(userId);
+  const userRef = firestoreDb.collection("users").doc(userId);
 
-  const now = new Date();
-  const today = getTodayDateString(now);
+  const today = getTodayDateString(new Date(nowMillis));
   const statsRef = userRef.collection("scratch_stats").doc(today);
 
-  return await db.runTransaction(async (transaction) => {
-    const userDoc = await transaction.get(userRef);
+  return await firestoreDb.runTransaction(async (transaction) => {
+    const [userDoc, statsDoc] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(statsRef)
+    ]);
+
     if (!userDoc.exists) {
       throw new HttpsError("not-found", "User profile not found.");
     }
@@ -2009,7 +2750,6 @@ exports.createScratchCardSession = onCall(async (request) => {
       );
     }
 
-    const statsDoc = await transaction.get(statsRef);
     const stats = statsDoc.exists ? statsDoc.data() || {} : {};
     const completedToday = Number(stats.scratchesCompletedToday || 0);
 
@@ -2021,16 +2761,27 @@ exports.createScratchCardSession = onCall(async (request) => {
     }
 
     // Check if user already has an active, unclaimed scratch card
-    const activeCardId = (stats.activeCardId || "").trim();
+    const activeCardId = String(stats.activeCardId || "").trim();
     if (activeCardId) {
       const activeSessionRef = userRef.collection("scratch_sessions").doc(activeCardId);
       const activeSessionDoc = await transaction.get(activeSessionRef);
       if (activeSessionDoc.exists) {
         const activeSession = activeSessionDoc.data() || {};
         if (!activeSession.claimed && activeSession.status !== "CLAIMED") {
+          const existingReward = Number(
+            activeSession.rewardCoins !== undefined && activeSession.rewardCoins !== null
+              ? activeSession.rewardCoins
+              : stats.activeCardRewardCoins
+          );
+          if (!Number.isInteger(existingReward) || existingReward < 1 || existingReward > 100) {
+            throw new HttpsError(
+              "failed-precondition",
+              "Invalid active scratch card reward stored on server."
+            );
+          }
           return {
             cardId: activeCardId,
-            rewardCoins: Number(activeSession.rewardCoins || stats.activeCardRewardCoins || 10),
+            rewardCoins: existingReward,
             scratchNumber: Number(activeSession.scratchNumber || completedToday + 1),
             isFree: Boolean(activeSession.isFree),
             dateKey: today
@@ -2053,10 +2804,14 @@ exports.createScratchCardSession = onCall(async (request) => {
       unlockedScratchesCount -= 1;
     }
 
-    const rewardCoins = generateScratchRewardCoins(userData.completedTasksCount || 0);
-    const cardId = `scratch_${crypto.randomBytes(16).toString("hex")}`;
+    const rewardCoins = generateScratchRewardCoins(userData.completedTasksCount || 0, randomFn);
+    const cardId =
+      typeof deps.cardIdGenerator === "function"
+        ? deps.cardIdGenerator()
+        : `scratch_${crypto.randomBytes(16).toString("hex")}`;
     const scratchNumber = completedToday + 1;
     const sessionRef = userRef.collection("scratch_sessions").doc(cardId);
+    const ts = getDefaultServerTimestamp(deps);
 
     const sessionPayload = {
       cardId,
@@ -2067,7 +2822,7 @@ exports.createScratchCardSession = onCall(async (request) => {
       isFree: !hasUsedFree,
       claimed: false,
       status: "ACTIVE",
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+      createdAt: ts
     };
 
     transaction.set(sessionRef, sessionPayload);
@@ -2084,7 +2839,7 @@ exports.createScratchCardSession = onCall(async (request) => {
         activeCardRewardCoins: rewardCoins,
         activeCardIsScratched: false,
         activeCardIsClaimed: false,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        updatedAt: ts
       },
       { merge: true }
     );
@@ -2097,40 +2852,51 @@ exports.createScratchCardSession = onCall(async (request) => {
       dateKey: today
     };
   });
-});
+}
+
+exports.createScratchCardSession = onCall(async (request) => handleCreateScratchCardSession(request));
 
 /**
  * CLAIM SCRATCH CARD REWARD (Callable Function)
  * Called when claiming a completed scratch card.
  * - Atomically marks the card session as CLAIMED.
  * - Increments `scratchesCompletedToday` on server.
- * - Atomically credits rewardCoins to promotionalCoins and balanceCoins.
+ * - Atomically credits rewardCoins to promotionalCoins and balanceCoins (using computeUpdatedPromoWallet).
  * - Preserves balanceCents unchanged.
- * - Records audit transaction in `/transactions` with type `SCRATCH_CARD`.
- * - Records in-app notification in `/users/{userId}/notifications`.
- * - Updates public leaderboard projection.
+ * - Records deterministic audit transaction in `/transactions/scratch_{cardId}` with type `SCRATCH_CARD`.
+ * - Records deterministic in-app notification in `/users/{userId}/notifications/notif_scratch_{cardId}` with both `body` and `message`.
+ * - Updates public leaderboard projection with both `balanceCents` and `balanceCoins`.
  */
-exports.claimScratchCardReward = onCall(async (request) => {
+async function handleClaimScratchCardReward(request, deps = {}) {
+  const firestoreDb = deps.db || db;
+  const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+
   if (!request.auth || !request.auth.uid) {
     throw new HttpsError("unauthenticated", "User must be logged in.");
   }
 
   const userId = request.auth.uid;
-  const cardId = (request.data?.cardId || "").trim();
+  const cardId = String(request.data?.cardId || "").trim();
   if (!cardId) {
     throw new HttpsError("invalid-argument", "Card ID is required.");
   }
 
-  const userRef = db.collection("users").doc(userId);
+  const userRef = firestoreDb.collection("users").doc(userId);
   const sessionRef = userRef.collection("scratch_sessions").doc(cardId);
-  const leaderboardRef = db.collection("leaderboard").doc(userId);
+  const txRef = firestoreDb.collection("transactions").doc(`scratch_${cardId}`);
+  const notifRef = userRef.collection("notifications").doc(`notif_scratch_${cardId}`);
 
-  const now = new Date();
-  const today = getTodayDateString(now);
+  const today = getTodayDateString(new Date(nowMillis));
   const statsRef = userRef.collection("scratch_stats").doc(today);
 
-  return await db.runTransaction(async (transaction) => {
-    const userDoc = await transaction.get(userRef);
+  return await firestoreDb.runTransaction(async (transaction) => {
+    const [userDoc, sessionDoc, statsDoc, existingTxDoc] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(sessionRef),
+      transaction.get(statsRef),
+      transaction.get(txRef)
+    ]);
+
     if (!userDoc.exists) {
       throw new HttpsError("not-found", "User profile not found.");
     }
@@ -2142,7 +2908,6 @@ exports.claimScratchCardReward = onCall(async (request) => {
       );
     }
 
-    const sessionDoc = await transaction.get(sessionRef);
     if (!sessionDoc.exists) {
       throw new HttpsError("not-found", "Scratch card session not found.");
     }
@@ -2152,27 +2917,30 @@ exports.claimScratchCardReward = onCall(async (request) => {
       throw new HttpsError("permission-denied", "Scratch card belongs to another user.");
     }
 
-    if (session.claimed === true || session.status === "CLAIMED") {
+    if (session.claimed === true || session.status === "CLAIMED" || existingTxDoc.exists) {
       throw new HttpsError(
         "already-exists",
         "This Scratch Card reward has already been claimed."
       );
     }
 
-    const rewardCoins = Math.min(100, Math.max(1, Number(session.rewardCoins || 10)));
-    const displayName = (userData.displayName || "TaskFlow Member").trim() || "TaskFlow Member";
+    const rawReward = Number(session.rewardCoins);
+    if (!Number.isInteger(rawReward) || rawReward < 1 || rawReward > 100) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Invalid scratch card reward stored on server."
+      );
+    }
+    const rewardCoins = rawReward;
+    const displayName =
+      String(userData.displayName || "TaskFlow Member").trim() || "TaskFlow Member";
     const completedTasksCount = Number(userData.completedTasksCount || 0);
 
-    const oldPromo = Number(userData.promotionalCoins || 0);
-    const oldBalanceCents = Number(userData.balanceCents || 0);
-    const oldCentsCoins = Math.floor((oldBalanceCents * 125) / 100);
-    const oldEligible = Number(userData.eligibleCoins || oldCentsCoins);
-    const oldBalanceCoins = Math.max(Number(userData.balanceCoins || 0), oldEligible + oldPromo);
+    const { oldBalanceCents, newPromo, newBalanceCoins } = computeUpdatedPromoWallet(
+      userData,
+      rewardCoins
+    );
 
-    const newPromo = oldPromo + rewardCoins;
-    const newBalanceCoins = oldBalanceCoins + rewardCoins;
-
-    const statsDoc = await transaction.get(statsRef);
     const statsData = statsDoc.exists ? statsDoc.data() || {} : {};
     const completedToday = Number(statsData.scratchesCompletedToday || 0);
 
@@ -2184,12 +2952,13 @@ exports.claimScratchCardReward = onCall(async (request) => {
     }
 
     const nextCompleted = completedToday + 1;
+    const ts = getDefaultServerTimestamp(deps);
 
     // 1. Mark session as CLAIMED & single-use
     transaction.update(sessionRef, {
       claimed: true,
       status: "CLAIMED",
-      claimedAt: admin.firestore.FieldValue.serverTimestamp()
+      claimedAt: ts
     });
 
     // 2. Update daily stats
@@ -2203,7 +2972,7 @@ exports.claimScratchCardReward = onCall(async (request) => {
         activeCardRewardCoins: 0,
         activeCardIsScratched: false,
         activeCardIsClaimed: true,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        updatedAt: ts
       },
       { merge: true }
     );
@@ -2212,25 +2981,22 @@ exports.claimScratchCardReward = onCall(async (request) => {
     transaction.update(userRef, {
       promotionalCoins: newPromo,
       balanceCoins: newBalanceCoins,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      updatedAt: ts
     });
 
-    // 4. Update leaderboard projection
-    transaction.set(
-      leaderboardRef,
-      {
-        userId,
-        displayName,
-        balanceCoins: newBalanceCoins,
-        completedTasksCount,
-        approvalStatus: "approved",
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      },
-      { merge: true }
+    // 4. Update leaderboard projection (preserving balanceCents and updating balanceCoins)
+    syncLeaderboardProjection(
+      transaction,
+      firestoreDb,
+      userId,
+      displayName,
+      oldBalanceCents,
+      newBalanceCoins,
+      completedTasksCount,
+      ts
     );
 
-    // 5. Record transaction history entry
-    const txRef = db.collection("transactions").doc();
+    // 5. Record deterministic transaction history entry
     transaction.set(txRef, {
       userId,
       userName: displayName,
@@ -2240,20 +3006,20 @@ exports.claimScratchCardReward = onCall(async (request) => {
       amountCents: Math.floor((rewardCoins * 100) / 125),
       status: "CREDITED",
       referenceId: cardId,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+      createdAt: ts
     });
 
-    // 6. Record notification
-    const notifRef = userRef.collection("notifications").doc();
+    // 6. Record deterministic notification with both body and message
     transaction.set(notifRef, {
       userId,
       title: "Scratch Card Reward Credited 🎉",
+      body: `You won +${rewardCoins} Coins from Scratch Card #${nextCompleted}!`,
       message: `You won +${rewardCoins} Coins from Scratch Card #${nextCompleted}!`,
       type: "SCRATCH_CARD_REWARD",
       rewardCoins,
       referenceId: cardId,
       isRead: false,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+      createdAt: ts
     });
 
     return {
@@ -2264,7 +3030,9 @@ exports.claimScratchCardReward = onCall(async (request) => {
       newBalanceCoins
     };
   });
-});
+}
+
+exports.claimScratchCardReward = onCall(async (request) => handleClaimScratchCardReward(request));
 
 exports._generateScratchRewardCoins = generateScratchRewardCoins;
 exports._verifyUnityS2SSignature = verifyUnityS2SSignature;
@@ -2284,9 +3052,13 @@ exports._rewardHandlers = {
   handleCreateSpinSession,
   handleRecordExtraSpinAdWatch,
   handleClaimSpinReward,
+  handleRecordScratchAdWatch,
+  handleCreateScratchCardSession,
+  handleClaimScratchCardReward,
   computeUpdatedPromoWallet,
   pickWeightedSpinSegmentIndex,
-  generateWatchEarnRewardCoins
+  generateWatchEarnRewardCoins,
+  generateScratchRewardCoins
 };
 
 // =========================================================================
@@ -2316,7 +3088,11 @@ function getDefaultServerTimestamp(deps) {
  * Verifies Admin access strictly using Firebase Auth custom claims, verified bootstrap admin email,
  * or `/admins/{uid}` document. Never trusts `/users/{uid}.role`.
  */
-async function verifyPromoAdminAccess(request, firestoreDb) {
+async function verifyAdminAccess(
+  request,
+  firestoreDb,
+  deniedMessage = "Only authorized administrators can perform this action."
+) {
   if (!request.auth || !request.auth.uid) {
     throw new HttpsError("unauthenticated", "Admin authentication required.");
   }
@@ -2341,8 +3117,13 @@ async function verifyPromoAdminAccess(request, firestoreDb) {
     return { uid, email };
   }
 
-  throw new HttpsError(
-    "permission-denied",
+  throw new HttpsError("permission-denied", deniedMessage);
+}
+
+async function verifyPromoAdminAccess(request, firestoreDb) {
+  return verifyAdminAccess(
+    request,
+    firestoreDb,
     "Only authorized administrators can manage promo codes."
   );
 }
@@ -2824,6 +3605,7 @@ async function handleRedeemPromoCode(request, deps = {}) {
       {
         userId,
         displayName,
+        balanceCents: oldBalanceCents,
         balanceCoins: newBalanceCoins,
         completedTasksCount,
         approvalStatus: "approved",
@@ -2887,5 +3669,180 @@ exports._promoHandlers = {
   handleCreatePromoCode,
   handleSetPromoCodeActiveStatus,
   handleRedeemPromoCode
+};
+
+// =========================================================================
+// MANUAL BONUS SYSTEM (SERVER-AUTHORITATIVE CLOUD FUNCTION)
+// =========================================================================
+
+const MANUAL_BONUS_MAX_COINS = 10_000_000;
+const MANUAL_BONUS_KEY_REGEX = /^[A-Za-z0-9_-]{6,128}$/;
+
+async function handleCreditManualBonus(request, deps = {}) {
+  const firestoreDb = deps.db || db;
+  const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+  const adminInfo = await verifyAdminAccess(
+    request,
+    firestoreDb,
+    "Only authorized administrators can credit manual bonuses."
+  );
+
+  const data = request.data || {};
+  const targetUserId = String(data.targetUserId || "").trim();
+  if (!targetUserId || targetUserId.length > 128) {
+    throw new HttpsError("invalid-argument", "Please select a valid target user.");
+  }
+
+  const rawAmount = data.amountCoins;
+  if (
+    typeof rawAmount !== "number" ||
+    !Number.isFinite(rawAmount) ||
+    !Number.isInteger(rawAmount) ||
+    rawAmount < 1 ||
+    rawAmount > MANUAL_BONUS_MAX_COINS
+  ) {
+    throw new HttpsError(
+      "invalid-argument",
+      `Manual bonus amountCoins must be an integer between 1 and ${MANUAL_BONUS_MAX_COINS}.`
+    );
+  }
+
+  const idempotencyKey = String(data.idempotencyKey || "").trim();
+  if (!MANUAL_BONUS_KEY_REGEX.test(idempotencyKey)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "A valid idempotencyKey (6-128 alphanumeric/'-'/'_' characters) is required."
+    );
+  }
+
+  const rawReason = typeof data.reason === "string" ? data.reason.trim().slice(0, 500) : "";
+  const displayReason = rawReason || "Special Admin Bonus";
+
+  const userRef = firestoreDb.collection("users").doc(targetUserId);
+  const bonusRef = firestoreDb.collection("manual_bonuses").doc(idempotencyKey);
+  const txId = `bonus_${idempotencyKey}`;
+  const txRef = firestoreDb.collection("transactions").doc(txId);
+  const notifRef = userRef.collection("notifications").doc(`notif_${txId}`);
+  const logRef = firestoreDb.collection("admin_logs").doc();
+  const ts = getDefaultServerTimestamp(deps);
+
+  return await firestoreDb.runTransaction(async (transaction) => {
+    const [bonusSnap, txSnap, userSnap] = await Promise.all([
+      transaction.get(bonusRef),
+      transaction.get(txRef),
+      transaction.get(userRef)
+    ]);
+
+    if (bonusSnap.exists || txSnap.exists) {
+      throw new HttpsError(
+        "already-exists",
+        "This manual bonus has already been credited (duplicate request prevented)."
+      );
+    }
+
+    if (!userSnap.exists) {
+      throw new HttpsError("not-found", "Selected user profile not found.");
+    }
+
+    const userData = userSnap.data() || {};
+    const wallet = computeUpdatedPromoWallet(userData, rawAmount);
+    const targetName =
+      String(userData.displayName || "TaskFlow Member").trim() || "TaskFlow Member";
+    const targetEmail = String(userData.email || "").trim();
+    const completedTasksCount = Number(userData.completedTasksCount || 0);
+    const approvalStatus = String(userData.approvalStatus || "approved");
+
+    // 1. Atomically credit promotionalCoins & balanceCoins (preserving balanceCents & eligibleCoins)
+    transaction.update(userRef, {
+      promotionalCoins: wallet.newPromo,
+      balanceCoins: wallet.newBalanceCoins,
+      updatedAt: ts
+    });
+
+    // 2. Sync leaderboard projection
+    syncLeaderboardProjection(
+      transaction,
+      firestoreDb,
+      targetUserId,
+      targetName,
+      wallet.oldBalanceCents,
+      wallet.newBalanceCoins,
+      completedTasksCount,
+      ts,
+      approvalStatus
+    );
+
+    // 3. Record canonical /manual_bonuses audit document (`targetUserId` + server `adminId`)
+    transaction.set(bonusRef, {
+      targetUserId,
+      targetUserName: targetName,
+      targetUserEmail: targetEmail,
+      adminId: adminInfo.uid,
+      adminEmail: adminInfo.email,
+      amountCoins: rawAmount,
+      reason: displayReason,
+      idempotencyKey,
+      createdAt: ts
+    });
+
+    // 4. Record transaction ledger entry
+    transaction.set(txRef, {
+      userId: targetUserId,
+      userName: targetName,
+      type: "ADMIN_MANUAL_BONUS",
+      title: `Admin Bonus: ${displayReason.slice(0, 80)}`,
+      amountCents: Math.floor((rawAmount * 100) / 125),
+      amountCoins: rawAmount,
+      status: "CREDITED",
+      referenceId: idempotencyKey,
+      createdAt: ts
+    });
+
+    // 5. Deliver Notification Bell entry (`body` and `message`)
+    const notifBody = `You received +${rawAmount} Coins from Admin! Reason: ${displayReason}`;
+    transaction.set(notifRef, {
+      userId: targetUserId,
+      title: "Admin Bonus Credited",
+      body: notifBody,
+      message: notifBody,
+      type: "ADMIN_BONUS",
+      rewardCoins: rawAmount,
+      referenceId: idempotencyKey,
+      isRead: false,
+      createdAt: ts
+    });
+
+    // 6. Write Admin activity audit log
+    transaction.set(logRef, {
+      actionType: "REWARD",
+      title: `Credited Manual Bonus (+${rawAmount} Coins)`,
+      details: `User: ${targetName} (${targetUserId}) • Reason: ${displayReason}`,
+      targetId: idempotencyKey,
+      adminId: adminInfo.uid,
+      timestampMillis: nowMillis,
+      createdAt: ts
+    });
+
+    return {
+      success: true,
+      id: idempotencyKey,
+      targetUserId,
+      targetUserName: targetName,
+      targetUserEmail: targetEmail,
+      adminId: adminInfo.uid,
+      adminEmail: adminInfo.email,
+      amountCoins: rawAmount,
+      reason: displayReason,
+      idempotencyKey,
+      newPromotionalCoins: wallet.newPromo,
+      newBalanceCoins: wallet.newBalanceCoins
+    };
+  });
+}
+
+exports.creditManualBonus = onCall(async (request) => handleCreditManualBonus(request));
+exports._manualBonusHandlers = {
+  handleCreditManualBonus,
+  verifyAdminAccess
 };
 

@@ -1,6 +1,8 @@
 package com.example
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -22,14 +24,22 @@ import com.example.data.model.ScratchCardConstants
 import com.example.data.model.ScratchCardSession
 import com.example.data.model.ScratchDailyState
 import com.example.data.model.ScratchCardUiState
+import com.example.data.model.TaskItem
+import com.example.data.model.TaskStatus
 import com.example.data.model.TelegramJoinConfig
+import com.example.data.model.TelegramTaskClaimRecord
+import com.example.data.model.TelegramTaskItem
 import com.example.data.model.TelegramUserRewardState
+import com.example.data.model.TelegramUserTaskState
+import com.example.data.model.TelegramVerifyResult
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
 import com.example.data.model.formatCoins
 import com.example.data.model.getEffectiveBalanceCoins
 import com.example.data.model.normalizePromoCode
+import com.example.data.model.selectNextTelegramTaskForUser
+import com.example.data.repository.FirebaseRewardCloudFunctionsClient
 import com.example.data.repository.TaskFlowRepository
 import com.example.data.repository.TelegramMembershipVerifier
 import com.example.ui.admin.AdminCoinsRewardsSection
@@ -37,10 +47,14 @@ import com.example.ui.theme.TaskFlowTheme
 import com.example.ui.user.DedicatedDailyCheckInScreen
 import com.example.ui.user.PromoCodeRedemptionScreen
 import com.example.ui.user.ScratchCardScreen
+import com.example.ui.user.UserTrackingScreen
+import com.example.ui.viewmodel.UiState
 import java.util.UUID
 import com.google.firebase.Timestamp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
@@ -608,84 +622,141 @@ class RewardsSystemTest {
     }
 
   // =========================================================================
-  // SCENARIO 4: Telegram Join permanently hidden after claim (Model + UI)
+  // SCENARIO 4: Telegram Join moved to Tasks screen (Minimal card + Daily Rewards exclusion)
   // =========================================================================
   @Test
-  fun scenario04_telegramJoinReward_isVisibleWhenUnclaimed_andPermanentlyHiddenAfterClaim() {
-    val activeConfig =
-      TelegramJoinConfig(
+  fun scenario04_telegramJoinTaskCard_rendersMinimalCardInTasksScreen_andNotInDailyRewards() {
+    val task1 =
+      TelegramTaskItem(
+        id = "tg_1",
+        taskId = "tg_1",
+        title = "Join Official Updates",
         channelUrl = "https://t.me/TaskFlowOfficial",
         channelChatId = "@TaskFlowOfficial",
         rewardCoins = 350L,
-        isActive = true
-      )
-    val unclaimedState =
-      TelegramUserRewardState(
-        userId = "u1",
-        isMembershipVerified = false,
-        isClaimed = false
-      )
-    val claimedState =
-      TelegramUserRewardState(
-        userId = "u1",
-        isMembershipVerified = true,
-        isClaimed = true,
-        claimedCoins = 350L
+        isActive = true,
+        createdAt = Timestamp(1_750_000_000L, 0)
       )
 
-    assertTrue(unclaimedState.shouldShowInDailyRewards(activeConfig))
-    assertFalse(claimedState.shouldShowInDailyRewards(activeConfig))
-
+    // Verify Daily Rewards screen no longer renders Telegram Join card
     composeTestRule.setContent {
       TaskFlowTheme {
         DedicatedDailyCheckInScreen(
           dailyCheckInState = DailyCheckInState(currentStreak = 1, canCheckInToday = true, nextClaimDay = 2),
           approvedEarningsCents = 0L,
           onClaimDay = {},
-          onBack = {},
-          telegramConfig = activeConfig,
-          telegramRewardState = unclaimedState
+          onBack = {}
         )
       }
     }
-
-    // Visible before claiming, with +350 Coins badge, and Claim button NOT shown before verification
-    composeTestRule.onNodeWithTag("daily_rewards_telegram_join_card").assertIsDisplayed()
-    composeTestRule.onNodeWithText("+350 Coins").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("telegram_claim_reward_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("daily_rewards_telegram_join_card").assertDoesNotExist()
   }
 
   @Test
-  fun scenario04b_telegramJoinRewardCard_permanentlyDisappearsFromDailyRewardsWhenClaimed() {
-    val activeConfig =
-      TelegramJoinConfig(
+  fun scenario04_telegramJoinTaskCard_displaysNewBadgeRewardAndActionButtons_inTasksScreen() {
+    val task1 =
+      TelegramTaskItem(
+        id = "tg_1",
+        taskId = "tg_1",
+        title = "Join Official Updates",
         channelUrl = "https://t.me/TaskFlowOfficial",
         channelChatId = "@TaskFlowOfficial",
         rewardCoins = 350L,
-        isActive = true
+        isActive = true,
+        createdAt = Timestamp(1_750_000_000L, 0)
       )
-    val claimedState =
-      TelegramUserRewardState(
-        userId = "u1",
-        isMembershipVerified = true,
-        isClaimed = true,
-        claimedCoins = 350L
-      )
+    var joinedTask = ""
+    var verifiedTask = ""
+    var claimedTask = ""
 
     composeTestRule.setContent {
       TaskFlowTheme {
-        DedicatedDailyCheckInScreen(
-          dailyCheckInState = DailyCheckInState(currentStreak = 1, canCheckInToday = true, nextClaimDay = 2),
-          approvedEarningsCents = 0L,
-          onClaimDay = {},
-          onBack = {},
-          telegramConfig = activeConfig,
-          telegramRewardState = claimedState
+        UserTrackingScreen(
+          tasksState = UiState.Success(emptyList()),
+          selectedFilter = "all",
+          onSelectFilter = {},
+          onSelectTask = {},
+          currentUserId = "u1",
+          nextTelegramTask = task1,
+          telegramTaskState = TelegramUserTaskState(taskId = "tg_1", userId = "u1", isMembershipVerified = false),
+          onJoinTelegramTask = { joinedTask = it.effectiveTaskId },
+          onVerifyTelegramTask = { verifiedTask = it.effectiveTaskId },
+          onClaimTelegramTask = { claimedTask = it.effectiveTaskId }
         )
       }
     }
 
-    composeTestRule.onNodeWithTag("daily_rewards_telegram_join_card").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("user_telegram_task_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("user_telegram_new_badge").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("user_telegram_reward_badge").assertIsDisplayed()
+    composeTestRule.onNodeWithText("+350 Coins").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("user_telegram_join_button").assertIsDisplayed().performClick()
+    composeTestRule.onNodeWithTag("user_telegram_verify_button").assertIsDisplayed().performClick()
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsDisplayed().assertIsNotEnabled()
+    assertEquals("tg_1", joinedTask)
+    assertEquals("tg_1", verifiedTask)
+    assertEquals("", claimedTask)
+  }
+
+  @Test
+  fun scenario04b_telegramJoinMultiTask_autoAdvancesAfterClaim_andShowsNotFoundWhenNoneLeft() {
+    val task1 =
+      TelegramTaskItem(
+        id = "tg_1",
+        taskId = "tg_1",
+        title = "Channel One",
+        channelUrl = "https://t.me/TaskFlowOne",
+        rewardCoins = 100L,
+        isActive = true,
+        createdAt = Timestamp(1_750_000_000L, 0)
+      )
+    val task2 =
+      TelegramTaskItem(
+        id = "tg_2",
+        taskId = "tg_2",
+        title = "Channel Two",
+        channelUrl = "https://t.me/TaskFlowTwo",
+        rewardCoins = 250L,
+        isActive = true,
+        createdAt = Timestamp(1_750_000_100L, 0)
+      )
+    val allTasks = listOf(task2, task1)
+
+    // Initially picks earliest active unclaimed task (tg_1)
+    val firstNext = selectNextTelegramTaskForUser(tasks = allTasks, userStates = emptyMap(), userClaims = emptyList())
+    assertEquals("tg_1", firstNext?.effectiveTaskId)
+
+    // Once tg_1 is claimed, tg_1 is permanently hidden and tg_2 becomes next automatically
+    val stateAfterClaim1 = mapOf(
+      "tg_1" to TelegramUserTaskState(taskId = "tg_1", userId = "u1", isMembershipVerified = true, isClaimed = true, rewardCoinsClaimed = 100L),
+      "tg_2" to TelegramUserTaskState(taskId = "tg_2", userId = "u1", isMembershipVerified = true, isClaimed = false)
+    )
+    val secondNext = selectNextTelegramTaskForUser(tasks = allTasks, userStates = stateAfterClaim1, userClaims = emptyList())
+    assertEquals("tg_2", secondNext?.effectiveTaskId)
+
+    // Once both are claimed, null is returned and UserTrackingScreen shows Not Found state when regular tasks empty
+    val stateAfterBothClaimed = stateAfterClaim1 + (
+      "tg_2" to TelegramUserTaskState(taskId = "tg_2", userId = "u1", isMembershipVerified = true, isClaimed = true, rewardCoinsClaimed = 250L)
+    )
+    val noNext = selectNextTelegramTaskForUser(tasks = allTasks, userStates = stateAfterBothClaimed, userClaims = emptyList())
+    assertNull(noNext)
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        UserTrackingScreen(
+          tasksState = UiState.Success(emptyList()),
+          selectedFilter = "all",
+          onSelectFilter = {},
+          onSelectTask = {},
+          currentUserId = "u1",
+          nextTelegramTask = noNext,
+          telegramTaskState = null
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("user_telegram_task_card").assertDoesNotExist()
+    composeTestRule.onNodeWithText("No tasks in any status").assertIsDisplayed()
   }
 
   // =========================================================================
@@ -1182,7 +1253,24 @@ class RewardsSystemTest {
         )
       )
 
-    var savedTelegramReward = 0L
+    val existingTgTasks =
+      listOf(
+        TelegramTaskItem(
+          id = "tg_existing",
+          taskId = "tg_existing",
+          title = "Join Main Group",
+          channelUrl = "https://t.me/TaskFlowMain",
+          rewardCoins = 150L,
+          isActive = true,
+          claimsCount = 4L
+        )
+      )
+
+    var createdTgTitle = ""
+    var createdTgUrl = ""
+    var createdTgReward = 0L
+    var toggledTgId = ""
+    var toggledTgActive = true
     var createdPromoCode = ""
     var creditedBonusUser = ""
     var creditedBonusAmount = 0L
@@ -1193,13 +1281,21 @@ class RewardsSystemTest {
           users = users,
           reviewTasks = emptyList(),
           transactions = emptyList(),
-          telegramConfig =
-            TelegramJoinConfig(
-              channelUrl = "https://t.me/TaskFlowChannel",
-              channelChatId = "@TaskFlowChannel",
-              rewardCoins = 250L,
-              isActive = true
+          telegramTasks = existingTgTasks,
+          telegramClaims =
+            listOf(
+              TelegramTaskClaimRecord(
+                id = "tg_existing_user_99",
+                claimId = "tg_existing_user_99",
+                taskId = "tg_existing",
+                taskTitle = "Join Main Group",
+                userId = "user_99",
+                userName = "Tester Nine",
+                telegramUsernameMasked = "@tes***99",
+                rewardCoins = 150L
+              )
             ),
+          telegramConfig = TelegramJoinConfig(),
           promoCodes =
             listOf(
               PromoCodeItem(
@@ -1213,7 +1309,15 @@ class RewardsSystemTest {
               )
             ),
           manualBonuses = emptyList(),
-          onSaveTelegramConfig = { _, _, rewardCoins, _ -> savedTelegramReward = rewardCoins },
+          onCreateTelegramTask = { title, url, _, rewardCoins, _ ->
+            createdTgTitle = title
+            createdTgUrl = url
+            createdTgReward = rewardCoins
+          },
+          onToggleTelegramTaskActive = { taskId, isActive ->
+            toggledTgId = taskId
+            toggledTgActive = isActive
+          },
           onCreatePromoCode = { code, _, _, _, _, _ -> createdPromoCode = code },
           onCreditManualBonus = { uid, amountCoins, _ ->
             creditedBonusUser = uid
@@ -1224,10 +1328,18 @@ class RewardsSystemTest {
     }
 
     composeTestRule.onNodeWithTag("admin_telegram_join_management_card").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("admin_telegram_reward_coins_input").performScrollTo().performTextClearance()
-    composeTestRule.onNodeWithTag("admin_telegram_reward_coins_input").performTextInput("420")
+    composeTestRule.onNodeWithTag("admin_telegram_title_input").performScrollTo().performTextInput("VIP Channel")
+    composeTestRule.onNodeWithTag("admin_telegram_url_input").performScrollTo().performTextInput("https://t.me/TaskFlowVIP")
+    composeTestRule.onNodeWithTag("admin_telegram_reward_coins_input").performScrollTo().performTextInput("420")
     composeTestRule.onNodeWithTag("admin_telegram_save_button").performScrollTo().performClick()
-    assertEquals(420L, savedTelegramReward)
+    assertEquals("VIP Channel", createdTgTitle)
+    assertEquals("https://t.me/TaskFlowVIP", createdTgUrl)
+    assertEquals(420L, createdTgReward)
+
+    composeTestRule.onNodeWithTag("admin_telegram_task_item_tg_existing").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_telegram_toggle_tg_existing").performScrollTo().performClick()
+    assertEquals("tg_existing", toggledTgId)
+    assertFalse(toggledTgActive)
 
     composeTestRule
       .onNodeWithTag("admin_coins_rewards_section")
@@ -1468,4 +1580,203 @@ class RewardsSystemTest {
     composeTestRule.onNodeWithTag("claim_scratch_reward_button").assertIsDisplayed().performClick()
     assertTrue("Tapping claim button in popup must trigger onClaimReward", claimed)
   }
+
+  @Test
+  @Config(sdk = [33], qualifiers = "w393dp-h851dp-xxhdpi")
+  fun scenario19b_scratchCardScreen_showsRetryWhenCardReadyButSessionMissing() {
+    var retried = false
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        ScratchCardScreen(
+          uiState = ScratchCardUiState(
+            isLoading = false,
+            activeSession = null,
+            errorMessage = "Server temporarily unavailable. Please try again.",
+            dailyState = ScratchDailyState(
+              scratchesCompletedToday = 0L,
+              hasUsedFreeScratchToday = false
+            )
+          ),
+          onBack = {},
+          onWatchAd = {},
+          onScratchRevealed = {},
+          onClaimReward = {},
+          onDismissCongratulations = {},
+          onRetryPrepare = { retried = true }
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("scratch_error_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("retry_prepare_scratch_button").assertIsDisplayed().performClick()
+    assertTrue("Tapping Retry button must invoke onRetryPrepare", retried)
+  }
+
+  // =========================================================================
+  // STEP 9A: REPOSITORY CALLABLE CONTRACTS (MANUAL BONUS + MULTI-TASK TELEGRAM)
+  // =========================================================================
+  @Test
+  fun step9a_repository_creditManualBonus_callsCloudFunctionAndParsesResult() =
+    kotlinx.coroutines.runBlocking {
+      val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+      if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
+        com.google.firebase.FirebaseApp.initializeApp(
+          context,
+          com.google.firebase.FirebaseOptions.Builder()
+            .setApplicationId("com.aistudio.taskflow.kxmpzq")
+            .setProjectId("taskflow-8852d")
+            .setApiKey("fake-api-key")
+            .build()
+        )
+      }
+      val calls = mutableListOf<Pair<String, Any?>>()
+      val client =
+        FirebaseRewardCloudFunctionsClient(
+          firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance(),
+          rewardCallableInvoker = { name, payload ->
+            calls.add(name to payload)
+            mapOf(
+              "success" to true,
+              "id" to "bonus_key_9a",
+              "targetUserId" to "uid_target_1",
+              "targetUserName" to "Priya",
+              "targetUserEmail" to "priya@example.com",
+              "adminId" to "admin_uid_1",
+              "adminEmail" to "dasakash24059@gmail.com",
+              "amountCoins" to 550L,
+              "reason" to "Contest Winner",
+              "idempotencyKey" to "bonus_key_9a"
+            )
+          }
+        )
+      val repo =
+        TaskFlowRepository(
+          firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance(),
+          rewardFunctionsClient = client,
+          authenticatedUidProvider = { "admin_uid_1" }
+        )
+
+      val result =
+        repo.creditAdminManualBonus(
+          targetUserId = "uid_target_1",
+          amountCoins = 550L,
+          reason = "Contest Winner",
+          idempotencyKey = "bonus_key_9a"
+        )
+      assertTrue(result.isSuccess)
+      val record = result.getOrThrow()
+      assertEquals("uid_target_1", record.targetUserId)
+      assertEquals("admin_uid_1", record.adminId)
+      assertEquals(550L, record.amountCoins)
+      assertEquals("bonus_key_9a", record.idempotencyKey)
+
+      assertEquals(1, calls.size)
+      assertEquals("creditManualBonus", calls.first().first)
+      val sentPayload = calls.first().second as Map<*, *>
+      assertEquals("uid_target_1", sentPayload["targetUserId"])
+      assertEquals(550L, sentPayload["amountCoins"])
+      assertEquals("Contest Winner", sentPayload["reason"])
+      assertEquals("bonus_key_9a", sentPayload["idempotencyKey"])
+    }
+
+  @Test
+  fun step9a_repository_telegramCallables_matchBackendContractsAndParseResponses() =
+    kotlinx.coroutines.runBlocking {
+      val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+      if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
+        com.google.firebase.FirebaseApp.initializeApp(
+          context,
+          com.google.firebase.FirebaseOptions.Builder()
+            .setApplicationId("com.aistudio.taskflow.kxmpzq")
+            .setProjectId("taskflow-8852d")
+            .setApiKey("fake-api-key")
+            .build()
+        )
+      }
+      val calls = mutableListOf<Pair<String, Any?>>()
+      val client =
+        FirebaseRewardCloudFunctionsClient(
+          firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance(),
+          rewardCallableInvoker = { name, payload ->
+            calls.add(name to payload)
+            when (name) {
+              "createTelegramTask" ->
+                mapOf(
+                  "success" to true,
+                  "taskId" to "tg_task_101",
+                  "title" to "Join Announcements",
+                  "channelUrl" to "https://t.me/TaskFlowAnnouncements",
+                  "channelChatId" to "@TaskFlowAnnouncements",
+                  "rewardCoins" to 300L,
+                  "isActive" to true,
+                  "claimsCount" to 0L,
+                  "createdBy" to "admin_uid_1"
+                )
+              "setTelegramTaskActiveStatus" ->
+                mapOf("success" to true, "taskId" to "tg_task_101", "isActive" to false)
+              "verifyTelegramTaskMembership" ->
+                mapOf(
+                  "success" to true,
+                  "verified" to false,
+                  "needsAccountLink" to true,
+                  "taskId" to "tg_task_101",
+                  "botUsername" to "TaskFlowVerifyBot",
+                  "botLinkUrl" to "https://t.me/TaskFlowVerifyBot?start=tok123",
+                  "message" to "Link your Telegram account with @TaskFlowVerifyBot."
+                )
+              "claimTelegramTaskReward" ->
+                mapOf(
+                  "success" to true,
+                  "taskId" to "tg_task_101",
+                  "rewardCoins" to 300L
+                )
+              else -> error("Unexpected callable $name")
+            }
+          }
+        )
+
+      val adminRepo =
+        TaskFlowRepository(
+          firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance(),
+          rewardFunctionsClient = client,
+          authenticatedUidProvider = { "admin_uid_1" }
+        )
+      val created =
+        adminRepo.createTelegramTask(
+          title = "Join Announcements",
+          channelUrl = "https://t.me/TaskFlowAnnouncements",
+          channelChatId = "@TaskFlowAnnouncements",
+          rewardCoins = 300L,
+          isActive = true
+        ).getOrThrow()
+      assertEquals("tg_task_101", created.taskId)
+      assertEquals(300L, created.rewardCoins)
+
+      val toggled = adminRepo.setTelegramTaskActiveStatus("tg_task_101", false).getOrThrow()
+      assertFalse(toggled)
+
+      val userRepo =
+        TaskFlowRepository(
+          firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance(),
+          rewardFunctionsClient = client,
+          authenticatedUidProvider = { "user_uid_1" }
+        )
+      val verify = userRepo.verifyTelegramTaskMembership("user_uid_1", "tg_task_101").getOrThrow()
+      assertTrue(verify.needsAccountLink)
+      assertFalse(verify.verified)
+      assertEquals("https://t.me/TaskFlowVerifyBot?start=tok123", verify.botLinkUrl)
+
+      val claimedCoins = userRepo.claimTelegramTaskReward("user_uid_1", "tg_task_101").getOrThrow()
+      assertEquals(300L, claimedCoins)
+
+      assertEquals(
+        listOf(
+          "createTelegramTask",
+          "setTelegramTaskActiveStatus",
+          "verifyTelegramTaskMembership",
+          "claimTelegramTaskReward"
+        ),
+        calls.map { it.first }
+      )
+    }
 }

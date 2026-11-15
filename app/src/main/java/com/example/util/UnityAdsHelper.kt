@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.BuildConfig
 import com.unity3d.ads.IUnityAdsInitializationListener
 import com.unity3d.ads.IUnityAdsLoadListener
 import com.unity3d.ads.IUnityAdsShowListener
@@ -153,8 +154,9 @@ object UnityAdsHelper {
   const val BANNER_PLACEMENT_ID = "BP_Banner_Android"
   const val INTERSTITIAL_PLACEMENT_ID = "BP_Interstitial_Android"
 
-  // Controlled test mode enabled until physical device behavior is verified against live dashboard
-  const val TEST_MODE = true
+  // Enable Unity Ads test mode in debug builds only; release APKs serve live production ads.
+  val TEST_MODE: Boolean
+    get() = BuildConfig.DEBUG
 
   const val UNAVAILABLE_MESSAGE = "Video is currently unavailable. Please try again later."
   private const val AD_OPERATION_TIMEOUT_MS = 25_000L
@@ -619,7 +621,7 @@ object UnityAdsHelper {
       }
 
       val requestBody = JSONObject().apply {
-        put("bundleVersion", "4.4")
+        put("bundleVersion", BuildConfig.VERSION_NAME)
         put("bundleId", bundleId)
         put("coppa", cfg.optBoolean("coppaCompliant", false))
         put("language", Locale.getDefault().language.ifBlank { "en" })
@@ -636,8 +638,8 @@ object UnityAdsHelper {
         put("batteryStatus", 2)
         put("batteryLevel", 0.8)
         put("freeMemory", 2_000_000L)
-        put("appVersion", "4.4")
-        put("versionCode", 24)
+        put("appVersion", BuildConfig.VERSION_NAME)
+        put("versionCode", BuildConfig.VERSION_CODE)
         put("placements", placementsMap)
         put("properties", cfg.optString("properties", ""))
         put("sessionDepth", 1)
@@ -1021,7 +1023,7 @@ object UnityAdsHelper {
                     "[Load] onUnityAdsFailedToLoad: placement=$actualPlacement, objectId=$objectId, error=$rawErr, message=$rawMsg"
                   )
 
-                  if (!hasAttemptedTestFallback) {
+                  if (TEST_MODE && !hasAttemptedTestFallback) {
                     hasAttemptedTestFallback = true
                     Log.w(TAG, "[Load] Retrying rewarded load with Unity V6 test fill...")
                     runCatching { SdkProperties.setTestMode(true) }
@@ -1357,8 +1359,13 @@ object UnityAdsHelper {
     onLoaded: (String) -> Unit,
     onError: (String) -> Unit
   ) {
+    val ctx = ClientProperties.getApplicationContext() ?: ClientProperties.getActivity()
+    if (ctx == null) {
+      onError("Ad context is unavailable. Please reopen the screen and try again.")
+      return
+    }
     preloadRewardedAd(
-      context = ClientProperties.getApplicationContext() ?: ClientProperties.getActivity() ?: android.app.Activity(),
+      context = ctx,
       force = true,
       onLoaded = { onLoaded(loadedRewardedObjectId ?: adObjectId.ifBlank { "bidding_ad" }) },
       onError = { onError(it) }
@@ -1729,7 +1736,7 @@ fun UnityBannerAdView(modifier: Modifier = Modifier) {
                       "UnityBanner",
                       "Banner failed to load: placement=${bannerView.placementId}, code=${errorInfo.errorCode}, msg=${errorInfo.errorMessage}"
                     )
-                    if (!UnityAdsHelper.hasBannerTestFallback) {
+                    if (UnityAdsHelper.TEST_MODE && !UnityAdsHelper.hasBannerTestFallback) {
                       UnityAdsHelper.hasBannerTestFallback = true
                       Log.w("UnityBanner", "Retrying banner load with Unity V6 test fill...")
                       runCatching { SdkProperties.setTestMode(true) }

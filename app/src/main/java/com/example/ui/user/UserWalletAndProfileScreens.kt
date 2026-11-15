@@ -721,7 +721,7 @@ fun UserProfileScreen(
   activeSubScreen: ProfileSubScreen = ProfileSubScreen.MAIN,
   onNavigateSubScreen: ((ProfileSubScreen) -> Unit)? = null,
   onNavigateScreen: ((String) -> Unit)? = null,
-  onSubmitSupportTicket: ((String, String, String) -> Unit)? = null
+  onSubmitSupportTicket: ((String, String, String, (Boolean) -> Unit) -> Unit)? = null
 ) {
   var internalSubScreen by rememberSaveable { mutableStateOf(ProfileSubScreen.MAIN) }
   val currentSubScreen =

@@ -890,4 +890,245 @@ class LegacyRewardMigrationTest {
       Dispatchers.resetMain()
     }
   }
+
+  @Test
+  fun step9_scratchCard_extractsErrors_andBlocksDuplicateOrInFlightRequests() = runBlocking {
+    val firestore = createTestFirestore()
+    val gate = CompletableDeferred<Unit>()
+    val calls = mutableListOf<Pair<String, Any?>>()
+    var claimCalls = 0
+    var adWatchCalls = 0
+
+    val client =
+      FirebaseRewardCloudFunctionsClient(
+        firestore = firestore,
+        rewardCallableInvoker = { fnName, payload ->
+          calls.add(fnName to payload)
+          when (fnName) {
+            "recordScratchAdWatch" -> {
+              adWatchCalls++
+              val sid = (payload as Map<*, *>)["sessionId"] as String
+              if (sid == "err_session") {
+                throw IllegalStateException(
+                  "Reward video completion has not been verified by server yet."
+                )
+              }
+              mapOf(
+                "success" to true,
+                "sessionId" to sid,
+                "adsWatchedForNextScratch" to 1L,
+                "unlockedScratchesCount" to 0L,
+                "newlyUnlocked" to false,
+                "dateKey" to "2026-11-15"
+              )
+            }
+            "createScratchCardSession" ->
+              mapOf(
+                "cardId" to "srv_card_step9",
+                "rewardCoins" to 37L,
+                "scratchNumber" to 1L,
+                "isFree" to true,
+                "dateKey" to "2026-11-15"
+              )
+            "claimScratchCardReward" -> {
+              claimCalls++
+              gate.await()
+              mapOf(
+                "success" to true,
+                "cardId" to "srv_card_step9",
+                "rewardCoins" to 37L,
+                "scratchesCompletedToday" to 1L,
+                "newBalanceCoins" to 137L
+              )
+            }
+            else -> error("Unexpected callable: $fnName")
+          }
+        }
+      )
+
+    // 1. Client-fabricated ad_ and fallback_ IDs must be rejected
+    assertTrue(runCatching { client.recordScratchAdWatch("ad_fake_1") }.isFailure)
+    assertTrue(runCatching { client.recordScratchAdWatch("fallback_fake_1") }.isFailure)
+    assertEquals(0, adWatchCalls)
+
+    // 2. Cloud Function error extraction propagates server message
+    val errResult = runCatching { client.recordScratchAdWatch("err_session") }
+    assertTrue(errResult.isFailure)
+    assertTrue(
+      errResult.exceptionOrNull()?.message?.contains("not been verified by server") == true
+    )
+
+    // 3. Duplicate Scratch Card ad consumption prevented locally
+    val watch1 = client.recordScratchAdWatch("srv_scratch_ad_1")
+    assertEquals(1L, watch1.adsWatchedForNextScratch)
+    assertEquals(2, adWatchCalls) // 1 error attempt + 1 valid attempt
+    assertTrue(runCatching { client.recordScratchAdWatch("srv_scratch_ad_1") }.isFailure)
+    assertEquals(2, adWatchCalls)
+
+    // 4. Create session returns server rewardCoins and rejects invalid payloads
+    val session = client.createScratchCardSession()
+    assertEquals("srv_card_step9", session.cardId)
+    assertEquals(37L, session.rewardCoins)
+
+    // 5. Concurrent and duplicate claim requests on same cardId fire only 1 server callable
+    val c1 = async { client.claimScratchCardReward("srv_card_step9") }
+    kotlinx.coroutines.yield()
+    val c2 = async { runCatching { client.claimScratchCardReward("srv_card_step9") } }
+    val concurrentResult = c2.await()
+    assertTrue("Concurrent scratch claim must fail", concurrentResult.isFailure)
+    gate.complete(Unit)
+    assertEquals(37L, c1.await())
+    assertEquals(1, claimCalls)
+
+    val replayResult = runCatching { client.claimScratchCardReward("srv_card_step9") }
+    assertTrue("Replay scratch claim must fail", replayResult.isFailure)
+    assertEquals(1, claimCalls)
+  }
+
+  @Test
+  fun step9_buildLeaderboardPayload_preservesBalanceCoinsAndExcludesEmail() {
+    val firestore = createTestFirestore()
+    val repository = TaskFlowRepository(firestore = firestore)
+    val payload =
+      repository.buildLeaderboardPayload(
+        userId = "u_lb_9",
+        displayName = "Leaderboard User",
+        balanceCents = 2000L,
+        balanceCoins = 5500L,
+        completedTasksCount = 4L,
+        approvalStatus = "approved"
+      )
+
+    assertEquals("u_lb_9", payload["userId"])
+    assertEquals("Leaderboard User", payload["displayName"])
+    assertEquals(2000L, payload["balanceCents"])
+    assertEquals(5500L, payload["balanceCoins"])
+    assertEquals(4L, payload["completedTasksCount"])
+    assertEquals("approved", payload["approvalStatus"])
+    assertFalse("Leaderboard payload must never contain email", payload.containsKey("email"))
+  }
+
+  @Test
+  fun step9b_scratchDailyState_remainsScratchableWhileActiveUnclaimedCardExists() {
+    val beforeCard = com.example.data.model.ScratchDailyState(dateKey = "2026-11-15")
+    assertTrue("First daily scratch must be enabled", beforeCard.canScratchNow)
+
+    val duringActiveCard =
+      com.example.data.model.ScratchDailyState(
+        dateKey = "2026-11-15",
+        scratchesCompletedToday = 0L,
+        hasUsedFreeScratchToday = true,
+        unlockedScratchesCount = 0L,
+        activeCardId = "scratch_card_1",
+        activeCardRewardCoins = 42L,
+        activeCardIsClaimed = false
+      )
+    assertTrue("Active unclaimed card must remain scratchable", duringActiveCard.hasActiveUnclaimedCard)
+    assertTrue("Active unclaimed card must keep canScratchNow true", duringActiveCard.canScratchNow)
+
+    val afterClaimNoUnlocked =
+      com.example.data.model.ScratchDailyState(
+        dateKey = "2026-11-15",
+        scratchesCompletedToday = 1L,
+        hasUsedFreeScratchToday = true,
+        unlockedScratchesCount = 0L,
+        activeCardId = "",
+        activeCardIsClaimed = true
+      )
+    assertFalse("After claiming with 0 unlocked cards, user must watch 2 ads", afterClaimNoUnlocked.hasActiveUnclaimedCard)
+    assertFalse("After claiming with 0 unlocked cards, canScratchNow must be false", afterClaimNoUnlocked.canScratchNow)
+  }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun step9b_viewModel_scratchCardClaim_succeedsCleanlyAndRetriesRecoverableErrors() = runTest {
+    val testDispatcher = StandardTestDispatcher(testScheduler)
+    Dispatchers.setMain(testDispatcher)
+    try {
+      val firestore = createTestFirestore()
+      var createCalls = 0
+      var claimAttempts = 0
+      val client =
+        FirebaseRewardCloudFunctionsClient(
+          firestore = firestore,
+          rewardCallableInvoker = { fnName, _ ->
+            when (fnName) {
+              "createScratchCardSession" -> {
+                createCalls++
+                if (createCalls > 1) {
+                  throw IllegalStateException(
+                    "You must watch 2 rewarded videos to unlock another Scratch Card."
+                  )
+                }
+                mapOf(
+                  "cardId" to "srv_card_9b_1",
+                  "rewardCoins" to 45L,
+                  "scratchNumber" to 1L,
+                  "isFree" to true,
+                  "dateKey" to "2026-11-15"
+                )
+              }
+              "claimScratchCardReward" -> {
+                claimAttempts++
+                if (claimAttempts == 1) {
+                  throw IllegalStateException("Server temporarily unavailable. Please try again.")
+                }
+                mapOf(
+                  "success" to true,
+                  "cardId" to "srv_card_9b_1",
+                  "rewardCoins" to 45L,
+                  "scratchesCompletedToday" to 1L,
+                  "newBalanceCoins" to 145L
+                )
+              }
+              else -> error("Unexpected callable: $fnName")
+            }
+          }
+        )
+      val repo =
+        TaskFlowRepository(
+          firestore = firestore,
+          rewardFunctionsClient = client,
+          authenticatedUidProvider = { "u_scratch_9b" }
+        )
+      val vm =
+        TaskFlowViewModel(
+          repository = repo,
+          currentUserId = "u_scratch_9b",
+          currentUserEmail = "scratch9b@gmail.com",
+          currentUserDisplayName = "Scratch User",
+          initialPortal = PortalLoginTarget.USER_APP
+        )
+
+      vm.prepareScratchCard()
+      advanceUntilIdle()
+      assertEquals("srv_card_9b_1", vm.scratchCardUiState.value.activeSession?.cardId)
+      assertEquals(45L, vm.scratchCardUiState.value.revealedCoins)
+      assertEquals(1, createCalls)
+
+      // 1. Recoverable failure during claim must surface message without clearing activeSession or locking cardId
+      vm.onScratchRevealed()
+      vm.claimScratchCardReward()
+      advanceUntilIdle()
+      assertEquals(1, claimAttempts)
+      assertNotNull(vm.scratchCardUiState.value.activeSession)
+      assertTrue(
+        vm.scratchCardUiState.value.errorMessage?.contains("temporarily unavailable") == true
+      )
+
+      // 2. Retrying claim succeeds AND must NOT trigger a second createScratchCardSession error
+      vm.claimScratchCardReward()
+      advanceUntilIdle()
+      assertEquals(2, claimAttempts)
+      assertEquals(1, createCalls)
+      val finalState = vm.scratchCardUiState.value
+      assertEquals(null, finalState.activeSession)
+      assertEquals(null, finalState.errorMessage)
+      assertTrue(finalState.successMessage?.contains("45 Coins") == true)
+      assertEquals(1L, finalState.dailyState.scratchesCompletedToday)
+      assertFalse(finalState.dailyState.canScratchNow)
+    } finally {
+      Dispatchers.resetMain()
+    }
+  }
 }

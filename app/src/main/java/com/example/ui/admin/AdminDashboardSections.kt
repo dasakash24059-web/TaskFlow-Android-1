@@ -107,6 +107,8 @@ import com.example.data.model.PromoCodeStatus
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TelegramJoinConfig
+import com.example.data.model.TelegramTaskClaimRecord
+import com.example.data.model.TelegramTaskItem
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
@@ -1383,12 +1385,16 @@ fun AdminCoinsRewardsSection(
   users: List<UserProfile>,
   reviewTasks: List<TaskItem>,
   transactions: List<TransactionRecord>,
+  telegramTasks: List<TelegramTaskItem> = emptyList(),
+  telegramClaims: List<TelegramTaskClaimRecord> = emptyList(),
   telegramConfig: TelegramJoinConfig = TelegramJoinConfig(),
   promoCodes: List<PromoCodeItem> = emptyList(),
   manualBonuses: List<ManualBonusRecord> = emptyList(),
   isBusy: Boolean = false,
   promoAdminFeedback: PromoAdminUiFeedback = PromoAdminUiFeedback(),
   onClearPromoFeedback: () -> Unit = {},
+  onCreateTelegramTask: (title: String, channelUrl: String, channelChatId: String, rewardCoins: Long, isActive: Boolean) -> Unit = { _, _, _, _, _ -> },
+  onToggleTelegramTaskActive: (taskId: String, isActive: Boolean) -> Unit = { _, _ -> },
   onSaveTelegramConfig: (channelUrl: String, channelChatId: String, rewardCoins: Long, isActive: Boolean) -> Unit = { _, _, _, _ -> },
   onCreatePromoCode: (code: String, rewardCoins: Long, maxSlots: Long, expiresAtMillis: Long, expiresAtLabel: String, isActive: Boolean) -> Unit = { _, _, _, _, _, _ -> },
   onTogglePromoCodeActive: (promoId: String, isActive: Boolean) -> Unit = { _, _ -> },
@@ -1430,9 +1436,14 @@ fun AdminCoinsRewardsSection(
     // 0A. FEATURE 1: Telegram Join Task Management
     item {
       AdminTelegramJoinManagementCard(
+        telegramTasks = telegramTasks,
+        telegramClaims = telegramClaims,
         config = telegramConfig,
         isBusy = isBusy,
-        onSave = onSaveTelegramConfig
+        onCreateTask = { title, channelUrl, channelChatId, rewardCoins, isActive ->
+          onCreateTelegramTask(title, channelUrl, channelChatId, rewardCoins, isActive)
+        },
+        onToggleTaskActive = onToggleTelegramTaskActive
       )
     }
 
@@ -1678,16 +1689,20 @@ fun AdminCoinsRewardsSection(
 
 @Composable
 fun AdminTelegramJoinManagementCard(
-  config: TelegramJoinConfig,
+  telegramTasks: List<TelegramTaskItem> = emptyList(),
+  telegramClaims: List<TelegramTaskClaimRecord> = emptyList(),
+  config: TelegramJoinConfig = TelegramJoinConfig(),
   isBusy: Boolean = false,
-  onSave: (channelUrl: String, channelChatId: String, rewardCoins: Long, isActive: Boolean) -> Unit
+  onCreateTask: (title: String, channelUrl: String, channelChatId: String, rewardCoins: Long, isActive: Boolean) -> Unit,
+  onToggleTaskActive: (taskId: String, isActive: Boolean) -> Unit = { _, _ -> }
 ) {
+  var taskTitle by rememberSaveable { mutableStateOf("") }
   var channelUrl by rememberSaveable(config.channelUrl) { mutableStateOf(config.channelUrl) }
   var channelChatId by rememberSaveable(config.channelChatId) { mutableStateOf(config.channelChatId) }
   var rewardCoinsText by rememberSaveable(config.rewardCoins) {
     mutableStateOf(if (config.rewardCoins > 0L) config.rewardCoins.toString() else "")
   }
-  var isActive by rememberSaveable(config.isActive) { mutableStateOf(config.isActive) }
+  var isActive by rememberSaveable { mutableStateOf(true) }
   var validationError by remember { mutableStateOf<String?>(null) }
 
   Card(
@@ -1715,7 +1730,7 @@ fun AdminTelegramJoinManagementCard(
             tint = AdminBluePrimary
           )
           Text(
-            text = "Telegram Join Task Management",
+            text = "Telegram Join Tasks (${telegramTasks.size})",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = AdminTextDark
@@ -1741,6 +1756,18 @@ fun AdminTelegramJoinManagementCard(
       }
 
       OutlinedTextField(
+        value = taskTitle,
+        onValueChange = {
+          taskTitle = it
+          validationError = null
+        },
+        label = { Text("Task Title") },
+        placeholder = { Text("e.g., Join TaskFlow Updates") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().testTag("admin_telegram_title_input")
+      )
+
+      OutlinedTextField(
         value = channelUrl,
         onValueChange = {
           channelUrl = it
@@ -1762,8 +1789,8 @@ fun AdminTelegramJoinManagementCard(
             rewardCoinsText = it.filter { ch -> ch.isDigit() }
             validationError = null
           },
-          label = { Text("Custom Reward (Coins)") },
-          placeholder = { Text("Enter any coin amount") },
+          label = { Text("Reward (Coins)") },
+          placeholder = { Text("e.g., 100") },
           singleLine = true,
           modifier = Modifier.weight(1f).testTag("admin_telegram_reward_coins_input")
         )
@@ -1773,7 +1800,7 @@ fun AdminTelegramJoinManagementCard(
             channelChatId = it
             validationError = null
           },
-          label = { Text("Channel Chat ID") },
+          label = { Text("Channel Chat ID (Optional)") },
           placeholder = { Text("@yourchannel") },
           singleLine = true,
           modifier = Modifier.weight(1f).testTag("admin_telegram_chat_id_input")
@@ -1792,7 +1819,8 @@ fun AdminTelegramJoinManagementCard(
       Button(
         onClick = {
           val parsedCoins = rewardCoinsText.trim().toLongOrNull() ?: 0L
-          if (channelUrl.trim().isEmpty() || !channelUrl.trim().startsWith("https://", ignoreCase = true)) {
+          val cleanedUrl = channelUrl.trim()
+          if (cleanedUrl.isEmpty() || !cleanedUrl.startsWith("https://", ignoreCase = true)) {
             validationError = "Enter a valid HTTPS Telegram channel URL."
             return@Button
           }
@@ -1801,14 +1829,150 @@ fun AdminTelegramJoinManagementCard(
             return@Button
           }
           validationError = null
-          onSave(channelUrl.trim(), channelChatId.trim(), parsedCoins, isActive)
+          onCreateTask(
+            taskTitle.trim().ifBlank { "Join Telegram Channel" },
+            cleanedUrl,
+            channelChatId.trim(),
+            parsedCoins,
+            isActive
+          )
+          taskTitle = ""
+          channelUrl = ""
+          channelChatId = ""
+          rewardCoinsText = ""
         },
         enabled = !isBusy,
         shape = RoundedCornerShape(10.dp),
         colors = ButtonDefaults.buttonColors(containerColor = AdminBluePrimary),
         modifier = Modifier.fillMaxWidth().testTag("admin_telegram_save_button")
       ) {
-        Text("Save Telegram Task", fontWeight = FontWeight.Bold)
+        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Create Telegram Task", fontWeight = FontWeight.Bold)
+      }
+
+      if (telegramTasks.isNotEmpty()) {
+        HorizontalDivider(color = AdminBorderColor)
+        Text(
+          text = "Uploaded Telegram Tasks (${telegramTasks.size})",
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = FontWeight.Bold,
+          color = AdminTextDark
+        )
+        telegramTasks.forEach { task ->
+          val tId = task.effectiveTaskId
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = AdminSoftGreyBg,
+            border = BorderStroke(1.dp, AdminBorderColor),
+            modifier = Modifier.fillMaxWidth().testTag("admin_telegram_task_item_$tId")
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(12.dp),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                  Text(
+                    text = task.title.ifBlank { "Telegram Join Task" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = AdminTextDark,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                  )
+                  Surface(
+                    shape = RoundedCornerShape(50),
+                    color = if (task.isActive) AdminGreenSuccess.copy(alpha = 0.14f) else AdminTextMuted.copy(alpha = 0.14f)
+                  ) {
+                    Text(
+                      text = if (task.isActive) "ACTIVE" else "INACTIVE",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.Bold,
+                      color = if (task.isActive) AdminGreenSuccess else AdminTextMuted,
+                      modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                    )
+                  }
+                }
+                Text(
+                  text = "+${formatCoins(task.rewardCoins)} • ${task.claimsCount} claims",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = AdminTextSecondary,
+                  fontWeight = FontWeight.Medium
+                )
+                Text(
+                  text = task.channelUrl,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = AdminTextMuted,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+              }
+              Spacer(modifier = Modifier.width(8.dp))
+              OutlinedButton(
+                onClick = {
+                  if (!isBusy && tId.isNotBlank()) {
+                    onToggleTaskActive(tId, !task.isActive)
+                  }
+                },
+                enabled = !isBusy,
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.testTag("admin_telegram_toggle_$tId")
+              ) {
+                Text(
+                  text = if (task.isActive) "Deactivate" else "Activate",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold
+                )
+              }
+            }
+          }
+        }
+      }
+
+      if (telegramClaims.isNotEmpty()) {
+        HorizontalDivider(color = AdminBorderColor)
+        Text(
+          text = "Recent Telegram Claims (${telegramClaims.size})",
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = FontWeight.Bold,
+          color = AdminTextDark
+        )
+        telegramClaims.take(8).forEach { claim ->
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "${claim.userName.ifBlank { claim.userId }} • ${claim.taskTitle}",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = AdminTextDark,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+              if (claim.telegramUsernameMasked.isNotBlank()) {
+                Text(
+                  text = "Telegram: ${claim.telegramUsernameMasked}",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = AdminTextMuted
+                )
+              }
+            }
+            Text(
+              text = "+${formatCoins(claim.rewardCoins)}",
+              style = MaterialTheme.typography.bodySmall,
+              fontWeight = FontWeight.Bold,
+              color = AdminGreenSuccess
+            )
+          }
+        }
       }
     }
   }
@@ -3147,7 +3311,8 @@ fun AdminAppSettingsSection(
           )
           FinancialSummaryRow("Coin Conversion Standard", "$COINS_PER_RUPEE Coins = ₹1.00 INR")
           FinancialSummaryRow("Daily Check-In Reward", "30-Day Schedule (25–1,000 Coins)")
-          FinancialSummaryRow("Watch Video & Earn", "30–35 Random Coins (2-Ad Flow)")
+          FinancialSummaryRow("Watch Video & Earn", "63–125 Random Coins (2-Ad Flow)")
+          FinancialSummaryRow("Scratch & Win Cards", "1–100 Coins (1st Free, then 2 Ads • Max 50/day)")
           FinancialSummaryRow("Spin & Earn Wheel", "10–150 Coins (Free 24h + Extra Spins)")
           FinancialSummaryRow("Minimum Withdrawal Threshold", "25,000 Coins (₹200.00 INR)")
           FinancialSummaryRow("Duplicate Credit Protection", "Active (Single-Credit Verified)")

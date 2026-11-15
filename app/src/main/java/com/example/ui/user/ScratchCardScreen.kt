@@ -102,7 +102,8 @@ fun ScratchCardScreen(
   onScratchRevealed: () -> Unit,
   onClaimReward: () -> Unit,
   onDismissCongratulations: () -> Unit,
-  onClearFeedback: () -> Unit = {}
+  onClearFeedback: () -> Unit = {},
+  onRetryPrepare: () -> Unit = {}
 ) {
   BackHandler(onBack = onBack)
   val context = LocalContext.current
@@ -543,6 +544,62 @@ fun ScratchCardScreen(
             )
           } else {
             Text("CLAIM REWARD", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+          }
+        }
+      } else if (dailyState.canScratchNow && uiState.activeSession == null) {
+        NeonGlassCard(
+          shape = RoundedCornerShape(20.dp),
+          borderColor = Color(0xFF93C5FD).copy(alpha = 0.5f),
+          modifier = Modifier.fillMaxWidth()
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+          ) {
+            if (uiState.isLoading) {
+              CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 2.5.dp)
+              Text(
+                text = "Preparing your Scratch Card...",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+              )
+            } else {
+              Text(
+                text = "Your Scratch Card is ready",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center
+              )
+              Button(
+                onClick = onRetryPrepare,
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                  containerColor = MaterialTheme.colorScheme.primary,
+                  contentColor = MaterialTheme.colorScheme.onPrimary
+                ),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .height(48.dp)
+                  .testTag("retry_prepare_scratch_button")
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Refresh,
+                  contentDescription = null,
+                  modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                  text = "Retry Loading Scratch Card",
+                  fontWeight = FontWeight.Bold,
+                  fontSize = 15.sp
+                )
+              }
+            }
           }
         }
       } else if (!canScratchNow) {

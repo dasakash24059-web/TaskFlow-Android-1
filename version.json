@@ -1,7 +1,7 @@
 {
-  "latest_version_code": 24,
-  "latest_version_name": "4.4",
+  "latest_version_code": 36,
+  "latest_version_name": "5.6",
   "download_url": "https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk",
-  "release_notes": "TaskFlow update v4.4: Complete Coin reward system (125 Coins = ₹1), 30-day 5x6 Daily Check-in grid, 2-video Watch & Earn flow, 24h Spin & Earn wheel with extra spins, and dark glassmorphism UI.",
+  "release_notes": "TaskFlow v5.6: Server-authoritative reward Cloud Functions (Daily Check-in, Spin & Earn, Scratch Card, Watch & Earn, Promo Codes, Telegram Join, Manual Bonus), Unity S2S verification, UPI & Gift Card withdrawals, and Light Minimal UI.",
   "force_update": false
 }

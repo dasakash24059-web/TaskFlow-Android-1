@@ -7,6 +7,7 @@ import com.example.data.model.getLeaderboardDisplayCoins
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -83,6 +84,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -108,6 +110,8 @@ import com.example.data.model.DailyCheckInState
 import com.example.data.model.SubmissionItem
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
+import com.example.data.model.TelegramTaskItem
+import com.example.data.model.TelegramUserTaskState
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
@@ -693,7 +697,7 @@ private fun WatchAndEarnCard(
       }
 
       Text(
-        text = "1–200 Coins / Cycle",
+        text = "63–125 Coins / Cycle",
         style = MaterialTheme.typography.labelSmall,
         color = Color(0xFFFDE047),
         fontWeight = FontWeight.SemiBold,
@@ -3018,7 +3022,13 @@ fun UserTrackingScreen(
   selectedFilter: String,
   onSelectFilter: (String) -> Unit,
   onSelectTask: (String) -> Unit,
-  currentUserId: String = ""
+  currentUserId: String = "",
+  nextTelegramTask: TelegramTaskItem? = null,
+  telegramTaskState: TelegramUserTaskState? = null,
+  isTelegramBusy: Boolean = false,
+  onJoinTelegramTask: (TelegramTaskItem) -> Unit = {},
+  onVerifyTelegramTask: (TelegramTaskItem) -> Unit = {},
+  onClaimTelegramTask: (TelegramTaskItem) -> Unit = {}
 ) {
   val rawTasks = (tasksState as? UiState.Success)?.data ?: emptyList()
   // Exclude deactivated or quota-exhausted pending tasks so closed/exhausted tasks are never available for new user submissions
@@ -3041,6 +3051,12 @@ fun UserTrackingScreen(
         else -> visibleTasks.filter { it.status.equals(selectedFilter, ignoreCase = true) }
       }
     }
+
+  val showTelegramTaskCard =
+    nextTelegramTask != null &&
+      nextTelegramTask.isValidAndActive() &&
+      !(telegramTaskState?.isClaimed == true) &&
+      (selectedFilter.equals("all", ignoreCase = true) || selectedFilter.equals(TaskStatus.PENDING, ignoreCase = true))
 
   val availableCount = visibleTasks.count { it.isActive && !it.isQuotaExhausted && it.status == TaskStatus.PENDING }
   val filters =
@@ -3094,7 +3110,7 @@ fun UserTrackingScreen(
 
     Spacer(modifier = Modifier.height(14.dp))
 
-    if (filteredTasks.isEmpty()) {
+    if (filteredTasks.isEmpty() && !showTelegramTaskCard) {
       Box(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         contentAlignment = Alignment.Center
@@ -3126,12 +3142,220 @@ fun UserTrackingScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
       ) {
+        if (showTelegramTaskCard && nextTelegramTask != null) {
+          item(key = "telegram_task_${nextTelegramTask.effectiveTaskId}") {
+            TelegramJoinTaskCard(
+              task = nextTelegramTask,
+              taskState = telegramTaskState,
+              isBusy = isTelegramBusy,
+              onJoin = { onJoinTelegramTask(nextTelegramTask) },
+              onVerify = { onVerifyTelegramTask(nextTelegramTask) },
+              onClaim = { onClaimTelegramTask(nextTelegramTask) }
+            )
+          }
+        }
         items(filteredTasks, key = { it.id }) { task ->
           TaskItemCard(
             task = task,
             onClick = { onSelectTask(task.id) }
           )
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun TelegramLogoBadge(
+  modifier: Modifier = Modifier
+) {
+  Box(
+    modifier = modifier.size(40.dp).clip(CircleShape).background(Color(0xFF229ED9)),
+    contentAlignment = Alignment.Center
+  ) {
+    Canvas(modifier = Modifier.size(22.dp)) {
+      val w = size.width
+      val h = size.height
+      val planePath = Path().apply {
+        moveTo(w * 0.90f, h * 0.16f)
+        lineTo(w * 0.10f, h * 0.48f)
+        lineTo(w * 0.38f, h * 0.58f)
+        lineTo(w * 0.76f, h * 0.30f)
+        lineTo(w * 0.47f, h * 0.64f)
+        lineTo(w * 0.45f, h * 0.84f)
+        lineTo(w * 0.59f, h * 0.70f)
+        lineTo(w * 0.78f, h * 0.82f)
+        close()
+      }
+      drawPath(path = planePath, color = Color.White)
+    }
+  }
+}
+
+@Composable
+fun TelegramJoinTaskCard(
+  task: TelegramTaskItem,
+  taskState: TelegramUserTaskState? = null,
+  isBusy: Boolean = false,
+  onJoin: () -> Unit,
+  onVerify: () -> Unit,
+  onClaim: () -> Unit
+) {
+  val isVerified = taskState?.isMembershipVerified == true
+  val isClaimed = taskState?.isClaimed == true
+  val statusMessage = taskState?.statusMessage?.trim().orEmpty()
+  val errorMessage = taskState?.errorMessage?.trim().orEmpty()
+
+  NeonGlassCard(
+    shape = RoundedCornerShape(18.dp),
+    borderColor = Color(0xFF229ED9).copy(alpha = 0.45f),
+    backgroundColor = MaterialTheme.colorScheme.surface,
+    modifier = Modifier.fillMaxWidth().testTag("user_telegram_task_card")
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(
+          modifier = Modifier.weight(1f),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+          TelegramLogoBadge()
+          Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = Color(0xFFDBEAFE),
+                modifier = Modifier.testTag("user_telegram_new_badge")
+              ) {
+                Text(
+                  text = "NEW",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.ExtraBold,
+                  color = Color(0xFF1D4ED8),
+                  modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+              }
+              Text(
+                text = task.title.ifBlank { "Telegram Join Task" },
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+            }
+          }
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Surface(
+          shape = RoundedCornerShape(50),
+          color = Color(0xFFECFDF5),
+          border = BorderStroke(1.dp, Color(0xFF10B981))
+        ) {
+          Text(
+            text = "+${formatCoins(task.rewardCoins)}",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF047857),
+            modifier =
+              Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                .testTag("user_telegram_reward_badge")
+          )
+        }
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        OutlinedButton(
+          onClick = onJoin,
+          enabled = !isBusy && !isClaimed,
+          shape = RoundedCornerShape(10.dp),
+          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+          modifier =
+            Modifier.weight(1f)
+              .height(48.dp)
+              .testTag("user_telegram_join_button")
+        ) {
+          Text(
+            text = "JOIN",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+          )
+        }
+
+        Button(
+          onClick = onVerify,
+          enabled = !isBusy && !isClaimed,
+          shape = RoundedCornerShape(10.dp),
+          colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+          modifier =
+            Modifier.weight(1f)
+              .height(48.dp)
+              .testTag("user_telegram_verify_button")
+        ) {
+          Text(
+            text = if (isVerified) "VERIFIED" else "VERIFY",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+          )
+        }
+
+        Button(
+          onClick = onClaim,
+          enabled = isVerified && !isBusy && !isClaimed,
+          shape = RoundedCornerShape(10.dp),
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor = Color(0xFF059669),
+              disabledContainerColor = Color(0xFFE2E8F0),
+              disabledContentColor = Color(0xFF64748B)
+            ),
+          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+          modifier =
+            Modifier.weight(1f)
+              .height(48.dp)
+              .testTag("user_telegram_claim_button")
+        ) {
+          Text(
+            text = "CLAIM",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+          )
+        }
+      }
+
+      if (errorMessage.isNotEmpty()) {
+        Text(
+          text = errorMessage,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.error,
+          modifier = Modifier.testTag("user_telegram_error_text")
+        )
+      } else if (statusMessage.isNotEmpty()) {
+        Text(
+          text = statusMessage,
+          style = MaterialTheme.typography.bodySmall,
+          color = if (isVerified) Color(0xFF047857) else Color(0xFF0369A1),
+          fontWeight = FontWeight.Medium,
+          modifier = Modifier.testTag("user_telegram_status_text")
+        )
       }
     }
   }

@@ -77,7 +77,7 @@ data class ChatMessage(
 fun UserSupportScreen(
   onBack: () -> Unit,
   onNavigateScreen: (String) -> Unit,
-  onSubmitTicket: ((String, String, String) -> Unit)? = null
+  onSubmitTicket: ((String, String, String, (Boolean) -> Unit) -> Unit)? = null
 ) {
   BackHandler(onBack = onBack)
   var selectedTab by rememberSaveable { mutableStateOf(0) } // 0: FAQ, 1: Assistant Chat, 2: Contact
@@ -151,12 +151,14 @@ fun UserSupportScreen(
 
 @Composable
 private fun ContactSupportTicketView(
-  onSubmitTicket: ((String, String, String) -> Unit)?
+  onSubmitTicket: ((String, String, String, (Boolean) -> Unit) -> Unit)?
 ) {
   var subject by rememberSaveable { mutableStateOf("") }
   var category by rememberSaveable { mutableStateOf("Task Issue") }
   var message by rememberSaveable { mutableStateOf("") }
+  var isSubmitting by rememberSaveable { mutableStateOf(false) }
   var isSubmitted by rememberSaveable { mutableStateOf(false) }
+  var submitError by rememberSaveable { mutableStateOf<String?>(null) }
 
   val categories = listOf("Task Issue", "Reward / Wallet", "Account Approval", "App Bug", "Other")
 
@@ -262,16 +264,37 @@ private fun ContactSupportTicketView(
       shape = RoundedCornerShape(12.dp)
     )
 
+    if (!submitError.isNullOrBlank()) {
+      Text(
+        text = submitError.orEmpty(),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error
+      )
+    }
+
     Button(
       onClick = {
-        onSubmitTicket?.invoke(subject.trim(), message.trim(), category)
-        isSubmitted = true
+        val handler = onSubmitTicket
+        if (handler == null) {
+          submitError = "Support ticket service is unavailable right now."
+        } else {
+          submitError = null
+          isSubmitting = true
+          handler.invoke(subject.trim(), message.trim(), category) { success ->
+            isSubmitting = false
+            if (success) {
+              isSubmitted = true
+            } else {
+              submitError = "Could not submit your inquiry. Please try again."
+            }
+          }
+        }
       },
-      enabled = subject.trim().isNotBlank() && message.trim().isNotBlank(),
-      modifier = Modifier.fillMaxWidth().height(48.dp),
+      enabled = !isSubmitting && subject.trim().isNotBlank() && message.trim().isNotBlank(),
+      modifier = Modifier.fillMaxWidth().height(48.dp).testTag("submit_support_ticket_button"),
       shape = RoundedCornerShape(12.dp)
     ) {
-      Text("Submit Support Ticket")
+      Text(if (isSubmitting) "Submitting..." else "Submit Support Ticket")
     }
   }
 }

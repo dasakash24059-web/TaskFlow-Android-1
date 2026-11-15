@@ -155,7 +155,12 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    registerReceiver(downloadReceiver, android.content.IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE), RECEIVER_NOT_EXPORTED)
+    androidx.core.content.ContextCompat.registerReceiver(
+      this,
+      downloadReceiver,
+      android.content.IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+      androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+    )
     com.example.ui.theme.ThemePreferences.init(applicationContext)
     com.example.util.TaskFlowNotificationHelper.ensureNotificationChannels(applicationContext)
     ensureFirebaseInitialized(applicationContext)
@@ -429,8 +434,10 @@ private fun AuthenticatedWorkspace(
   val userNotifications by viewModel.userNotificationsState.collectAsStateWithLifecycle()
   val showNotificationDialog by viewModel.showNotificationDialog.collectAsStateWithLifecycle()
   val showSupportTicketDialog by viewModel.showSupportTicketDialog.collectAsStateWithLifecycle()
-  val telegramJoinConfig by viewModel.telegramJoinConfigState.collectAsStateWithLifecycle()
-  val telegramUserRewardState by viewModel.telegramUserRewardState.collectAsStateWithLifecycle()
+  val telegramTasks by viewModel.telegramTasksState.collectAsStateWithLifecycle()
+  val telegramClaims by viewModel.telegramClaimsState.collectAsStateWithLifecycle()
+  val telegramTaskUiStates by viewModel.telegramTaskUiStates.collectAsStateWithLifecycle()
+  val nextTelegramTask by viewModel.nextTelegramTaskState.collectAsStateWithLifecycle()
   val promoCodes by viewModel.promoCodesState.collectAsStateWithLifecycle()
   val manualBonuses by viewModel.manualBonusesState.collectAsStateWithLifecycle()
   val promoRedemptionUiState by viewModel.promoRedemptionUiState.collectAsStateWithLifecycle()
@@ -770,7 +777,8 @@ private fun AuthenticatedWorkspace(
                     onScratchRevealed = { viewModel.onScratchRevealed() },
                     onClaimReward = { viewModel.claimScratchCardReward() },
                     onDismissCongratulations = { viewModel.dismissScratchCongratulations() },
-                    onClearFeedback = { viewModel.clearScratchFeedback() }
+                    onClearFeedback = { viewModel.clearScratchFeedback() },
+                    onRetryPrepare = { viewModel.prepareScratchCard() }
                   )
                 } else if (isPromoCodeScreenVisible) {
                   PromoCodeRedemptionScreen(
@@ -797,14 +805,6 @@ private fun AuthenticatedWorkspace(
                     },
                     onBack = { viewModel.setDailyCheckInScreenVisible(false) },
                     isBusy = isBusy,
-                    telegramConfig = telegramJoinConfig,
-                    telegramRewardState = telegramUserRewardState,
-                    onVerifyTelegramMembership = { telegramUserId ->
-                      viewModel.verifyTelegramMembership(telegramUserId)
-                    },
-                    onClaimTelegramReward = {
-                      viewModel.claimTelegramJoinReward()
-                    },
                     onOpenPromoCodeScreen = {
                       viewModel.setPromoCodeScreenVisible(true)
                     }
@@ -877,13 +877,7 @@ private fun AuthenticatedWorkspace(
                     },
                     submissionsState = userSubmissionsState,
                     dailyCheckInState = dailyCheckInState,
-                    onClaimDailyCheckIn = {
-                      viewModel.setDailyCheckInScreenVisible(true)
-                      com.example.util.UnityAdsHelper.preloadRewardedAd(context, force = false)
-                      if (currentActivity != null) {
-                        com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(currentActivity)
-                      }
-                    },
+                    onClaimDailyCheckIn = {},
                     onNavigateToDailyCheckIn = {
                       viewModel.setDailyCheckInScreenVisible(true)
                       com.example.util.UnityAdsHelper.preloadRewardedAd(context, force = false)
@@ -942,12 +936,41 @@ private fun AuthenticatedWorkspace(
                 }
               }
               UserTab.TRACKING -> {
+                val activeTelegramTask = nextTelegramTask
+                val activeTelegramState = activeTelegramTask?.let { telegramTaskUiStates[it.effectiveTaskId] }
                 UserTrackingScreen(
                   tasksState = userTasksState,
                   selectedFilter = trackingFilter,
                   onSelectFilter = { viewModel.setTrackingStatusFilter(it) },
                   onSelectTask = { viewModel.selectTask(it) },
-                  currentUserId = user.uid
+                  currentUserId = user.uid,
+                  nextTelegramTask = activeTelegramTask,
+                  telegramTaskState = activeTelegramState,
+                  isTelegramBusy = isBusy,
+                  onJoinTelegramTask = { tgTask ->
+                    runCatching {
+                      val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(tgTask.channelUrl)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                      }
+                      context.startActivity(intent)
+                    }
+                  },
+                  onVerifyTelegramTask = { tgTask ->
+                    viewModel.verifyTelegramTask(
+                      taskId = tgTask.effectiveTaskId,
+                      onOpenBotLink = { botLinkUrl ->
+                        runCatching {
+                          val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(botLinkUrl)).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                          }
+                          context.startActivity(intent)
+                        }
+                      }
+                    )
+                  },
+                  onClaimTelegramTask = { tgTask ->
+                    viewModel.claimTelegramTask(tgTask.effectiveTaskId)
+                  }
                 )
               }
               UserTab.WALLET -> {
@@ -1097,8 +1120,13 @@ private fun AuthenticatedWorkspace(
                       }
                     }
                   },
-                  onSubmitSupportTicket = { subject, message, category ->
-                    viewModel.createSupportTicket(subject, message, category)
+                  onSubmitSupportTicket = { subject, message, category, onResult ->
+                    viewModel.createSupportTicket(
+                      subject = subject,
+                      message = message,
+                      category = category,
+                      onResult = onResult
+                    )
                   }
                 )
               }
@@ -1317,18 +1345,23 @@ private fun AuthenticatedWorkspace(
             onMarkAdminNotificationRead = { notifId ->
               viewModel.markAdminNotificationRead(notifId)
             },
-            telegramJoinConfig = telegramJoinConfig,
+            telegramTasks = telegramTasks,
+            telegramClaims = telegramClaims,
             promoCodes = promoCodes,
             manualBonuses = manualBonuses,
             promoAdminFeedback = promoAdminFeedback,
             onClearPromoFeedback = { viewModel.clearPromoAdminFeedback() },
-            onSaveTelegramConfig = { channelUrl, channelChatId, rewardCoins, isActive ->
-              viewModel.adminUpdateTelegramJoinConfig(
+            onCreateTelegramTask = { title, channelUrl, channelChatId, rewardCoins, isActive ->
+              viewModel.adminCreateTelegramTask(
+                title = title,
                 channelUrl = channelUrl,
                 channelChatId = channelChatId,
-                                rewardCoins = rewardCoins,
+                rewardCoins = rewardCoins,
                 isActive = isActive
               )
+            },
+            onToggleTelegramTaskActive = { taskId, isActive ->
+              viewModel.adminToggleTelegramTaskActive(taskId = taskId, isActive = isActive)
             },
             onCreatePromoCode = { rawCode, rewardCoins, maxSlots, expiresAtMillis, expiresAtLabel, isActive ->
               viewModel.adminCreatePromoCode(

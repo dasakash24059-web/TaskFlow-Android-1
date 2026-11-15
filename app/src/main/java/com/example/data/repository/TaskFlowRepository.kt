@@ -31,8 +31,13 @@ import com.example.data.model.SupportTicket
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TaskStep
+import com.example.data.model.TelegramAccountLinkStatus
 import com.example.data.model.TelegramJoinConfig
+import com.example.data.model.TelegramTaskClaimRecord
+import com.example.data.model.TelegramTaskItem
 import com.example.data.model.TelegramUserRewardState
+import com.example.data.model.TelegramUserTaskState
+import com.example.data.model.TelegramVerifyResult
 import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
@@ -273,6 +278,48 @@ interface RewardCloudFunctionsClient {
     code = normalizePromoCode(rawCode)
   )
 
+  suspend fun creditManualBonus(
+    targetUserId: String,
+    amountCoins: Long,
+    reason: String = "",
+    idempotencyKey: String
+  ): ManualBonusRecord = ManualBonusRecord(
+    id = idempotencyKey,
+    targetUserId = targetUserId,
+    amountCoins = amountCoins,
+    reason = reason,
+    idempotencyKey = idempotencyKey
+  )
+
+  suspend fun createTelegramTask(
+    title: String,
+    channelUrl: String,
+    channelChatId: String = "",
+    rewardCoins: Long,
+    isActive: Boolean = true
+  ): TelegramTaskItem = TelegramTaskItem(
+    id = "tg_default",
+    taskId = "tg_default",
+    title = title,
+    channelUrl = channelUrl,
+    channelChatId = channelChatId,
+    rewardCoins = rewardCoins,
+    isActive = isActive
+  )
+
+  suspend fun setTelegramTaskActiveStatus(
+    taskId: String,
+    isActive: Boolean
+  ): Boolean = isActive
+
+  suspend fun verifyTelegramTaskMembership(
+    taskId: String
+  ): TelegramVerifyResult = TelegramVerifyResult(taskId = taskId)
+
+  suspend fun claimTelegramTaskReward(
+    taskId: String
+  ): Long = 0L
+
   fun getOrAssignSessionRewardCoins(sessionId: String): Long = 0L
 }
 
@@ -301,6 +348,12 @@ class FirebaseRewardCloudFunctionsClient(
   private val consumedExtraSpinSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
   private val inFlightRewardClaimSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
   private val claimedRewardSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val inFlightScratchAdSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val consumedScratchAdSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val inFlightScratchCreateKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val inFlightScratchClaimCardIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val claimedScratchCardIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val inFlightManualBonusKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
   private val hasCustomCallableInvoker: Boolean
     get() = rewardCallableInvoker != null || promoCallableInvoker != null
@@ -735,70 +788,152 @@ class FirebaseRewardCloudFunctionsClient(
   override suspend fun recordScratchAdWatch(
     sessionId: String
   ): ScratchAdWatchResult = withTimeout(15_000L) {
-    val payload = mapOf("sessionId" to sessionId.trim())
-    val response =
-      functionsProvider()
-        .getHttpsCallable("recordScratchAdWatch")
-        .call(payload)
-        .await()
-    val dataMap = response.getData() as? Map<*, *>
-      ?: throw IllegalStateException("Empty response from recordScratchAdWatch Cloud Function.")
-    val success = dataMap["success"] as? Boolean ?: true
-    val resolvedSessionId = (dataMap["sessionId"] as? String)?.trim().orEmpty().ifEmpty { sessionId }
-    val adsWatched = (dataMap["adsWatchedForNextScratch"] as? Number)?.toLong() ?: 0L
-    val unlocked = (dataMap["unlockedScratchesCount"] as? Number)?.toLong() ?: 0L
-    val newlyUnlocked = dataMap["newlyUnlocked"] as? Boolean ?: false
-    val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty()
-    ScratchAdWatchResult(
-      success = success,
-      sessionId = resolvedSessionId,
-      adsWatchedForNextScratch = adsWatched,
-      unlockedScratchesCount = unlocked,
-      newlyUnlocked = newlyUnlocked,
-      dateKey = dateKey
-    )
+    val uid = authProvider().currentUser?.uid?.trim().orEmpty()
+    if (!hasCustomCallableInvoker) {
+      check(uid.isNotBlank()) { "Please sign in to unlock a Scratch Card." }
+    }
+    val cleanedSessionId = sessionId.trim()
+    require(
+      cleanedSessionId.isNotBlank() &&
+        !cleanedSessionId.startsWith("ad_") &&
+        !cleanedSessionId.startsWith("fallback_")
+    ) {
+      "A server-verified Scratch Card sessionId is required."
+    }
+    check(!consumedScratchAdSessionIds.contains(cleanedSessionId)) {
+      "This Scratch Card ad session has already been recorded."
+    }
+    check(inFlightScratchAdSessionIds.add(cleanedSessionId)) {
+      "Scratch Card ad watch recording is already in progress."
+    }
+
+    try {
+      val payload = mapOf("sessionId" to cleanedSessionId)
+      val responseData = try {
+        invokeRewardCallable("recordScratchAdWatch", payload)
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Throwable) {
+        throw IllegalStateException(
+          extractCloudFunctionErrorMessage(e, "Failed to record Scratch Card ad watch."),
+          e
+        )
+      }
+      val dataMap = responseData as? Map<*, *>
+        ?: throw IllegalStateException("Empty response from recordScratchAdWatch Cloud Function.")
+      val success = dataMap["success"] as? Boolean ?: true
+      check(success) { "Scratch Card ad watch was rejected by server." }
+      val resolvedSessionId =
+        (dataMap["sessionId"] as? String)?.trim().orEmpty().ifEmpty { cleanedSessionId }
+      val adsWatched = (dataMap["adsWatchedForNextScratch"] as? Number)?.toLong() ?: 0L
+      val unlocked = (dataMap["unlockedScratchesCount"] as? Number)?.toLong() ?: 0L
+      val newlyUnlocked = dataMap["newlyUnlocked"] as? Boolean ?: false
+      val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty()
+      consumedScratchAdSessionIds.add(cleanedSessionId)
+      ScratchAdWatchResult(
+        success = success,
+        sessionId = resolvedSessionId,
+        adsWatchedForNextScratch = adsWatched,
+        unlockedScratchesCount = unlocked,
+        newlyUnlocked = newlyUnlocked,
+        dateKey = dateKey
+      )
+    } finally {
+      inFlightScratchAdSessionIds.remove(cleanedSessionId)
+    }
   }
 
   override suspend fun createScratchCardSession(): ScratchCardSession = withTimeout(15_000L) {
-    val response =
-      functionsProvider()
-        .getHttpsCallable("createScratchCardSession")
-        .call()
-        .await()
-    val dataMap = response.getData() as? Map<*, *>
-      ?: throw IllegalStateException("Empty response from createScratchCardSession Cloud Function.")
-    val cardId = (dataMap["cardId"] as? String)?.trim().orEmpty()
-    check(cardId.isNotBlank()) {
-      "Cloud Function createScratchCardSession did not return a valid cardId."
-    }
-    val rewardCoins = (dataMap["rewardCoins"] as? Number)?.toLong() ?: 10L
-    val scratchNumber = (dataMap["scratchNumber"] as? Number)?.toLong() ?: 1L
-    val isFree = dataMap["isFree"] as? Boolean ?: false
-    val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty().ifEmpty { getTodayDateKey() }
     val uid = authProvider().currentUser?.uid?.trim().orEmpty()
-    ScratchCardSession(
-      id = cardId,
-      cardId = cardId,
-      userId = uid,
-      dateKey = dateKey,
-      scratchNumber = scratchNumber,
-      rewardCoins = rewardCoins,
-      isFree = isFree,
-      status = "ACTIVE",
-      claimed = false
-    )
+    if (!hasCustomCallableInvoker) {
+      check(uid.isNotBlank()) { "Please sign in to scratch cards." }
+    }
+    val lockKey = uid.ifBlank { "default_user" }
+    check(inFlightScratchCreateKeys.add(lockKey)) {
+      "Scratch Card creation is already in progress."
+    }
+
+    try {
+      val responseData = try {
+        invokeRewardCallable("createScratchCardSession", null)
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Throwable) {
+        throw IllegalStateException(
+          extractCloudFunctionErrorMessage(e, "Unable to create Scratch Card session."),
+          e
+        )
+      }
+      val dataMap = responseData as? Map<*, *>
+        ?: throw IllegalStateException("Empty response from createScratchCardSession Cloud Function.")
+      val cardId = (dataMap["cardId"] as? String)?.trim().orEmpty()
+      check(cardId.isNotBlank()) {
+        "Cloud Function createScratchCardSession did not return a valid cardId."
+      }
+      val rewardCoins =
+        (dataMap["rewardCoins"] as? Number)?.toLong()?.takeIf { it in 1L..100L }
+          ?: throw IllegalStateException(
+            "Cloud Function createScratchCardSession did not return valid rewardCoins."
+          )
+      val scratchNumber = (dataMap["scratchNumber"] as? Number)?.toLong() ?: 1L
+      val isFree = dataMap["isFree"] as? Boolean ?: false
+      val dateKey = (dataMap["dateKey"] as? String)?.trim().orEmpty().ifEmpty { getTodayDateKey() }
+      ScratchCardSession(
+        id = cardId,
+        cardId = cardId,
+        userId = uid,
+        dateKey = dateKey,
+        scratchNumber = scratchNumber,
+        rewardCoins = rewardCoins,
+        isFree = isFree,
+        status = "ACTIVE",
+        claimed = false
+      )
+    } finally {
+      inFlightScratchCreateKeys.remove(lockKey)
+    }
   }
 
   override suspend fun claimScratchCardReward(cardId: String): Long = withTimeout(15_000L) {
-    val payload = mapOf("cardId" to cardId.trim())
-    val response =
-      functionsProvider()
-        .getHttpsCallable("claimScratchCardReward")
-        .call(payload)
-        .await()
-    val dataMap = response.getData() as? Map<*, *>
-      ?: throw IllegalStateException("Empty response from claimScratchCardReward Cloud Function.")
-    (dataMap["rewardCoins"] as? Number)?.toLong() ?: 10L
+    val uid = authProvider().currentUser?.uid?.trim().orEmpty()
+    if (!hasCustomCallableInvoker) {
+      check(uid.isNotBlank()) { "Please sign in to claim your Scratch Card reward." }
+    }
+    val cleanedCardId = cardId.trim()
+    require(cleanedCardId.isNotBlank()) { "Invalid scratch card." }
+    check(!claimedScratchCardIds.contains(cleanedCardId)) {
+      "This Scratch Card reward has already been claimed."
+    }
+    check(inFlightScratchClaimCardIds.add(cleanedCardId)) {
+      "Scratch Card reward claim is already in progress."
+    }
+
+    try {
+      val payload = mapOf("cardId" to cleanedCardId)
+      val responseData = try {
+        invokeRewardCallable("claimScratchCardReward", payload)
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Throwable) {
+        throw IllegalStateException(
+          extractCloudFunctionErrorMessage(e, "Failed to claim Scratch Card reward."),
+          e
+        )
+      }
+      val dataMap = responseData as? Map<*, *>
+        ?: throw IllegalStateException("Empty response from claimScratchCardReward Cloud Function.")
+      val success = dataMap["success"] as? Boolean ?: true
+      check(success) { "Scratch Card reward claim was rejected by server." }
+      val rewardCoins =
+        (dataMap["rewardCoins"] as? Number)?.toLong()?.takeIf { it in 1L..100L }
+          ?: throw IllegalStateException(
+            "Missing or invalid rewardCoins in claimScratchCardReward response."
+          )
+      claimedScratchCardIds.add(cleanedCardId)
+      rewardCoins
+    } finally {
+      inFlightScratchClaimCardIds.remove(cleanedCardId)
+    }
   }
 
   private fun extractCloudFunctionErrorMessage(err: Throwable, fallback: String): String {
@@ -1007,6 +1142,180 @@ class FirebaseRewardCloudFunctionsClient(
       newBalanceCoins = serverNewBalanceCoins
     )
   }
+
+  override suspend fun creditManualBonus(
+    targetUserId: String,
+    amountCoins: Long,
+    reason: String,
+    idempotencyKey: String
+  ): ManualBonusRecord = withTimeout(15_000L) {
+    val cleanTarget = targetUserId.trim()
+    val cleanKey = idempotencyKey.trim()
+    val cleanReason = reason.trim().take(500)
+    check(inFlightManualBonusKeys.add(cleanKey)) {
+      "Manual bonus request is already being processed."
+    }
+    try {
+      val payload = mapOf<String, Any>(
+        "targetUserId" to cleanTarget,
+        "amountCoins" to amountCoins,
+        "reason" to cleanReason,
+        "idempotencyKey" to cleanKey
+      )
+      val responseData = try {
+        invokeRewardCallable("creditManualBonus", payload)
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Throwable) {
+        throw IllegalStateException(
+          extractCloudFunctionErrorMessage(e, "Failed to credit manual bonus."),
+          e
+        )
+      }
+      val dataMap = responseData as? Map<*, *>
+        ?: throw IllegalStateException("Empty response from creditManualBonus Cloud Function.")
+      val success = dataMap["success"] as? Boolean ?: true
+      check(success) { "Manual bonus credit was rejected by server." }
+
+      val serverAmount = (dataMap["amountCoins"] as? Number)?.toLong() ?: amountCoins
+      check(serverAmount > 0L) { "Server returned invalid manual bonus amount." }
+      ManualBonusRecord(
+        id = (dataMap["id"] as? String)?.trim().orEmpty().ifEmpty { cleanKey },
+        targetUserId = (dataMap["targetUserId"] as? String)?.trim().orEmpty().ifEmpty { cleanTarget },
+        targetUserName = (dataMap["targetUserName"] as? String)?.trim().orEmpty().ifEmpty { "TaskFlow Member" },
+        targetUserEmail = (dataMap["targetUserEmail"] as? String)?.trim().orEmpty(),
+        adminId = (dataMap["adminId"] as? String)?.trim().orEmpty(),
+        adminEmail = (dataMap["adminEmail"] as? String)?.trim().orEmpty(),
+        amountCoins = serverAmount,
+        reason = (dataMap["reason"] as? String)?.trim().orEmpty().ifEmpty { cleanReason.ifEmpty { "Special Admin Bonus" } },
+        idempotencyKey = (dataMap["idempotencyKey"] as? String)?.trim().orEmpty().ifEmpty { cleanKey }
+      )
+    } finally {
+      inFlightManualBonusKeys.remove(cleanKey)
+    }
+  }
+
+  override suspend fun createTelegramTask(
+    title: String,
+    channelUrl: String,
+    channelChatId: String,
+    rewardCoins: Long,
+    isActive: Boolean
+  ): TelegramTaskItem = withTimeout(15_000L) {
+    val payload = mapOf<String, Any>(
+      "title" to title.trim(),
+      "channelUrl" to channelUrl.trim(),
+      "channelChatId" to channelChatId.trim(),
+      "rewardCoins" to rewardCoins,
+      "isActive" to isActive
+    )
+    val responseData = try {
+      invokeRewardCallable("createTelegramTask", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to create Telegram Join task."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from createTelegramTask Cloud Function.")
+    val success = dataMap["success"] as? Boolean ?: true
+    check(success) { "Telegram Join task creation was rejected by server." }
+
+    val resolvedTaskId = (dataMap["taskId"] as? String)?.trim().orEmpty()
+    check(resolvedTaskId.isNotBlank()) { "Server did not return a valid taskId." }
+    TelegramTaskItem(
+      id = resolvedTaskId,
+      taskId = resolvedTaskId,
+      title = (dataMap["title"] as? String)?.trim().orEmpty().ifEmpty { title.trim() },
+      channelUrl = (dataMap["channelUrl"] as? String)?.trim().orEmpty().ifEmpty { channelUrl.trim() },
+      channelChatId = (dataMap["channelChatId"] as? String)?.trim().orEmpty(),
+      rewardCoins = (dataMap["rewardCoins"] as? Number)?.toLong() ?: rewardCoins,
+      isActive = dataMap["isActive"] as? Boolean ?: isActive,
+      claimsCount = (dataMap["claimsCount"] as? Number)?.toLong() ?: 0L,
+      createdBy = (dataMap["createdBy"] as? String)?.trim().orEmpty()
+    )
+  }
+
+  override suspend fun setTelegramTaskActiveStatus(
+    taskId: String,
+    isActive: Boolean
+  ): Boolean = withTimeout(15_000L) {
+    val payload = mapOf<String, Any>(
+      "taskId" to taskId.trim(),
+      "isActive" to isActive
+    )
+    val responseData = try {
+      invokeRewardCallable("setTelegramTaskActiveStatus", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to update Telegram task status."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from setTelegramTaskActiveStatus Cloud Function.")
+    check(dataMap["success"] as? Boolean ?: true) { "Failed to update Telegram task status." }
+    dataMap["isActive"] as? Boolean ?: isActive
+  }
+
+  override suspend fun verifyTelegramTaskMembership(
+    taskId: String
+  ): TelegramVerifyResult = withTimeout(20_000L) {
+    val cleanTaskId = taskId.trim()
+    val payload = mapOf<String, Any>("taskId" to cleanTaskId)
+    val responseData = try {
+      invokeRewardCallable("verifyTelegramTaskMembership", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Telegram membership verification failed."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from verifyTelegramTaskMembership Cloud Function.")
+    val success = dataMap["success"] as? Boolean ?: true
+    check(success) { "Telegram verification request failed." }
+    TelegramVerifyResult(
+      success = success,
+      verified = dataMap["verified"] as? Boolean ?: false,
+      needsAccountLink = dataMap["needsAccountLink"] as? Boolean ?: false,
+      taskId = (dataMap["taskId"] as? String)?.trim().orEmpty().ifEmpty { cleanTaskId },
+      botUsername = (dataMap["botUsername"] as? String)?.trim().orEmpty(),
+      botLinkUrl = (dataMap["botLinkUrl"] as? String)?.trim().orEmpty(),
+      telegramUsernameMasked = (dataMap["telegramUsernameMasked"] as? String)?.trim().orEmpty(),
+      message = (dataMap["message"] as? String)?.trim().orEmpty()
+    )
+  }
+
+  override suspend fun claimTelegramTaskReward(
+    taskId: String
+  ): Long = withTimeout(20_000L) {
+    val cleanTaskId = taskId.trim()
+    val payload = mapOf<String, Any>("taskId" to cleanTaskId)
+    val responseData = try {
+      invokeRewardCallable("claimTelegramTaskReward", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to claim Telegram task reward."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from claimTelegramTaskReward Cloud Function.")
+    val success = dataMap["success"] as? Boolean ?: true
+    val rewardCoins = (dataMap["rewardCoins"] as? Number)?.toLong() ?: 0L
+    check(success && rewardCoins > 0L) { "Telegram task reward claim was rejected by server." }
+    rewardCoins
+  }
 }
 
 /**
@@ -1156,6 +1465,8 @@ class TaskFlowRepository(
   private val appConfigCollection = firestore.collection("app_config")
   private val withdrawalAvailabilityDoc = appConfigCollection.document("withdrawal_availability")
   private val telegramJoinConfigDoc = appConfigCollection.document("telegram_join_config")
+  private val telegramTasksCollection = firestore.collection("telegram_tasks")
+  private val telegramClaimsCollection = firestore.collection("telegram_claims")
   private val promoCodesCollection = firestore.collection("promo_codes")
   private val manualBonusesCollection = firestore.collection("manual_bonuses")
   private val adminNotificationsCollection = firestore.collection("admin_notifications")
@@ -1235,19 +1546,31 @@ class TaskFlowRepository(
       awaitClose { listener.remove() }
     }
 
+  private fun computeSnapshotEffectiveBalanceCoins(snap: DocumentSnapshot?): Long {
+    if (snap == null || !snap.exists()) return 0L
+    val rawCents = snap.getLong("balanceCents") ?: 0L
+    val centsCoins = centsToCoins(rawCents)
+    val explicitEligible = snap.getLong("eligibleCoins") ?: 0L
+    val eligibleCoins = maxOf(explicitEligible, centsCoins)
+    val promoCoins = snap.getLong("promotionalCoins") ?: 0L
+    val explicitBalanceCoins = snap.getLong("balanceCoins") ?: 0L
+    return maxOf(explicitBalanceCoins, eligibleCoins + promoCoins)
+  }
+
   /**
    * Builds a privacy-safe public leaderboard document containing ONLY non-sensitive public fields
-   * (`userId`, `displayName`, `balanceCents`, `completedTasksCount`, `approvalStatus`, `updatedAt`)
-   * and NEVER `email`.
+   * (`userId`, `displayName`, `balanceCents`, `balanceCoins`, `completedTasksCount`, `approvalStatus`, `updatedAt`)
+   * and NEVER `email`. Preserves server-authoritative `balanceCoins`.
    */
-  private fun buildLeaderboardPayload(
+  internal fun buildLeaderboardPayload(
     userId: String,
     displayName: String,
     balanceCents: Long,
+    balanceCoins: Long? = null,
     completedTasksCount: Long,
     approvalStatus: String
-  ): Map<String, Any> =
-    mapOf(
+  ): Map<String, Any> {
+    val payload = mutableMapOf<String, Any>(
       "userId" to userId,
       "displayName" to displayName.trim().ifEmpty { "TaskFlow Member" },
       "balanceCents" to balanceCents,
@@ -1255,6 +1578,11 @@ class TaskFlowRepository(
       "approvalStatus" to approvalStatus,
       "updatedAt" to FieldValue.serverTimestamp()
     )
+    if (balanceCoins != null) {
+      payload["balanceCoins"] = balanceCoins
+    }
+    return payload
+  }
 
   /**
    * Checks if the current user is an authorized administrator via `/admins/{uid}` (and bootstrapped owner).
@@ -1374,9 +1702,11 @@ class TaskFlowRepository(
           userId = uid,
           displayName = safeName,
           balanceCents = 0L,
+          balanceCoins = 0L,
           completedTasksCount = 0L,
           approvalStatus = initialApproval
-        )
+        ),
+        SetOptions.merge()
       )
       batch.commit().await()
     } else if (isBootstrappedAdmin) {
@@ -1384,6 +1714,7 @@ class TaskFlowRepository(
       val currentApproval = snapshot.getString("approvalStatus") ?: "pending"
       val currentName = snapshot.getString("displayName") ?: safeName
       val currentBalance = snapshot.getLong("balanceCents") ?: 0L
+      val currentBalanceCoins = computeSnapshotEffectiveBalanceCoins(snapshot)
       val currentCompleted = snapshot.getLong("completedTasksCount") ?: 0L
       if (currentRole != "admin" || currentApproval != "approved") {
         val batch = firestore.batch()
@@ -1401,9 +1732,11 @@ class TaskFlowRepository(
             userId = uid,
             displayName = currentName,
             balanceCents = currentBalance,
+            balanceCoins = currentBalanceCoins,
             completedTasksCount = currentCompleted,
             approvalStatus = "approved"
-          )
+          ),
+          SetOptions.merge()
         )
         batch.commit().await()
       }
@@ -1452,6 +1785,7 @@ class TaskFlowRepository(
       val userRef = usersCollection.document(uid)
       val userSnap = userRef.get().await()
       check(userSnap.exists()) { "User profile not found." }
+      val currentBalanceCoins = computeSnapshotEffectiveBalanceCoins(userSnap)
       val batch = firestore.batch()
       batch.update(
         userRef,
@@ -1466,9 +1800,11 @@ class TaskFlowRepository(
           userId = uid,
           displayName = cleaned,
           balanceCents = userSnap.getLong("balanceCents") ?: 0L,
+          balanceCoins = currentBalanceCoins,
           completedTasksCount = userSnap.getLong("completedTasksCount") ?: 0L,
           approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
-        )
+        ),
+        SetOptions.merge()
       )
       batch.commit().await()
     }
@@ -2280,9 +2616,11 @@ class TaskFlowRepository(
           userId = submittingUserId,
           displayName = submittingUserName,
           balanceCents = currentBalance + rewardCents,
+          balanceCoins = newBalanceCoins,
           completedTasksCount = currentCompleted + 1L,
           approvalStatus = currentApproval
-        )
+        ),
+        SetOptions.merge()
       )
       val txRef = transactionsCollection.document()
       val taskTitle = (latestSubSnap.getString("taskTitle") ?: latestTaskSnap.getString("title") ?: task.title).ifEmpty { "Task" }
@@ -2406,6 +2744,7 @@ class TaskFlowRepository(
       val userRef = usersCollection.document(userId)
       val userSnap = userRef.get().await()
       check(userSnap.exists()) { "User profile $userId not found." }
+      val currentBalanceCoins = computeSnapshotEffectiveBalanceCoins(userSnap)
       val batch = firestore.batch()
       batch.update(
         userRef,
@@ -2420,9 +2759,11 @@ class TaskFlowRepository(
           userId = userId,
           displayName = userSnap.getString("displayName") ?: "TaskFlow Member",
           balanceCents = userSnap.getLong("balanceCents") ?: 0L,
+          balanceCoins = currentBalanceCoins,
           completedTasksCount = userSnap.getLong("completedTasksCount") ?: 0L,
           approvalStatus = approvalStatus
-        )
+        ),
+        SetOptions.merge()
       )
       batch.commit().await()
     }
@@ -2605,18 +2946,18 @@ class TaskFlowRepository(
         )
       )
 
-      if (deductCents > 0L) {
-        transaction.set(
-          leaderboardRef,
-          buildLeaderboardPayload(
-            userId = uid,
-            displayName = resolvedUserName,
-            balanceCents = newBalanceCents,
-            completedTasksCount = completedTasksCount,
-            approvalStatus = approvalStatus
-          )
-        )
-      }
+      transaction.set(
+        leaderboardRef,
+        buildLeaderboardPayload(
+          userId = uid,
+          displayName = resolvedUserName,
+          balanceCents = newBalanceCents,
+          balanceCoins = newBalanceCoins,
+          completedTasksCount = completedTasksCount,
+          approvalStatus = approvalStatus
+        ),
+        SetOptions.merge()
+      )
 
       val requestPayload =
         mapOf(
@@ -3064,18 +3405,18 @@ class TaskFlowRepository(
           )
         )
 
-        if (deductCents > 0L) {
-          transaction.set(
-            leaderboardCollection.document(targetUid),
-            buildLeaderboardPayload(
-              userId = targetUid,
-              displayName = resolvedUserName,
-              balanceCents = newBalanceCents,
-              completedTasksCount = completedTasksCount,
-              approvalStatus = approvalStatus
-            )
-          )
-        }
+        transaction.set(
+          leaderboardCollection.document(targetUid),
+          buildLeaderboardPayload(
+            userId = targetUid,
+            displayName = resolvedUserName,
+            balanceCents = newBalanceCents,
+            balanceCoins = newBalanceCoins,
+            completedTasksCount = completedTasksCount,
+            approvalStatus = approvalStatus
+          ),
+          SetOptions.merge()
+        )
 
         transaction.update(
           reqRef,
@@ -3373,6 +3714,7 @@ class TaskFlowRepository(
     val userRef = usersCollection.document(targetUserId)
     val userSnap = userRef.get().await()
     check(userSnap.exists()) { "User profile $targetUserId not found." }
+    val currentBalanceCoins = computeSnapshotEffectiveBalanceCoins(userSnap)
     val batch = firestore.batch()
     batch.update(
       userRef,
@@ -3387,9 +3729,11 @@ class TaskFlowRepository(
         userId = targetUserId,
         displayName = cleaned,
         balanceCents = userSnap.getLong("balanceCents") ?: 0L,
+        balanceCoins = currentBalanceCoins,
         completedTasksCount = userSnap.getLong("completedTasksCount") ?: 0L,
         approvalStatus = userSnap.getString("approvalStatus") ?: "pending"
-      )
+      ),
+      SetOptions.merge()
     )
     batch.commit().await()
   }
@@ -4051,8 +4395,225 @@ class TaskFlowRepository(
   }
 
   // =========================================================================
-  // FEATURE 1: TELEGRAM JOIN REWARD
+  // FEATURE 1: MULTI-TASK TELEGRAM JOIN REWARD (SERVER-AUTHORITATIVE)
   // =========================================================================
+
+  private fun DocumentSnapshot.toTelegramTaskItem(): TelegramTaskItem? {
+    if (!exists()) return null
+    val channelUrl = getString("channelUrl")?.trim().orEmpty()
+    if (channelUrl.isEmpty()) return null
+    val resolvedId = (getString("taskId")?.trim().orEmpty()).ifEmpty { id }
+    return TelegramTaskItem(
+      id = id,
+      taskId = resolvedId,
+      title = getString("title")?.trim().orEmpty().ifEmpty { "Join Telegram Channel" },
+      channelUrl = channelUrl,
+      channelChatId = getString("channelChatId")?.trim().orEmpty(),
+      rewardCoins = getLong("rewardCoins") ?: 0L,
+      isActive = getBoolean("isActive") ?: false,
+      claimsCount = getLong("claimsCount") ?: 0L,
+      createdBy = getString("createdBy")?.trim().orEmpty(),
+      createdAt = getTimestamp("createdAt"),
+      updatedAt = getTimestamp("updatedAt")
+    )
+  }
+
+  private fun DocumentSnapshot.toTelegramTaskClaimRecord(): TelegramTaskClaimRecord? {
+    if (!exists()) return null
+    val taskId = getString("taskId")?.trim().orEmpty()
+    val userId = getString("userId")?.trim().orEmpty()
+    if (taskId.isEmpty() || userId.isEmpty()) return null
+    return TelegramTaskClaimRecord(
+      id = id,
+      claimId = getString("claimId")?.trim().orEmpty().ifEmpty { id },
+      taskId = taskId,
+      taskTitle = getString("taskTitle")?.trim().orEmpty().ifEmpty { "Telegram Join Task" },
+      channelUrl = getString("channelUrl")?.trim().orEmpty(),
+      userId = userId,
+      userName = getString("userName")?.trim().orEmpty(),
+      telegramUsernameMasked = getString("telegramUsernameMasked")?.trim().orEmpty(),
+      rewardCoins = getLong("rewardCoins") ?: 0L,
+      claimedAt = getTimestamp("claimedAt")
+    )
+  }
+
+  fun observeTelegramTasks(isAdminAuthorized: Boolean): Flow<List<TelegramTaskItem>> = callbackFlow {
+    val query = if (isAdminAuthorized) {
+      telegramTasksCollection
+    } else {
+      telegramTasksCollection.whereEqualTo("isActive", true)
+    }
+    val listener =
+      query.addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          Log.w("TaskFlowRepository", "observeTelegramTasks listener error: ${error.message}")
+          trySend(emptyList())
+          return@addSnapshotListener
+        }
+        val list =
+          snapshot
+            ?.documents
+            ?.mapNotNull { it.toTelegramTaskItem() }
+            ?.sortedWith(
+              compareByDescending<TelegramTaskItem> { it.createdAt?.seconds ?: 0L }
+                .thenBy { it.effectiveTaskId }
+            )
+            ?: emptyList()
+        trySend(list)
+      }
+    awaitClose { listener.remove() }
+  }
+
+  fun observeTelegramClaims(
+    userId: String,
+    isAdminAuthorized: Boolean
+  ): Flow<List<TelegramTaskClaimRecord>> = callbackFlow {
+    val query = when {
+      isAdminAuthorized -> telegramClaimsCollection
+      userId.isNotBlank() -> telegramClaimsCollection.whereEqualTo("userId", userId)
+      else -> {
+        trySend(emptyList())
+        awaitClose {}
+        return@callbackFlow
+      }
+    }
+    val listener =
+      query.addSnapshotListener { snapshot, error ->
+        if (error != null) {
+          Log.w("TaskFlowRepository", "observeTelegramClaims listener error: ${error.message}")
+          trySend(emptyList())
+          return@addSnapshotListener
+        }
+        val list =
+          snapshot
+            ?.documents
+            ?.mapNotNull { it.toTelegramTaskClaimRecord() }
+            ?.sortedByDescending { it.claimedAt?.seconds ?: 0L }
+            ?: emptyList()
+        trySend(list)
+      }
+    awaitClose { listener.remove() }
+  }
+
+  fun observeTelegramUserTaskStates(userId: String): Flow<Map<String, TelegramUserTaskState>> =
+    callbackFlow {
+      if (userId.isBlank()) {
+        trySend(emptyMap())
+        awaitClose {}
+        return@callbackFlow
+      }
+      val colRef = usersCollection.document(userId).collection("telegram_task_states")
+      val listener =
+        colRef.addSnapshotListener { snapshot, error ->
+          if (error != null || snapshot == null) {
+            trySend(emptyMap())
+            return@addSnapshotListener
+          }
+          val map = buildMap<String, TelegramUserTaskState> {
+            snapshot.documents.forEach { doc ->
+              val tId = (doc.getString("taskId")?.trim().orEmpty()).ifEmpty { doc.id }
+              put(
+                tId,
+                TelegramUserTaskState(
+                  taskId = tId,
+                  userId = userId,
+                  isMembershipVerified = doc.getBoolean("isMembershipVerified") ?: false,
+                  isClaimed = doc.getBoolean("isClaimed") ?: false,
+                  rewardCoinsClaimed = doc.getLong("rewardCoinsClaimed") ?: 0L
+                )
+              )
+            }
+          }
+          trySend(map)
+        }
+      awaitClose { listener.remove() }
+    }
+
+  fun observeTelegramAccountStatus(userId: String): Flow<TelegramAccountLinkStatus> = callbackFlow {
+    if (userId.isBlank()) {
+      trySend(TelegramAccountLinkStatus())
+      awaitClose {}
+      return@callbackFlow
+    }
+    val docRef = usersCollection.document(userId).collection("telegram_account").document("status")
+    val listener =
+      docRef.addSnapshotListener { snapshot, error ->
+        if (error != null || snapshot == null || !snapshot.exists()) {
+          trySend(TelegramAccountLinkStatus(userId = userId, isLinked = false))
+          return@addSnapshotListener
+        }
+        trySend(
+          TelegramAccountLinkStatus(
+            userId = userId,
+            isLinked = snapshot.getBoolean("isLinked") ?: false,
+            telegramUsernameMasked = snapshot.getString("telegramUsernameMasked").orEmpty()
+          )
+        )
+      }
+    awaitClose { listener.remove() }
+  }
+
+  suspend fun createTelegramTask(
+    title: String,
+    channelUrl: String,
+    channelChatId: String = "",
+    rewardCoins: Long,
+    isActive: Boolean = true
+  ): Result<TelegramTaskItem> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    val cleanedUrl = channelUrl.trim()
+    require(cleanedUrl.isNotEmpty() && isValidTaskUrl(cleanedUrl)) {
+      "Please enter a valid HTTPS Telegram channel URL (e.g., https://t.me/yourchannel)."
+    }
+    require(rewardCoins in 1L..10_000_000L) {
+      "Telegram reward amount must be between 1 and 10,000,000 Coins."
+    }
+    rewardFunctionsClient.createTelegramTask(
+      title = title.trim(),
+      channelUrl = cleanedUrl,
+      channelChatId = channelChatId.trim(),
+      rewardCoins = rewardCoins,
+      isActive = isActive
+    )
+  }
+
+  suspend fun setTelegramTaskActiveStatus(
+    taskId: String,
+    isActive: Boolean
+  ): Result<Boolean> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    val cleanedId = taskId.trim()
+    require(cleanedId.isNotBlank()) { "Valid Telegram taskId is required." }
+    rewardFunctionsClient.setTelegramTaskActiveStatus(cleanedId, isActive)
+  }
+
+  suspend fun verifyTelegramTaskMembership(
+    userId: String,
+    taskId: String
+  ): Result<TelegramVerifyResult> = runCatching {
+    val cleanUserId = userId.trim()
+    val cleanTaskId = taskId.trim()
+    require(cleanUserId.isNotBlank()) { "Sign-in required." }
+    require(cleanTaskId.isNotBlank()) { "Invalid Telegram task." }
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    check(authUid == cleanUserId) { "Authenticated user mismatch." }
+    rewardFunctionsClient.verifyTelegramTaskMembership(cleanTaskId)
+  }
+
+  suspend fun claimTelegramTaskReward(
+    userId: String,
+    taskId: String
+  ): Result<Long> = runCatching {
+    val cleanUserId = userId.trim()
+    val cleanTaskId = taskId.trim()
+    require(cleanUserId.isNotBlank()) { "Sign-in required." }
+    require(cleanTaskId.isNotBlank()) { "Invalid Telegram task." }
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    check(authUid == cleanUserId) { "Authenticated user mismatch." }
+    rewardFunctionsClient.claimTelegramTaskReward(cleanTaskId)
+  }
 
   private fun DocumentSnapshot.toTelegramJoinConfig(): TelegramJoinConfig {
     if (!exists()) return TelegramJoinConfig()
@@ -4076,60 +4637,6 @@ class TaskFlowRepository(
         trySend(snapshot?.toTelegramJoinConfig() ?: TelegramJoinConfig())
       }
     awaitClose { listener.remove() }
-  }
-
-  suspend fun getTelegramJoinConfig(): Result<TelegramJoinConfig> = runCatching {
-    val snap = telegramJoinConfigDoc.get().await()
-    snap.toTelegramJoinConfig()
-  }
-
-  suspend fun updateTelegramJoinConfig(
-    channelUrl: String,
-    channelChatId: String = "",
-    rewardCoins: Long,
-    isActive: Boolean
-  ): Result<TelegramJoinConfig> = runCatching {
-    val authUser = authProvider().currentUser ?: error("Admin sign-in required.")
-    val adminUid = authUser.uid.trim()
-    val adminEmail = authUser.email?.trim().orEmpty()
-    require(adminUid.isNotBlank()) { "Admin sign-in required." }
-    val isAuthorized = checkAndEnsureAdminAuthorization(adminUid, adminEmail)
-    check(isAuthorized) { "Only authorized administrators can configure Telegram Join Reward settings." }
-
-    val cleanedUrl = channelUrl.trim()
-    require(cleanedUrl.isNotEmpty() && isValidTaskUrl(cleanedUrl)) {
-      "Please enter a valid HTTPS Telegram channel URL (e.g., https://t.me/yourchannel)."
-    }
-    require(rewardCoins in 1L..10_000_000L) {
-      "Telegram reward amount must be greater than 0 Coins."
-    }
-    val resolvedChatId = channelChatId.trim().ifBlank { cleanedUrl.substringAfterLast("/").trim() }
-
-    val payload =
-      mapOf(
-        "channelUrl" to cleanedUrl,
-        "channelChatId" to resolvedChatId,
-        "rewardCoins" to rewardCoins,
-        "isActive" to isActive,
-        "updatedBy" to adminUid,
-        "updatedAt" to FieldValue.serverTimestamp()
-      )
-    telegramJoinConfigDoc.set(payload).await()
-
-    recordAdminActivity(
-      actionType = "REWARD",
-      title = "Updated Telegram Join Reward",
-      details = "URL: $cleanedUrl • Reward: ${formatCoins(rewardCoins)} • Active: $isActive",
-      targetId = "telegram_join_config"
-    )
-
-    TelegramJoinConfig(
-      channelUrl = cleanedUrl,
-      channelChatId = resolvedChatId,
-      rewardCoins = rewardCoins,
-      isActive = isActive,
-      updatedBy = adminUid
-    )
   }
 
   fun observeTelegramUserRewardState(userId: String): Flow<TelegramUserRewardState> = callbackFlow {
@@ -4156,52 +4663,6 @@ class TaskFlowRepository(
         )
       }
     awaitClose { listener.remove() }
-  }
-
-  suspend fun verifyTelegramMembership(
-    userId: String,
-    telegramUserId: String
-  ): Result<Boolean> = runCatching {
-    require(userId.isNotBlank()) { "Sign-in required." }
-    val authUid = authProvider().currentUser?.uid?.trim().orEmpty()
-    check(authUid == userId) { "Authenticated user mismatch." }
-    val cleanedTgUserId = telegramUserId.trim()
-    require(cleanedTgUserId.isNotEmpty() && cleanedTgUserId.all { it.isDigit() }) {
-      "Please enter your numeric Telegram User ID to verify channel membership."
-    }
-
-    val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
-    val data = mapOf<String, Any>("telegramUserId" to cleanedTgUserId)
-    val result = functions
-      .getHttpsCallable("verifyTelegramMembership")
-      .call(data)
-      .await()
-
-    val resultMap = result.data as? Map<*, *>
-    val success = resultMap?.get("success") == true
-    check(success) { "Telegram membership verification failed." }
-    true
-  }
-
-  suspend fun claimTelegramJoinReward(
-    userId: String,
-    userName: String
-  ): Result<Long> = runCatching {
-    require(userId.isNotBlank()) { "Sign-in required." }
-    val authUid = authProvider().currentUser?.uid?.trim().orEmpty()
-    check(authUid == userId) { "Authenticated user mismatch." }
-
-    val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
-    val result = functions
-      .getHttpsCallable("claimTelegramJoinReward")
-      .call(emptyMap<String, Any>())
-      .await()
-
-    val resultMap = result.data as? Map<*, *>
-    val success = resultMap?.get("success") == true
-    val rewardCoins = (resultMap?.get("rewardCoins") as? Number)?.toLong() ?: 0L
-    check(success && rewardCoins > 0L) { "Failed to claim Telegram Join Reward." }
-    rewardCoins
   }
 
   // =========================================================================
@@ -4400,12 +4861,10 @@ class TaskFlowRepository(
     }
 
   /**
-   * Credits a custom manual bonus to any registered user's existing Wallet atomically.
-   * - Preserves the user's existing wallet balance and adds [amountCoins].
-   * - Records a `TransactionType.ADMIN_MANUAL_BONUS` transaction, `/manual_bonuses/{idempotencyKey}` audit record,
-   *   and a single notification in the user's existing Notification Bell (`NotificationRewardType.ADMIN_BONUS`).
-   * - Prevents duplicate credit on repeated button clicks via [idempotencyKey].
-   * - Strictly restricted to authorized admins.
+   * Credits a custom manual bonus to any registered user's existing Wallet exclusively via the
+   * server-authoritative `creditManualBonus` Cloud Function.
+   * Never performs direct client-side Firestore writes to `/users`, `/manual_bonuses`,
+   * `/transactions`, `/notifications`, `/leaderboard`, or `/admin_logs`.
    */
   suspend fun creditAdminManualBonus(
     targetUserId: String,
@@ -4413,133 +4872,26 @@ class TaskFlowRepository(
     reason: String = "",
     idempotencyKey: String = UUID.randomUUID().toString().replace("-", "")
   ): Result<ManualBonusRecord> = runCatching {
-    val authUser = authProvider().currentUser ?: error("Admin sign-in required.")
-    val adminUid = authUser.uid.trim()
-    val adminEmail = authUser.email?.trim().orEmpty()
-    require(adminUid.isNotBlank()) { "Admin sign-in required." }
-    val isAuthorized = checkAndEnsureAdminAuthorization(adminUid, adminEmail)
-    check(isAuthorized) { "Only authorized administrators can credit manual bonuses." }
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
 
     val cleanTargetUid = targetUserId.trim()
     require(cleanTargetUid.isNotBlank()) { "Please select a target user." }
     require(amountCoins in 1L..10_000_000L) {
-      "Manual bonus amount must be greater than 0 Coins."
+      "Manual bonus amount must be between 1 and 10,000,000 Coins."
     }
     val cleanKey = idempotencyKey.trim()
-    require(cleanKey.isNotBlank() && cleanKey.length <= 128) {
+    require(cleanKey.length in 6..128 && cleanKey.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
       "Valid idempotency key is required."
     }
     val cleanedReason = reason.trim().take(500)
 
-    val userRef = usersCollection.document(cleanTargetUid)
-    val bonusRef = manualBonusesCollection.document(cleanKey)
-    val txId = "bonus_$cleanKey"
-    val txRef = transactionsCollection.document(txId)
-    val notifRef = userRef.collection("notifications").document("notif_$txId")
-
-    val record =
-      firestore.runTransaction { transaction ->
-        val existingBonus = transaction.get(bonusRef)
-        check(!existingBonus.exists()) {
-          "This manual bonus has already been credited (duplicate request prevented)."
-        }
-        val existingTx = transaction.get(txRef)
-        check(!existingTx.exists()) {
-          "This manual bonus transaction has already been recorded."
-        }
-
-        val userSnap = transaction.get(userRef)
-        check(userSnap.exists()) { "Selected user profile not found." }
-
-        val oldBalanceCents = userSnap.getLong("balanceCents") ?: 0L
-        val oldEligibleCoins =
-          maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(oldBalanceCents))
-        val oldPromoCoins = userSnap.getLong("promotionalCoins") ?: 0L
-        val oldBalanceCoins =
-          maxOf(userSnap.getLong("balanceCoins") ?: 0L, oldEligibleCoins + oldPromoCoins)
-
-        val newPromoCoins = oldPromoCoins + amountCoins
-        val newBalanceCoins = oldBalanceCoins + amountCoins
-
-        val targetName =
-          (userSnap.getString("displayName") ?: "TaskFlow Member").trim().ifEmpty { "TaskFlow Member" }
-        val targetEmail = userSnap.getString("email")?.trim().orEmpty()
-        val displayReason = cleanedReason.ifEmpty { "Special Admin Bonus" }
-
-        transaction.update(
-          userRef,
-          mapOf(
-            "promotionalCoins" to newPromoCoins,
-            "balanceCoins" to newBalanceCoins,
-            "updatedAt" to FieldValue.serverTimestamp()
-          )
-        )
-
-        transaction.set(
-          bonusRef,
-          mapOf(
-            "targetUserId" to cleanTargetUid,
-            "targetUserName" to targetName,
-            "targetUserEmail" to targetEmail,
-            "adminId" to adminUid,
-            "adminEmail" to adminEmail,
-            "amountCoins" to amountCoins,
-            "reason" to displayReason,
-            "idempotencyKey" to cleanKey,
-            "createdAt" to FieldValue.serverTimestamp()
-          )
-        )
-
-        transaction.set(
-          txRef,
-          mapOf(
-            "userId" to cleanTargetUid,
-            "userName" to targetName,
-            "type" to TransactionType.ADMIN_MANUAL_BONUS,
-            "title" to "Admin Bonus: ${displayReason.take(80)}",
-            "amountCents" to coinsToCents(amountCoins),
-            "amountCoins" to amountCoins,
-            "status" to "CREDITED",
-            "referenceId" to cleanKey,
-            "createdAt" to FieldValue.serverTimestamp()
-          )
-        )
-
-        transaction.set(
-          notifRef,
-          mapOf(
-            "userId" to cleanTargetUid,
-            "title" to "Admin Bonus Credited",
-            "body" to "You received +${formatCoins(amountCoins)} from Admin! Reason: $displayReason",
-            "type" to NotificationRewardType.ADMIN_BONUS,
-            "rewardCoins" to amountCoins,
-            "referenceId" to cleanKey,
-            "isRead" to false,
-            "createdAt" to FieldValue.serverTimestamp()
-          )
-        )
-
-        ManualBonusRecord(
-          id = cleanKey,
-          targetUserId = cleanTargetUid,
-          targetUserName = targetName,
-          targetUserEmail = targetEmail,
-          adminId = adminUid,
-          adminEmail = adminEmail,
-          amountCoins = amountCoins,
-          reason = displayReason,
-          idempotencyKey = cleanKey
-        )
-      }.await()
-
-    recordAdminActivity(
-      actionType = "REWARD",
-      title = "Credited Manual Bonus (+${formatCoins(amountCoins)})",
-      details = "User: ${record.targetUserName} (${record.targetUserId}) • Reason: ${record.reason}",
-      targetId = cleanKey
+    rewardFunctionsClient.creditManualBonus(
+      targetUserId = cleanTargetUid,
+      amountCoins = amountCoins,
+      reason = cleanedReason,
+      idempotencyKey = cleanKey
     )
-
-    record
   }
 
   // =========================================================================
@@ -4547,7 +4899,7 @@ class TaskFlowRepository(
   // =========================================================================
 
   fun observeScratchDailyState(userId: String): Flow<ScratchDailyState> = callbackFlow {
-    val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
+    val uid = userId.trim().ifEmpty { authenticatedUidProvider()?.trim().orEmpty() }
     if (uid.isBlank()) {
       trySend(ScratchDailyState())
       close()
@@ -4600,13 +4952,13 @@ class TaskFlowRepository(
   }
 
   suspend fun getOrCreateActiveScratchCard(userId: String): ScratchCardSession {
-    val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
+    val uid = userId.trim().ifEmpty { authenticatedUidProvider()?.trim().orEmpty() }
     check(uid.isNotBlank()) { "Please sign in to scratch cards." }
     return rewardFunctionsClient.createScratchCardSession()
   }
 
   suspend fun createScratchCardAdSession(userId: String): Result<String> = runCatching {
-    val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
+    val uid = userId.trim().ifEmpty { authenticatedUidProvider()?.trim().orEmpty() }
     require(uid.isNotBlank()) { "Please sign in to watch videos." }
     val session = rewardFunctionsClient.createRewardSession(rewardType = "SCRATCH_CARD_UNLOCK")
     session.sessionId
@@ -4616,7 +4968,7 @@ class TaskFlowRepository(
     userId: String,
     sessionId: String
   ): Result<ScratchAdWatchResult> = runCatching {
-    val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
+    val uid = userId.trim().ifEmpty { authenticatedUidProvider()?.trim().orEmpty() }
     require(uid.isNotBlank()) { "User authentication is required." }
     require(sessionId.isNotBlank()) { "Valid reward session ID is required." }
 
@@ -4628,7 +4980,7 @@ class TaskFlowRepository(
   }
 
   suspend fun recordScratchAdWatched(userId: String): ScratchDailyState {
-    val uid = userId.trim().ifEmpty { authProvider().currentUser?.uid?.trim().orEmpty() }
+    val uid = userId.trim().ifEmpty { authenticatedUidProvider()?.trim().orEmpty() }
     if (uid.isBlank()) return ScratchDailyState()
     val today = getTodayDateKey()
     val snap = runCatching {
@@ -4656,7 +5008,7 @@ class TaskFlowRepository(
   }
 
   suspend fun claimScratchCardReward(cardId: String): Long {
-    val uid = authProvider().currentUser?.uid?.trim().orEmpty()
+    val uid = authenticatedUidProvider()?.trim().orEmpty()
     check(uid.isNotBlank()) { "Please sign in to claim your scratch card reward." }
     val cleanCardId = cardId.trim()
     check(cleanCardId.isNotBlank()) { "Invalid scratch card." }

@@ -498,8 +498,11 @@ data class ScratchDailyState(
   val isDailyLimitReached: Boolean
     get() = scratchesCompletedToday >= ScratchCardConstants.MAX_DAILY_SCRATCHES
 
+  val hasActiveUnclaimedCard: Boolean
+    get() = activeCardId.isNotBlank() && !activeCardIsClaimed
+
   val canScratchNow: Boolean
-    get() = !isDailyLimitReached && (!hasUsedFreeScratchToday || unlockedScratchesCount > 0L)
+    get() = !isDailyLimitReached && (!hasUsedFreeScratchToday || unlockedScratchesCount > 0L || hasActiveUnclaimedCard)
 
   val adsRemainingForNextScratch: Int
     get() = (ScratchCardConstants.ADS_REQUIRED_PER_SCRATCH - adsWatchedForNextScratch.toInt())
@@ -1093,6 +1096,86 @@ object NotificationRewardType {
   const val SCRATCH_CARD_REWARD = "SCRATCH_CARD_REWARD"
 }
 
+data class TelegramTaskItem(
+  @DocumentId val id: String = "",
+  val taskId: String = "",
+  val title: String = "",
+  val channelUrl: String = "",
+  val channelChatId: String = "",
+  val rewardCoins: Long = 0L,
+  @get:PropertyName("isActive") val isActive: Boolean = true,
+  val claimsCount: Long = 0L,
+  val createdBy: String = "",
+  @ServerTimestamp val createdAt: Timestamp? = null,
+  @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+  val effectiveTaskId: String
+    get() = taskId.ifBlank { id }
+
+  fun isValidAndActive(): Boolean =
+    isActive && rewardCoins > 0L && channelUrl.trim().startsWith("https://", ignoreCase = true)
+}
+
+data class TelegramTaskClaimRecord(
+  @DocumentId val id: String = "",
+  val claimId: String = "",
+  val taskId: String = "",
+  val taskTitle: String = "",
+  val channelUrl: String = "",
+  val userId: String = "",
+  val userName: String = "",
+  val telegramUsernameMasked: String = "",
+  val rewardCoins: Long = 0L,
+  @ServerTimestamp val claimedAt: Timestamp? = null
+)
+
+data class TelegramUserTaskState(
+  val taskId: String = "",
+  val userId: String = "",
+  @get:PropertyName("isMembershipVerified") val isMembershipVerified: Boolean = false,
+  @get:PropertyName("isClaimed") val isClaimed: Boolean = false,
+  val rewardCoinsClaimed: Long = 0L,
+  val statusMessage: String = "",
+  val errorMessage: String? = null
+)
+
+data class TelegramAccountLinkStatus(
+  val userId: String = "",
+  @get:PropertyName("isLinked") val isLinked: Boolean = false,
+  val telegramUsernameMasked: String = ""
+)
+
+data class TelegramVerifyResult(
+  val success: Boolean = true,
+  val verified: Boolean = false,
+  val needsAccountLink: Boolean = false,
+  val taskId: String = "",
+  val botUsername: String = "",
+  val botLinkUrl: String = "",
+  val telegramUsernameMasked: String = "",
+  val message: String = ""
+)
+
+/**
+ * Selects the single next active, unclaimed Telegram Join task for the user's Tasks section.
+ * Once a task is claimed by the user, it is permanently hidden and the next active unclaimed
+ * uploaded Telegram task is returned (or null if none remain).
+ */
+fun selectNextTelegramTaskForUser(
+  tasks: List<TelegramTaskItem>,
+  userStates: Map<String, TelegramUserTaskState> = emptyMap(),
+  userClaims: List<TelegramTaskClaimRecord> = emptyList()
+): TelegramTaskItem? {
+  val claimedIds = buildSet {
+    userStates.values.filter { it.isClaimed }.forEach { add(it.taskId) }
+    userClaims.forEach { if (it.taskId.isNotBlank()) add(it.taskId) }
+  }
+  return tasks
+    .filter { it.isValidAndActive() && !claimedIds.contains(it.effectiveTaskId) }
+    .sortedWith(compareBy<TelegramTaskItem>({ it.createdAt?.seconds ?: Long.MAX_VALUE }, { it.effectiveTaskId }))
+    .firstOrNull()
+}
+
 data class TelegramJoinConfig(
   val channelUrl: String = "",
   val channelChatId: String = "",
@@ -1115,12 +1198,6 @@ data class TelegramUserRewardState(
   val statusMessage: String = "",
   val errorMessage: String? = null
 ) {
-  /**
-   * Determines whether the Telegram Join Reward card should be visible inside Daily Rewards:
-   * Visible to new and existing users ONLY when the admin task is active (`config.isValidAndActive()`)
-   * AND the user has NOT yet claimed it (`!isClaimed`).
-   * Once claimed, it is permanently hidden for that user.
-   */
   fun shouldShowInDailyRewards(config: TelegramJoinConfig): Boolean =
     config.isValidAndActive() && !isClaimed
 }

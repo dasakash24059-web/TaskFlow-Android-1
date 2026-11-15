@@ -2571,6 +2571,457 @@ test("13. Step 7 Spin Wheel Hardening: locks spin_sessions & cooldown/extra-spin
   }
 });
 
+test("14. Step 9 Security & Consistency: locks legacy ad_sessions, blocks client Telegram credit/tx forgery, protects leaderboard balanceCoins overwrite, and validates Manual Bonus schema", async () => {
+  const ts = nowTimestamp();
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await db.collection("users").doc(ADMIN_UID).set({
+      userId: ADMIN_UID,
+      email: ADMIN_EMAIL,
+      displayName: "Admin",
+      role: "admin",
+      approvalStatus: "approved",
+      balanceCents: 0,
+      balanceCoins: 0,
+      eligibleCoins: 0,
+      promotionalCoins: 0,
+      completedTasksCount: 0,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      email: ALICE_EMAIL,
+      displayName: "Alice",
+      role: "user",
+      approvalStatus: "approved",
+      balanceCents: 2000, // 2500 eligible coins
+      eligibleCoins: 2500,
+      promotionalCoins: 500,
+      balanceCoins: 3000,
+      completedTasksCount: 2,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("leaderboard").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      displayName: "Alice",
+      balanceCents: 2000,
+      balanceCoins: 3000,
+      completedTasksCount: 2,
+      approvalStatus: "approved",
+      updatedAt: ts,
+    });
+    await db.collection("app_config").doc("telegram_join_config").set({
+      channelUrl: "https://t.me/taskflow_official",
+      channelChatId: "@taskflow_official",
+      rewardCoins: 250,
+      isActive: true,
+      updatedAt: ts,
+    });
+  });
+
+  const aliceDb = testEnv
+    .authenticatedContext(ALICE_UID, {
+      email: ALICE_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  const bobDb = testEnv
+    .authenticatedContext(BOB_UID, {
+      email: BOB_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  const adminDb = testEnv
+    .authenticatedContext(ADMIN_UID, {
+      email: ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  // 1. Legacy /users/{uid}/ad_sessions/{sessionId} client writes are strictly denied
+  await assertFails(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("ad_sessions")
+      .doc("legacy_ad_1")
+      .set({
+        sessionId: "legacy_ad_1",
+        userId: ALICE_UID,
+        status: "VERIFIED",
+        createdAt: ts,
+      })
+  );
+
+  // 2. Client-side Telegram verification & reward claim writes on /users/{uid} and /transactions/{id} are denied
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      telegramJoinedVerified: true,
+      telegramUserId: "123456789",
+      updatedAt: new Date(),
+    })
+  );
+  const forgedTgBatch = aliceDb.batch();
+  forgedTgBatch.set(
+    aliceDb.collection("users").doc(ALICE_UID).collection("telegram_reward").doc("status"),
+    {
+      userId: ALICE_UID,
+      telegramUserId: "123456789",
+      isMembershipVerified: true,
+      isClaimed: true,
+      rewardCoinsClaimed: 250,
+      updatedAt: ts,
+    }
+  );
+  forgedTgBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    promotionalCoins: 750,
+    balanceCoins: 3250,
+    telegramJoinedVerified: true,
+    telegramRewardClaimed: true,
+    telegramUserId: "123456789",
+    updatedAt: ts,
+  });
+  forgedTgBatch.set(aliceDb.collection("transactions").doc(`tg_join_${ALICE_UID}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "TELEGRAM_JOIN",
+    title: "Telegram Join Reward",
+    amountCoins: 250,
+    status: "CREDITED",
+    referenceId: `tg_join_${ALICE_UID}`,
+    createdAt: ts,
+  });
+  await assertFails(forgedTgBatch.commit());
+
+  // Standalone forged TELEGRAM_REWARD notification is also denied for client
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("notifications").doc("forged_tg_notif").set({
+      userId: ALICE_UID,
+      title: "Fake Telegram Bonus",
+      body: "+250 Coins",
+      type: "TELEGRAM_REWARD",
+      rewardCoins: 250,
+      isRead: false,
+      createdAt: ts,
+    })
+  );
+
+  // 3. Leaderboard overwrite without merge that tries to delete balanceCoins MUST FAIL
+  const dropCoinsBatch = aliceDb.batch();
+  dropCoinsBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    displayName: "Alice Name Update",
+    updatedAt: ts,
+  });
+  dropCoinsBatch.set(aliceDb.collection("leaderboard").doc(ALICE_UID), {
+    userId: ALICE_UID,
+    displayName: "Alice Name Update",
+    balanceCents: 2000,
+    completedTasksCount: 2,
+    approvalStatus: "approved",
+    updatedAt: ts,
+  }); // non-merge overwrite omitting balanceCoins!
+  await assertFails(dropCoinsBatch.commit());
+
+  // 4. Direct client Manual Bonus writes (even by Admin client) MUST FAIL because manual bonuses are strictly Cloud Function server-authoritative
+  const bonusId = "bonus_step9_key_1";
+  const bonusTs = new Date();
+  const forgedAdminClientBatch = adminDb.batch();
+  forgedAdminClientBatch.update(adminDb.collection("users").doc(ALICE_UID), {
+    promotionalCoins: 700,
+    balanceCoins: 3200,
+    updatedAt: bonusTs,
+  });
+  forgedAdminClientBatch.set(adminDb.collection("manual_bonuses").doc(bonusId), {
+    targetUserId: ALICE_UID,
+    targetUserName: "Alice",
+    targetUserEmail: ALICE_EMAIL,
+    adminId: ADMIN_UID,
+    adminEmail: ADMIN_EMAIL,
+    amountCoins: 200,
+    reason: "Direct client write attempt",
+    idempotencyKey: bonusId,
+    createdAt: bonusTs,
+  });
+  forgedAdminClientBatch.set(adminDb.collection("transactions").doc(`bonus_${bonusId}`), {
+    userId: ALICE_UID,
+    userName: "Alice",
+    type: "ADMIN_MANUAL_BONUS",
+    title: "Admin Bonus: Direct client write",
+    amountCents: 160,
+    amountCoins: 200,
+    status: "CREDITED",
+    referenceId: bonusId,
+    createdAt: bonusTs,
+  });
+  await assertFails(forgedAdminClientBatch.commit());
+
+  await assertFails(
+    adminDb.collection("manual_bonuses").doc("direct_admin_bonus").set({
+      targetUserId: ALICE_UID,
+      adminId: ADMIN_UID,
+      amountCoins: 200,
+      idempotencyKey: "direct_admin_bonus",
+      createdAt: bonusTs,
+    })
+  );
+
+  // Non-admin attempting manual bonus creation or reading manual_bonuses MUST FAIL
+  await assertFails(
+    aliceDb.collection("manual_bonuses").doc("forged_bonus_1").set({
+      targetUserId: ALICE_UID,
+      targetUserName: "Alice",
+      targetUserEmail: ALICE_EMAIL,
+      adminId: ALICE_UID,
+      adminEmail: ALICE_EMAIL,
+      amountCoins: 5000,
+      reason: "Self bonus",
+      idempotencyKey: "forged_bonus_1",
+      createdAt: bonusTs,
+    })
+  );
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const bypassDb = context.firestore();
+    await bypassDb.collection("manual_bonuses").doc("seeded_bonus_1").set({
+      targetUserId: ALICE_UID,
+      adminId: ADMIN_UID,
+      amountCoins: 150,
+      idempotencyKey: "seeded_bonus_1",
+      createdAt: bonusTs,
+    });
+    await bypassDb.collection("telegram_tasks").doc("tg_active_1").set({
+      taskId: "tg_active_1",
+      title: "Join Updates",
+      channelUrl: "https://t.me/taskflow_updates",
+      rewardCoins: 100,
+      isActive: true,
+    });
+    await bypassDb.collection("telegram_tasks").doc("tg_inactive_1").set({
+      taskId: "tg_inactive_1",
+      title: "Hidden Task",
+      channelUrl: "https://t.me/taskflow_hidden",
+      rewardCoins: 200,
+      isActive: false,
+    });
+    await bypassDb.collection("telegram_claims").doc(`tg_active_1_${ALICE_UID}`).set({
+      claimId: `tg_active_1_${ALICE_UID}`,
+      taskId: "tg_active_1",
+      userId: ALICE_UID,
+      rewardCoins: 100,
+    });
+    await bypassDb.collection("telegram_claims").doc(`tg_active_1_${BOB_UID}`).set({
+      claimId: `tg_active_1_${BOB_UID}`,
+      taskId: "tg_active_1",
+      userId: BOB_UID,
+      rewardCoins: 100,
+    });
+    await bypassDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_active_1").set({
+      taskId: "tg_active_1",
+      userId: ALICE_UID,
+      isMembershipVerified: true,
+      isClaimed: false,
+    });
+    await bypassDb.collection("users").doc(ALICE_UID).collection("telegram_account").doc("status").set({
+      userId: ALICE_UID,
+      isLinked: true,
+      telegramUsernameMasked: "@al***",
+    });
+    await bypassDb.collection("telegram_accounts").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      telegramUserId: "555001",
+    });
+    await bypassDb.collection("telegram_bindings").doc("555001").set({
+      userId: ALICE_UID,
+      telegramUserId: "555001",
+    });
+    await bypassDb.collection("telegram_link_tokens").doc("secret_tok_1").set({
+      userId: ALICE_UID,
+      status: "PENDING",
+    });
+    await bypassDb.collection("telegram_task_user_claims").doc("tg_active_1_555001").set({
+      taskId: "tg_active_1",
+      userId: ALICE_UID,
+      telegramUserId: "555001",
+    });
+  });
+
+  // Admin can read manual_bonuses, ordinary user cannot
+  await assertSucceeds(adminDb.collection("manual_bonuses").doc("seeded_bonus_1").get());
+  await assertFails(aliceDb.collection("manual_bonuses").doc("seeded_bonus_1").get());
+
+  // 5. Step 9A Telegram Multi-Task Rules Hardening
+  // Non-admin can read active telegram_tasks, CANNOT read inactive telegram_tasks, CANNOT write
+  await assertSucceeds(aliceDb.collection("telegram_tasks").doc("tg_active_1").get());
+  await assertFails(aliceDb.collection("telegram_tasks").doc("tg_inactive_1").get());
+  await assertSucceeds(adminDb.collection("telegram_tasks").doc("tg_inactive_1").get());
+  await assertFails(
+    adminDb.collection("telegram_tasks").doc("tg_client_write").set({
+      taskId: "tg_client_write",
+      title: "Client Task",
+      channelUrl: "https://t.me/test",
+      rewardCoins: 50,
+      isActive: true,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("telegram_tasks").doc("tg_active_1").update({ rewardCoins: 9999 })
+  );
+
+  // telegram_claims: user can read own claim only, admin can read all, nobody can write from client
+  await assertSucceeds(aliceDb.collection("telegram_claims").doc(`tg_active_1_${ALICE_UID}`).get());
+  await assertFails(aliceDb.collection("telegram_claims").doc(`tg_active_1_${BOB_UID}`).get());
+  await assertSucceeds(adminDb.collection("telegram_claims").doc(`tg_active_1_${BOB_UID}`).get());
+  await assertFails(
+    aliceDb.collection("telegram_claims").doc(`tg_active_1_${ALICE_UID}`).set({
+      taskId: "tg_active_1",
+      userId: ALICE_UID,
+      rewardCoins: 999,
+    })
+  );
+
+  // users/{uid}/telegram_task_states and telegram_account: owner can read, nobody can write from client
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_active_1").get()
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_active_1").get()
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_active_1").set({
+      isMembershipVerified: true,
+      isClaimed: false,
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("telegram_account").doc("status").get()
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("telegram_account").doc("status").set({
+      isLinked: true,
+    })
+  );
+
+  // Server-only private Telegram linking collections: denied for ALL clients (even admin)
+  await assertFails(aliceDb.collection("telegram_accounts").doc(ALICE_UID).get());
+  await assertFails(adminDb.collection("telegram_accounts").doc(ALICE_UID).get());
+  await assertFails(adminDb.collection("telegram_bindings").doc("555001").get());
+  await assertFails(adminDb.collection("telegram_link_tokens").doc("secret_tok_1").get());
+  await assertFails(adminDb.collection("telegram_task_user_claims").doc("tg_active_1_555001").get());
+  await assertFails(
+    aliceDb.collection("telegram_accounts").doc(ALICE_UID).set({ telegramUserId: "999" })
+  );
+});
+
+test("15. Step 9B Security Audit: blocks client /transactions creation for all server reward types and protects leaderboard balanceCoins", async () => {
+  const ts = nowTimestamp();
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await db.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      email: ALICE_EMAIL,
+      displayName: "Alice",
+      role: "user",
+      approvalStatus: "approved",
+      balanceCents: 1000, // 1250 eligible coins
+      eligibleCoins: 1250,
+      promotionalCoins: 450,
+      balanceCoins: 1700,
+      completedTasksCount: 1,
+      assignedTaskId: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("leaderboard").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      displayName: "Alice",
+      balanceCents: 1000,
+      balanceCoins: 1700,
+      completedTasksCount: 1,
+      approvalStatus: "approved",
+      updatedAt: ts,
+    });
+  });
+
+  const aliceDb = testEnv
+    .authenticatedContext(ALICE_UID, {
+      email: ALICE_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const forbiddenRewardTxTypes = [
+    { id: "forged_scratch_tx", type: "SCRATCH_CARD", ref: "card_fake_1" },
+    { id: "forged_promo_tx", type: "PROMO_CODE", ref: "SAVE50" },
+    { id: "forged_spin_tx", type: "SPIN_EARN", ref: "spin_fake_1" },
+    { id: "forged_watch_tx", type: "WATCH_EARN", ref: "watch_fake_1" },
+    { id: "forged_checkin_tx", type: "DAILY_CHECKIN", ref: "2026-11-15" },
+    { id: "forged_bonus_tx", type: "ADMIN_MANUAL_BONUS", ref: "bonus_fake_1" },
+    { id: "forged_tg_tx", type: "TELEGRAM_JOIN", ref: "tg_fake_1" },
+  ];
+
+  for (const item of forbiddenRewardTxTypes) {
+    await assertFails(
+      aliceDb.collection("transactions").doc(item.id).set({
+        userId: ALICE_UID,
+        userName: "Alice",
+        type: item.type,
+        title: `Forged ${item.type}`,
+        amountCoins: 100,
+        amountCents: 80,
+        status: "CREDITED",
+        referenceId: item.ref,
+        createdAt: ts,
+      })
+    );
+  }
+
+  // Non-merge leaderboard write omitting balanceCoins when user has promotionalCoins must fail
+  const updateTs = new Date();
+  const omitCoinsBatch = aliceDb.batch();
+  omitCoinsBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    displayName: "Alice Updated",
+    updatedAt: updateTs,
+  });
+  omitCoinsBatch.set(aliceDb.collection("leaderboard").doc(ALICE_UID), {
+    userId: ALICE_UID,
+    displayName: "Alice Updated",
+    balanceCents: 1000,
+    completedTasksCount: 1,
+    approvalStatus: "approved",
+    updatedAt: updateTs,
+  });
+  await assertFails(omitCoinsBatch.commit());
+
+  // Proper merged update with exact authoritative balanceCoins succeeds and preserves promo balance
+  const validBatch = aliceDb.batch();
+  validBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    displayName: "Alice Updated",
+    updatedAt: updateTs,
+  });
+  validBatch.set(
+    aliceDb.collection("leaderboard").doc(ALICE_UID),
+    {
+      userId: ALICE_UID,
+      displayName: "Alice Updated",
+      balanceCents: 1000,
+      balanceCoins: 1700,
+      completedTasksCount: 1,
+      approvalStatus: "approved",
+      updatedAt: updateTs,
+    },
+    { merge: true }
+  );
+  await assertSucceeds(validBatch.commit());
+});
+
+
+
 
 
 
