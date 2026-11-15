@@ -1186,7 +1186,8 @@ service cloud.firestore {
           request.auth.uid == userId && (
             ('displayName' in changed && isValidOwnerDisplayNameUpdate(userId)) ||
             ('role' in changed && isBootstrapAdminSelfInit(userId)) ||
-            ('lastWithdrawalRequestId' in changed && isAtomicWithdrawalDebitForUser(userId))
+            ('lastWithdrawalRequestId' in changed && isAtomicWithdrawalDebitForUser(userId)) ||
+            ('lastRewardId' in changed && !('balanceCents' in changed) && !('role' in changed) && !('approvalStatus' in changed) && incoming().balanceCoins is int && incoming().balanceCoins >= 0)
           )
         ) || (
           isAdmin() && (
@@ -1194,7 +1195,8 @@ service cloud.firestore {
             ('displayName' in changed && isValidAdminDisplayNameUpdate()) ||
             ('assignedTaskId' in changed && !('balanceCents' in changed) && (isAtomicTaskAssignmentToUser(userId) || isAtomicTaskUnassignmentFromUser(userId))) ||
             ('balanceCents' in changed && 'assignedTaskId' in changed && isAtomicTaskApprovalForUser(userId)) ||
-            ('lastRefundedWithdrawalId' in changed && isAtomicAdminWithdrawalRefund(userId))
+            ('lastRefundedWithdrawalId' in changed && isAtomicAdminWithdrawalRefund(userId)) ||
+            ('lastRewardId' in changed && !('balanceCents' in changed) && incoming().balanceCoins is int && incoming().balanceCoins >= 0)
           )
         )
       );
@@ -1214,10 +1216,14 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // Per-user Telegram Task verification & claim states (server-authoritative via Cloud Functions)
+      // Per-user Telegram Task verification & claim states
       match /telegram_task_states/{taskId} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow write: if false;
+        allow create, update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) &&
+                              incoming().keys().hasAll(['taskId', 'userId', 'claimedAt']) &&
+                              incoming().taskId == taskId &&
+                              incoming().userId == userId;
+        allow delete: if false;
       }
 
       // Masked Telegram account link status indicator for owner UI (no raw secrets/tokens)
@@ -1226,21 +1232,38 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // Daily check-in records & per-user watch stats (Server-authoritative via Cloud Functions Admin SDK)
+      // Daily check-in records & per-user watch stats
       match /check_ins/{dateKey} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow write: if false;
+        allow create, update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) &&
+                              incoming().keys().hasAll(['dateKey', 'userId', 'streakDay', 'rewardCoins', 'claimedAt']) &&
+                              incoming().dateKey == dateKey &&
+                              incoming().userId == userId &&
+                              incoming().claimedAt is timestamp;
+        allow delete: if false;
       }
 
       match /watch_stats/{dateKey} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow write: if false;
+        allow create, update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) &&
+                              incoming().keys().hasAll(['dateKey', 'userId', 'videosWatched', 'updatedAt']) &&
+                              !('totalEarnedCents' in incoming()) &&
+                              incoming().dateKey == dateKey &&
+                              incoming().userId == userId &&
+                              incoming().updatedAt is timestamp;
+        allow delete: if false;
       }
 
-      // Per-user spin sessions (Server-authoritative via Cloud Functions Admin SDK)
+      // Per-user spin sessions
       match /spin_sessions/{sessionId} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow write: if false;
+        allow create, update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) &&
+                              incoming().keys().hasAll(['sessionId', 'userId', 'rewardCoins', 'status', 'createdAt']) &&
+                              incoming().sessionId == sessionId &&
+                              incoming().userId == userId &&
+                              incoming().rewardCoins <= 150 &&
+                              incoming().createdAt is timestamp;
+        allow delete: if false;
       }
 
       // Legacy ad_sessions subcollection locked down to Admin SDK / read-only
@@ -1249,15 +1272,36 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // Per-user scratch card sessions & scratch daily stats (Server-authoritative via Cloud Functions Admin SDK)
+      // Per-user scratch card sessions & scratch daily stats
       match /scratch_sessions/{sessionId} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow write: if false;
+        allow create, update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) &&
+                              incoming().keys().hasAll(['cardId', 'userId', 'rewardCoins', 'status', 'createdAt']) &&
+                              incoming().cardId == sessionId &&
+                              incoming().userId == userId &&
+                              incoming().rewardCoins is int &&
+                              incoming().rewardCoins >= 1 &&
+                              incoming().rewardCoins <= 100 &&
+                              incoming().status in ['PENDING', 'ACTIVE', 'SCRATCHED', 'CLAIMED'] &&
+                              incoming().createdAt is timestamp;
+        allow delete: if false;
       }
 
       match /scratch_stats/{dateKey} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow write: if false;
+        allow create, update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) &&
+                              incoming().keys().hasAll(['dateKey', 'scratchesCompletedToday', 'hasUsedFreeScratchToday', 'adsWatchedForNextScratch', 'unlockedScratchesCount', 'updatedAt']) &&
+                              incoming().dateKey == dateKey &&
+                              incoming().scratchesCompletedToday is int &&
+                              incoming().scratchesCompletedToday >= 0 &&
+                              incoming().hasUsedFreeScratchToday is bool &&
+                              incoming().adsWatchedForNextScratch is int &&
+                              incoming().adsWatchedForNextScratch >= 0 &&
+                              incoming().adsWatchedForNextScratch <= 2 &&
+                              incoming().unlockedScratchesCount is int &&
+                              incoming().unlockedScratchesCount >= 0 &&
+                              incoming().updatedAt is timestamp;
+        allow delete: if false;
       }
 
       // In-app notifications
@@ -1304,7 +1348,28 @@ service cloud.firestore {
       allow create: if isSignedIn() && (
         isValidAdminTaskRewardTransaction() ||
         isValidWithdrawalDebitTransaction(transactionId) ||
-        isValidAdminWithdrawalRefundTransaction(transactionId)
+        isValidAdminWithdrawalRefundTransaction(transactionId) ||
+        (
+          request.auth.uid == incoming().userId &&
+          incoming().keys().hasAll(['userId', 'userName', 'type', 'title', 'amountCoins', 'amountCents', 'status', 'referenceId', 'createdAt']) &&
+          incoming().amountCents == 0 &&
+          incoming().amountCoins is int &&
+          incoming().amountCoins > 0 &&
+          incoming().amountCoins <= 1000000 &&
+          incoming().status == 'CREDITED' &&
+          incoming().type in ['DAILY_CHECKIN', 'WATCH_EARN', 'SPIN_EARN', 'SCRATCH_CARD', 'TELEGRAM_JOIN', 'PROMO_CODE'] &&
+          incoming().createdAt is timestamp
+        ) ||
+        (
+          isAdmin() &&
+          incoming().keys().hasAll(['userId', 'userName', 'type', 'title', 'amountCoins', 'amountCents', 'status', 'referenceId', 'createdAt']) &&
+          incoming().amountCents == 0 &&
+          incoming().amountCoins is int &&
+          incoming().amountCoins > 0 &&
+          incoming().status == 'CREDITED' &&
+          incoming().type in ['MANUAL_BONUS', 'ADMIN_BONUS', 'BONUS', 'PROMO_CODE'] &&
+          incoming().createdAt is timestamp
+        )
       );
       allow update, delete: if false;
     }
@@ -1420,10 +1485,17 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Promo Codes & Per-User Redemptions (Server-authoritative via Cloud Functions Admin SDK)
+    // Promo Codes & Per-User Redemptions
     match /promo_codes/{promoId} {
       allow get, list: if isAdmin();
-      allow write: if false;
+      allow create: if isAdmin() &&
+                    incoming().keys().hasAll(['code', 'rewardCoins', 'maxSlots', 'usedSlots', 'isActive', 'status', 'createdBy', 'createdAt']) &&
+                    incoming().code == promoId &&
+                    incoming().rewardCoins is int &&
+                    incoming().rewardCoins > 0 &&
+                    incoming().createdAt is timestamp;
+      allow update: if isAdmin() && !('rewardCoins' in changedKeys());
+      allow delete: if false;
 
       match /redemptions/{userId} {
         allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
@@ -1435,13 +1507,23 @@ service cloud.firestore {
     match /promo_redemptions/{redemptionId} {
       allow get: if isSignedIn() && (isAdmin() || (resource != null && resource.data.userId == request.auth.uid));
       allow list: if isSignedIn() && (isAdmin() || (resource != null && resource.data.userId == request.auth.uid));
-      allow write: if false;
+      allow create: if isSignedIn() &&
+                    request.auth.uid == incoming().userId &&
+                    'code' in incoming() &&
+                    'userName' in incoming() &&
+                    redemptionId == incoming().code + '_' + request.auth.uid;
+      allow update, delete: if false;
     }
 
-    // Admin Manual Bonus Credit Audit Trail (Strictly server-authoritative via creditManualBonus)
+    // Admin Manual Bonus Credit Audit Trail
     match /manual_bonuses/{bonusId} {
       allow get, list: if isAdmin();
-      allow write: if false;
+      allow create: if isAdmin() &&
+                    incoming().keys().hasAll(['id', 'targetUserId', 'amountCoins', 'adminId', 'createdAt']) &&
+                    incoming().amountCoins is int &&
+                    incoming().amountCoins > 0 &&
+                    incoming().createdAt is timestamp;
+      allow update, delete: if false;
     }
 
     // Admin Activity Audit Logs
@@ -1451,13 +1533,16 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Multi-Task Telegram Join System (Server-authoritative via Cloud Functions Admin SDK)
+    // Multi-Task Telegram Join System
     match /telegram_tasks/{taskId} {
-      allow get, list: if isSignedIn() && (
-        isAdmin() ||
-        (resource != null && resource.data.isActive == true)
-      );
-      allow write: if false;
+      allow get, list: if isSignedIn() && (isAdmin() || (resource != null && resource.data.isActive == true));
+      allow create, update: if isAdmin() &&
+                            incoming().keys().hasAll(['taskId', 'title', 'channelUrl', 'rewardCoins', 'isActive', 'createdAt']) &&
+                            incoming().taskId == taskId &&
+                            incoming().rewardCoins is int &&
+                            incoming().rewardCoins > 0 &&
+                            incoming().createdAt is timestamp;
+      allow delete: if isAdmin();
     }
 
     match /telegram_claims/{claimId} {
@@ -1465,7 +1550,12 @@ service cloud.firestore {
         isAdmin() ||
         (resource != null && resource.data.userId == request.auth.uid)
       );
-      allow write: if false;
+      allow create: if isSignedIn() &&
+                    request.auth.uid == incoming().userId &&
+                    incoming().keys().hasAll(['claimId', 'taskId', 'userId', 'rewardCoins', 'claimedAt']) &&
+                    incoming().claimId == claimId &&
+                    incoming().claimedAt is timestamp;
+      allow update, delete: if false;
     }
 
     // Sensitive Telegram Linking & Anti-Abuse Bindings (Strictly Server Admin SDK only)

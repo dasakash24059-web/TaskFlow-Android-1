@@ -321,6 +321,8 @@ interface RewardCloudFunctionsClient {
   ): Long = 0L
 
   fun getOrAssignSessionRewardCoins(sessionId: String): Long = 0L
+
+  fun getLocalScratchDailyState(userId: String, dateKey: String): ScratchDailyState? = null
 }
 
 data class ScratchAdWatchResult(
@@ -341,6 +343,7 @@ class FirebaseRewardCloudFunctionsClient(
 ) : RewardCloudFunctionsClient {
 
   private val sessionRewardsById = java.util.concurrent.ConcurrentHashMap<String, Long>()
+  private val localScratchStats = java.util.concurrent.ConcurrentHashMap<String, ScratchDailyState>()
   private val inFlightCheckInKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
   private val inFlightSpinClaimSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
   private val claimedSpinSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -358,7 +361,13 @@ class FirebaseRewardCloudFunctionsClient(
   private val hasCustomCallableInvoker: Boolean
     get() = rewardCallableInvoker != null || promoCallableInvoker != null
 
+  override fun getLocalScratchDailyState(userId: String, dateKey: String): ScratchDailyState? {
+    if (userId.isBlank() || dateKey.isBlank()) return null
+    return localScratchStats["${userId.trim()}_${dateKey.trim()}"]
+  }
+
   private fun isCloudFunctionMissing(err: Throwable): Boolean {
+    if (!hasCustomCallableInvoker) return true
     if (err is FirebaseFunctionsException) {
       return err.code == FirebaseFunctionsException.Code.NOT_FOUND ||
         err.code == FirebaseFunctionsException.Code.UNAVAILABLE
@@ -369,19 +378,27 @@ class FirebaseRewardCloudFunctionsClient(
       msg.contains("404", ignoreCase = true)
   }
 
-  private fun handleLocalCallableFallback(functionName: String, payload: Any?): Any {
+  private suspend fun handleLocalCallableFallback(functionName: String, payload: Any?): Any {
     val map = payload as? Map<*, *>
     val today = getTodayDateKey()
     val now = System.currentTimeMillis()
     val randomSuffix = java.util.UUID.randomUUID().toString().take(8)
+    val rewardId = "rw_${now}_$randomSuffix"
+    val uid = authProvider().currentUser?.uid?.trim().orEmpty()
 
     return when (functionName) {
       "createRewardSession" -> {
         val rewardType = map?.get("rewardType")?.toString()?.ifBlank { "WATCH_EARN" } ?: "WATCH_EARN"
         val streakDay = (map?.get("streakDay") as? Number)?.toInt() ?: 1
         val sid = "session_${now}_$randomSuffix"
-        val reward = if (rewardType == "DAILY_CHECKIN") DailyCheckInConstants.getRewardCoinsForDay(streakDay) else 100L
-        sessionRewardsById[sid] = reward
+        val reward = when (rewardType) {
+          "DAILY_CHECKIN", "DAILY_CHECK_IN" -> DailyCheckInConstants.getRewardCoinsForDay(streakDay)
+          "WATCH_EARN", "WATCH_AND_EARN" -> (63L..125L).random()
+          else -> 0L
+        }
+        if (reward > 0L) {
+          sessionRewardsById[sid] = reward
+        }
         mapOf(
           "sessionId" to sid,
           "rewardType" to rewardType,
@@ -394,12 +411,80 @@ class FirebaseRewardCloudFunctionsClient(
       "claimDailyCheckIn" -> {
         val streakDay = (map?.get("streakDay") as? Number)?.toInt() ?: 1
         val coins = DailyCheckInConstants.getRewardCoinsForDay(streakDay)
+        var newBalance = coins
+        if (uid.isNotBlank()) {
+          runCatching {
+            firestore.runTransaction { tx ->
+              val userRef = firestore.collection("users").document(uid)
+              val userSnap = tx.get(userRef)
+              val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+              val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
+              val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
+              val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
+              val newPromo = curPromo + coins
+              newBalance = maxOf(curTotal + coins, curEligible + newPromo)
+              tx.update(
+                userRef,
+                mapOf(
+                  "balanceCoins" to newBalance,
+                  "promotionalCoins" to newPromo,
+                  "checkInStreak" to streakDay,
+                  "lastCheckInDate" to today,
+                  "lastRewardId" to rewardId,
+                  "lastRewardType" to "DAILY_CHECKIN",
+                  "lastRewardAmountCoins" to coins,
+                  "updatedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val checkInRef = firestore.collection("users").document(uid).collection("check_ins").document(today)
+              tx.set(
+                checkInRef,
+                mapOf(
+                  "dateKey" to today,
+                  "userId" to uid,
+                  "streakDay" to streakDay,
+                  "rewardCoins" to coins,
+                  "claimedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val txRef = firestore.collection("transactions").document("checkin_${today}_$uid")
+              tx.set(
+                txRef,
+                mapOf(
+                  "userId" to uid,
+                  "userName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
+                  "type" to "DAILY_CHECKIN",
+                  "title" to "Day $streakDay Daily Check-in",
+                  "amountCoins" to coins,
+                  "amountCents" to 0L,
+                  "status" to "CREDITED",
+                  "referenceId" to today,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val notifRef = firestore.collection("users").document(uid).collection("notifications").document("notif_checkin_${today}")
+              tx.set(
+                notifRef,
+                mapOf(
+                  "userId" to uid,
+                  "title" to "Daily Check-in Claimed!",
+                  "body" to "You earned $coins Coins for Day $streakDay check-in.",
+                  "type" to "NOTIFICATION",
+                  "isRead" to false,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+            }.await()
+          }.onFailure { err ->
+            Log.e("TaskFlowRepository", "claimDailyCheckIn fallback error: ${err.message}", err)
+          }
+        }
         mapOf(
           "success" to true,
           "rewardCoins" to coins,
           "rewardCents" to coins,
           "streakDay" to streakDay,
-          "newBalanceCoins" to coins,
+          "newBalanceCoins" to newBalance,
           "dateKey" to today
         )
       }
@@ -407,81 +492,608 @@ class FirebaseRewardCloudFunctionsClient(
         val sid = "spin_${now}_$randomSuffix"
         val segment = (0 until com.example.data.model.SpinWheelConstants.SEGMENTS_COINS.size).random()
         val coins = com.example.data.model.SpinWheelConstants.SEGMENTS_COINS.getOrElse(segment) { 40L }
+        var usedFreeSpin = true
+        sessionRewardsById[sid] = coins
+        if (uid.isNotBlank()) {
+          val userRef = firestore.collection("users").document(uid)
+          val userSnap = runCatching { userRef.get().await() }.getOrNull()
+          val lastFreeMillis = userSnap?.getTimestamp("lastFreeSpinAt")?.toDate()?.time ?: 0L
+          val isFreeAvailable =
+            lastFreeMillis <= 0L || (now - lastFreeMillis) >= com.example.data.model.SpinWheelConstants.FREE_SPIN_COOLDOWN_MS
+          val videosWatched = userSnap?.getLong("extraSpinVideosWatched") ?: 0L
+          val isExtraAvailable = (userSnap?.getBoolean("extraSpinAvailable") ?: false) || videosWatched >= 2L
+          val curBalanceCents = userSnap?.getLong("balanceCents") ?: 0L
+          val curEligible = maxOf(userSnap?.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
+          val curPromo = userSnap?.getLong("promotionalCoins") ?: 0L
+          val curTotal = maxOf(userSnap?.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
+
+          usedFreeSpin = isFreeAvailable
+          runCatching {
+            val userUpdates = if (usedFreeSpin) {
+              mapOf(
+                "balanceCoins" to curTotal,
+                "lastFreeSpinAt" to FieldValue.serverTimestamp(),
+                "lastRewardId" to rewardId,
+                "updatedAt" to FieldValue.serverTimestamp()
+              )
+            } else {
+              mapOf(
+                "balanceCoins" to curTotal,
+                "extraSpinAvailable" to false,
+                "extraSpinVideosWatched" to 0L,
+                "lastRewardId" to rewardId,
+                "updatedAt" to FieldValue.serverTimestamp()
+              )
+            }
+            userRef.update(userUpdates).await()
+            firestore.collection("users").document(uid).collection("spin_sessions").document(sid).set(
+              mapOf(
+                "sessionId" to sid,
+                "userId" to uid,
+                "rewardCoins" to coins,
+                "status" to "ACTIVE",
+                "createdAt" to FieldValue.serverTimestamp()
+              )
+            ).await()
+          }.onFailure { err ->
+            Log.e("TaskFlowRepository", "createSpinSession fallback error: ${err.message}", err)
+          }
+          if (!isFreeAvailable && !isExtraAvailable && userSnap != null && userSnap.exists()) {
+            throw IllegalStateException("Watch 2 videos to unlock an Extra Spin.")
+          }
+        }
         mapOf(
           "sessionId" to sid,
           "segmentIndex" to segment,
           "rewardCoins" to coins,
           "canSpinNow" to true,
-          "usedFreeSpin" to true,
+          "usedFreeSpin" to usedFreeSpin,
           "dateKey" to today
         )
       }
       "recordExtraSpinAdWatch" -> {
         val sid = map?.get("sessionId")?.toString().orEmpty().ifEmpty { "spin_ad_$randomSuffix" }
+        var nextVideos = 1L
+        var unlocked = false
+        if (uid.isNotBlank()) {
+          runCatching {
+            val userRef = firestore.collection("users").document(uid)
+            val userSnap = userRef.get().await()
+            val curVideos = (userSnap.getLong("extraSpinVideosWatched") ?: 0L).coerceIn(0L, 2L)
+            nextVideos = (curVideos + 1L).coerceAtMost(2L)
+            unlocked = nextVideos >= 2L
+            val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+            val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
+            val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
+            val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
+            userRef.update(
+              mapOf(
+                "balanceCoins" to curTotal,
+                "extraSpinVideosWatched" to nextVideos,
+                "extraSpinAvailable" to unlocked,
+                "lastRewardId" to rewardId,
+                "updatedAt" to FieldValue.serverTimestamp()
+              )
+            ).await()
+          }.onFailure { err ->
+            Log.e("TaskFlowRepository", "recordExtraSpinAdWatch fallback error: ${err.message}", err)
+          }
+        }
         mapOf(
           "success" to true,
           "sessionId" to sid,
-          "adsWatchedForSpin" to 2L,
-          "extraSpinVideosWatched" to 2L,
-          "newlyUnlocked" to true,
+          "adsWatchedForSpin" to nextVideos,
+          "extraSpinVideosWatched" to nextVideos,
+          "newlyUnlocked" to unlocked,
           "dateKey" to today
         )
       }
       "claimSpinReward" -> {
+        val sid = map?.get("sessionId")?.toString().orEmpty().ifEmpty { "spin_${now}_$randomSuffix" }
+        val coins = sessionRewardsById[sid] ?: (map?.get("rewardCoins") as? Number)?.toLong() ?: 40L
+        var newBalance = coins
+        if (uid.isNotBlank()) {
+          runCatching {
+            firestore.runTransaction { tx ->
+              val userRef = firestore.collection("users").document(uid)
+              val userSnap = tx.get(userRef)
+              val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+              val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
+              val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
+              val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
+              val newPromo = curPromo + coins
+              newBalance = maxOf(curTotal + coins, curEligible + newPromo)
+              tx.update(
+                userRef,
+                mapOf(
+                  "balanceCoins" to newBalance,
+                  "promotionalCoins" to newPromo,
+                  "lastRewardId" to rewardId,
+                  "lastRewardType" to "SPIN_EARN",
+                  "lastRewardAmountCoins" to coins,
+                  "updatedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val spinRef = firestore.collection("users").document(uid).collection("spin_sessions").document(sid)
+              tx.set(
+                spinRef,
+                mapOf(
+                  "sessionId" to sid,
+                  "userId" to uid,
+                  "rewardCoins" to coins,
+                  "status" to "CLAIMED",
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val txRef = firestore.collection("transactions").document("spin_${sid}")
+              tx.set(
+                txRef,
+                mapOf(
+                  "userId" to uid,
+                  "userName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
+                  "type" to "SPIN_EARN",
+                  "title" to "Spin & Win Reward",
+                  "amountCoins" to coins,
+                  "amountCents" to 0L,
+                  "status" to "CREDITED",
+                  "referenceId" to sid,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val notifRef = firestore.collection("users").document(uid).collection("notifications").document("notif_spin_${sid}")
+              tx.set(
+                notifRef,
+                mapOf(
+                  "userId" to uid,
+                  "title" to "Spin & Win Reward!",
+                  "body" to "You won $coins Coins on Lucky Spin Wheel.",
+                  "type" to "NOTIFICATION",
+                  "isRead" to false,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+            }.await()
+          }.onFailure { err ->
+            Log.e("TaskFlowRepository", "claimSpinReward fallback error: ${err.message}", err)
+          }
+        }
         mapOf(
           "success" to true,
-          "rewardCoins" to 40L,
-          "newBalanceCoins" to 40L,
+          "rewardCoins" to coins,
+          "newBalanceCoins" to newBalance,
           "dateKey" to today
         )
       }
       "claimRewardSession" -> {
+        val sid = map?.get("sessionId")?.toString().orEmpty().ifEmpty { "watch_${now}_$randomSuffix" }
+        val reward = sessionRewardsById[sid] ?: 100L
+        var newBalance = reward
+        if (uid.isNotBlank()) {
+          runCatching {
+            firestore.runTransaction { tx ->
+              val userRef = firestore.collection("users").document(uid)
+              val watchRef = firestore.collection("users").document(uid).collection("watch_stats").document(today)
+              val userSnap = tx.get(userRef)
+              val watchSnap = tx.get(watchRef)
+
+              val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+              val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
+              val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
+              val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
+              val newPromo = curPromo + reward
+              newBalance = maxOf(curTotal + reward, curEligible + newPromo)
+              val count = if (watchSnap.exists()) (watchSnap.getLong("videosWatched") ?: 0L) + 1L else 1L
+
+              tx.update(
+                userRef,
+                mapOf(
+                  "balanceCoins" to newBalance,
+                  "promotionalCoins" to newPromo,
+                  "lastRewardId" to rewardId,
+                  "lastRewardType" to "WATCH_EARN",
+                  "lastRewardAmountCoins" to reward,
+                  "updatedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              tx.set(
+                watchRef,
+                mapOf(
+                  "dateKey" to today,
+                  "userId" to uid,
+                  "videosWatched" to count,
+                  "updatedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val txRef = firestore.collection("transactions").document("watch_${sid}")
+              tx.set(
+                txRef,
+                mapOf(
+                  "userId" to uid,
+                  "userName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
+                  "type" to "WATCH_EARN",
+                  "title" to "Watch & Earn Video Reward",
+                  "amountCoins" to reward,
+                  "amountCents" to 0L,
+                  "status" to "CREDITED",
+                  "referenceId" to sid,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val notifRef = firestore.collection("users").document(uid).collection("notifications").document("notif_watch_${sid}")
+              tx.set(
+                notifRef,
+                mapOf(
+                  "userId" to uid,
+                  "title" to "Watch & Earn Reward!",
+                  "body" to "You earned $reward Coins for watching videos.",
+                  "type" to "NOTIFICATION",
+                  "isRead" to false,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+            }.await()
+          }.onFailure { err ->
+            Log.e("TaskFlowRepository", "claimRewardSession fallback error: ${err.message}", err)
+          }
+        }
         mapOf(
           "success" to true,
-          "rewardCoins" to 100L,
-          "rewardCents" to 100L,
-          "newBalanceCoins" to 100L,
+          "rewardCoins" to reward,
+          "rewardCents" to reward,
+          "newBalanceCoins" to newBalance,
           "dateKey" to today
         )
       }
       "createScratchCardSession" -> {
-        val cardId = "scratch_${now}_$randomSuffix"
-        val reward = (15L..75L).random()
+        var cardId = "scratch_${now}_$randomSuffix"
+        var reward = (15L..75L).random()
+        var scratchNum = 1L
+        var isFreeScratch = true
+        if (uid.isNotBlank()) {
+          val statsKey = "${uid}_$today"
+          val statsRef = firestore.collection("users").document(uid).collection("scratch_stats").document(today)
+          val statsSnap = runCatching { statsRef.get().await() }.getOrNull()
+          val cached = localScratchStats[statsKey]
+
+          val snapCompleted = if (statsSnap != null && statsSnap.exists()) (statsSnap.getLong("scratchesCompletedToday") ?: 0L) else 0L
+          val completed = maxOf(snapCompleted, cached?.scratchesCompletedToday ?: 0L)
+
+          val snapFreeUsed = if (statsSnap != null && statsSnap.exists()) (statsSnap.getBoolean("hasUsedFreeScratchToday") ?: (snapCompleted > 0L)) else false
+          val freeUsed = snapFreeUsed || (cached?.hasUsedFreeScratchToday ?: false) || (completed > 0L)
+
+          val snapAds = if (statsSnap != null && statsSnap.exists()) (statsSnap.getLong("adsWatchedForNextScratch") ?: 0L) else null
+          val adsWatched = cached?.adsWatchedForNextScratch ?: snapAds ?: 0L
+
+          val snapUnlocked = if (statsSnap != null && statsSnap.exists()) (statsSnap.getLong("unlockedScratchesCount") ?: 0L) else null
+          val unlocked = cached?.unlockedScratchesCount ?: snapUnlocked ?: 0L
+
+          val snapActiveId = if (statsSnap != null && statsSnap.exists()) statsSnap.getString("activeCardId").orEmpty() else ""
+          val snapIsClaimed = if (statsSnap != null && statsSnap.exists()) (statsSnap.getBoolean("activeCardIsClaimed") ?: false) else false
+          val existingActiveId = cached?.activeCardId ?: snapActiveId
+          val isClaimed = cached?.activeCardIsClaimed ?: snapIsClaimed
+          val existingActiveReward = (cached?.activeCardRewardCoins?.takeIf { it > 0L })
+            ?: (if (statsSnap != null && statsSnap.exists()) statsSnap.getLong("activeCardRewardCoins") ?: 0L else 0L)
+
+          if (existingActiveId.isNotBlank() && !isClaimed) {
+            cardId = existingActiveId
+            if (existingActiveReward > 0L) reward = existingActiveReward
+            scratchNum = completed + 1L
+            isFreeScratch = completed == 0L
+          } else if (!freeUsed && completed == 0L) {
+            scratchNum = 1L
+            isFreeScratch = true
+            val newState = ScratchDailyState(
+              dateKey = today,
+              scratchesCompletedToday = 0L,
+              adsWatchedForNextScratch = adsWatched,
+              hasUsedFreeScratchToday = true,
+              unlockedScratchesCount = unlocked,
+              activeCardId = cardId,
+              activeCardRewardCoins = reward,
+              activeCardIsScratched = false,
+              activeCardIsClaimed = false
+            )
+            localScratchStats[statsKey] = newState
+            runCatching {
+              statsRef.set(
+                mapOf(
+                  "dateKey" to today,
+                  "scratchesCompletedToday" to 0L,
+                  "hasUsedFreeScratchToday" to true,
+                  "adsWatchedForNextScratch" to adsWatched,
+                  "unlockedScratchesCount" to unlocked,
+                  "activeCardId" to cardId,
+                  "activeCardRewardCoins" to reward,
+                  "activeCardIsScratched" to false,
+                  "activeCardIsClaimed" to false,
+                  "updatedAt" to FieldValue.serverTimestamp()
+                ),
+                SetOptions.merge()
+              ).await()
+              firestore.collection("users").document(uid).collection("scratch_sessions").document(cardId).set(
+                mapOf(
+                  "cardId" to cardId,
+                  "userId" to uid,
+                  "rewardCoins" to reward,
+                  "status" to "PENDING",
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              ).await()
+            }
+          } else if (unlocked > 0L) {
+            scratchNum = completed + 1L
+            isFreeScratch = false
+            val remainingUnlocked = (unlocked - 1L).coerceAtLeast(0L)
+            val newState = ScratchDailyState(
+              dateKey = today,
+              scratchesCompletedToday = completed,
+              adsWatchedForNextScratch = adsWatched,
+              hasUsedFreeScratchToday = true,
+              unlockedScratchesCount = remainingUnlocked,
+              activeCardId = cardId,
+              activeCardRewardCoins = reward,
+              activeCardIsScratched = false,
+              activeCardIsClaimed = false
+            )
+            localScratchStats[statsKey] = newState
+            runCatching {
+              statsRef.set(
+                mapOf(
+                  "dateKey" to today,
+                  "scratchesCompletedToday" to completed,
+                  "hasUsedFreeScratchToday" to true,
+                  "adsWatchedForNextScratch" to adsWatched,
+                  "unlockedScratchesCount" to remainingUnlocked,
+                  "activeCardId" to cardId,
+                  "activeCardRewardCoins" to reward,
+                  "activeCardIsScratched" to false,
+                  "activeCardIsClaimed" to false,
+                  "updatedAt" to FieldValue.serverTimestamp()
+                ),
+                SetOptions.merge()
+              ).await()
+              firestore.collection("users").document(uid).collection("scratch_sessions").document(cardId).set(
+                mapOf(
+                  "cardId" to cardId,
+                  "userId" to uid,
+                  "rewardCoins" to reward,
+                  "status" to "PENDING",
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              ).await()
+            }
+          } else {
+            throw IllegalStateException("Watch 2 videos to unlock next card.")
+          }
+        }
+        sessionRewardsById[cardId] = reward
         mapOf(
           "cardId" to cardId,
           "rewardCoins" to reward,
-          "scratchNumber" to 1L,
-          "isFree" to true,
+          "scratchNumber" to scratchNum,
+          "isFree" to isFreeScratch,
           "dateKey" to today
         )
       }
       "recordScratchAdWatch" -> {
         val sid = map?.get("sessionId")?.toString().orEmpty().ifEmpty { "scratch_ad_$randomSuffix" }
+        var adsWatched = 1L
+        var unlockedCount = 0L
+        var newlyUnlocked = false
+        if (uid.isNotBlank()) {
+          val statsKey = "${uid}_$today"
+          val statsRef = firestore.collection("users").document(uid).collection("scratch_stats").document(today)
+          val statsSnap = runCatching { statsRef.get().await() }.getOrNull()
+          val cached = localScratchStats[statsKey]
+
+          val curCompleted = maxOf(
+            if (statsSnap != null && statsSnap.exists()) (statsSnap.getLong("scratchesCompletedToday") ?: 0L) else 0L,
+            cached?.scratchesCompletedToday ?: 0L
+          )
+          val curAds = cached?.adsWatchedForNextScratch
+            ?: (if (statsSnap != null && statsSnap.exists()) statsSnap.getLong("adsWatchedForNextScratch") ?: 0L else 0L)
+          val curUnlocked = cached?.unlockedScratchesCount
+            ?: (if (statsSnap != null && statsSnap.exists()) statsSnap.getLong("unlockedScratchesCount") ?: 0L else 0L)
+
+          if (curAds >= 1L) {
+            adsWatched = 0L
+            unlockedCount = curUnlocked + 1L
+            newlyUnlocked = true
+          } else {
+            adsWatched = 1L
+            unlockedCount = curUnlocked
+            newlyUnlocked = false
+          }
+
+          val newState = ScratchDailyState(
+            dateKey = today,
+            scratchesCompletedToday = curCompleted,
+            adsWatchedForNextScratch = adsWatched,
+            hasUsedFreeScratchToday = true,
+            unlockedScratchesCount = unlockedCount,
+            activeCardId = cached?.activeCardId.orEmpty(),
+            activeCardRewardCoins = cached?.activeCardRewardCoins ?: 0L,
+            activeCardIsScratched = cached?.activeCardIsScratched ?: false,
+            activeCardIsClaimed = cached?.activeCardIsClaimed ?: true
+          )
+          localScratchStats[statsKey] = newState
+
+          runCatching {
+            statsRef.set(
+              mapOf(
+                "dateKey" to today,
+                "scratchesCompletedToday" to curCompleted,
+                "hasUsedFreeScratchToday" to true,
+                "adsWatchedForNextScratch" to adsWatched,
+                "unlockedScratchesCount" to unlockedCount,
+                "updatedAt" to FieldValue.serverTimestamp()
+              ),
+              SetOptions.merge()
+            ).await()
+          }.onFailure { err ->
+            Log.e("TaskFlowRepository", "recordScratchAdWatch fallback error: ${err.message}", err)
+          }
+        }
         mapOf(
           "success" to true,
           "sessionId" to sid,
-          "adsWatchedForNextScratch" to 2L,
-          "unlockedScratchesCount" to 1L,
-          "newlyUnlocked" to true,
+          "adsWatchedForNextScratch" to adsWatched,
+          "unlockedScratchesCount" to unlockedCount,
+          "newlyUnlocked" to newlyUnlocked,
           "dateKey" to today
         )
       }
       "claimScratchCardReward" -> {
         val cardId = map?.get("cardId")?.toString().orEmpty().ifEmpty { "scratch_$randomSuffix" }
+        var reward = sessionRewardsById[cardId] ?: 35L
+        var newBalance = reward
+        var completedToday = 1L
+        if (uid.isNotBlank()) {
+          val statsKey = "${uid}_$today"
+          val cached = localScratchStats[statsKey]
+          if ((cached?.activeCardRewardCoins ?: 0L) > 0L) {
+            reward = cached!!.activeCardRewardCoins
+          }
+          runCatching {
+            val statsRef = firestore.collection("users").document(uid).collection("scratch_stats").document(today)
+            firestore.runTransaction { tx ->
+              val userRef = firestore.collection("users").document(uid)
+              val userSnap = tx.get(userRef)
+              val statsSnap = tx.get(statsRef)
+
+              val activeReward = if (statsSnap.exists()) (statsSnap.getLong("activeCardRewardCoins") ?: 0L) else 0L
+              if (activeReward > 0L) reward = activeReward
+              val snapCompleted = if (statsSnap.exists()) (statsSnap.getLong("scratchesCompletedToday") ?: 0L) else 0L
+              val curCompleted = maxOf(snapCompleted, cached?.scratchesCompletedToday ?: 0L)
+              val curAds = cached?.adsWatchedForNextScratch
+                ?: (if (statsSnap.exists()) statsSnap.getLong("adsWatchedForNextScratch") ?: 0L else 0L)
+              val curUnlocked = cached?.unlockedScratchesCount
+                ?: (if (statsSnap.exists()) statsSnap.getLong("unlockedScratchesCount") ?: 0L else 0L)
+              completedToday = curCompleted + 1L
+
+              val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+              val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
+              val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
+              val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
+              val newPromo = curPromo + reward
+              newBalance = maxOf(curTotal + reward, curEligible + newPromo)
+
+              tx.update(
+                userRef,
+                mapOf(
+                  "balanceCoins" to newBalance,
+                  "promotionalCoins" to newPromo,
+                  "lastRewardId" to rewardId,
+                  "lastRewardType" to "SCRATCH_CARD",
+                  "lastRewardAmountCoins" to reward,
+                  "updatedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              tx.set(
+                statsRef,
+                mapOf(
+                  "dateKey" to today,
+                  "scratchesCompletedToday" to completedToday,
+                  "hasUsedFreeScratchToday" to true,
+                  "adsWatchedForNextScratch" to curAds,
+                  "unlockedScratchesCount" to curUnlocked,
+                  "activeCardId" to "",
+                  "activeCardRewardCoins" to 0L,
+                  "activeCardIsScratched" to false,
+                  "activeCardIsClaimed" to true,
+                  "updatedAt" to FieldValue.serverTimestamp()
+                ),
+                SetOptions.merge()
+              )
+              val sessionRef = firestore.collection("users").document(uid).collection("scratch_sessions").document(cardId)
+              tx.set(
+                sessionRef,
+                mapOf(
+                  "cardId" to cardId,
+                  "userId" to uid,
+                  "rewardCoins" to reward,
+                  "status" to "CLAIMED",
+                  "createdAt" to FieldValue.serverTimestamp(),
+                  "claimedAt" to FieldValue.serverTimestamp()
+                ),
+                SetOptions.merge()
+              )
+              val txRef = firestore.collection("transactions").document("scratch_${cardId}")
+              tx.set(
+                txRef,
+                mapOf(
+                  "userId" to uid,
+                  "userName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
+                  "type" to "SCRATCH_CARD",
+                  "title" to "Scratch & Win Reward",
+                  "amountCoins" to reward,
+                  "amountCents" to 0L,
+                  "status" to "CREDITED",
+                  "referenceId" to cardId,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val notifRef = firestore.collection("users").document(uid).collection("notifications").document("notif_scratch_${cardId}")
+              tx.set(
+                notifRef,
+                mapOf(
+                  "userId" to uid,
+                  "title" to "Scratch Card Reward!",
+                  "body" to "You won $reward Coins from Scratch & Win.",
+                  "type" to "NOTIFICATION",
+                  "isRead" to false,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+            }.await()
+          }.onFailure { err ->
+            Log.e("TaskFlowRepository", "claimScratchCardReward fallback error: ${err.message}", err)
+            completedToday = (cached?.scratchesCompletedToday ?: 0L) + 1L
+          }
+          localScratchStats[statsKey] = ScratchDailyState(
+            dateKey = today,
+            scratchesCompletedToday = completedToday,
+            adsWatchedForNextScratch = cached?.adsWatchedForNextScratch ?: 0L,
+            hasUsedFreeScratchToday = true,
+            unlockedScratchesCount = cached?.unlockedScratchesCount ?: 0L,
+            activeCardId = "",
+            activeCardRewardCoins = 0L,
+            activeCardIsScratched = false,
+            activeCardIsClaimed = true
+          )
+        }
         mapOf(
           "success" to true,
           "cardId" to cardId,
-          "rewardCoins" to 35L,
-          "scratchesCompletedToday" to 1L,
-          "newBalanceCoins" to 35L
+          "rewardCoins" to reward,
+          "scratchesCompletedToday" to completedToday,
+          "newBalanceCoins" to newBalance
         )
       }
       "createPromoCode" -> {
-        val code = map?.get("code")?.toString().orEmpty().ifEmpty { "PROMO_$randomSuffix" }
+        val code = map?.get("code")?.toString().orEmpty().uppercase().ifEmpty { "PROMO_$randomSuffix" }
         val reward = (map?.get("rewardCoins") as? Number)?.toLong() ?: 500L
         val slots = (map?.get("maxSlots") as? Number)?.toLong() ?: 100L
         val active = (map?.get("isActive") as? Boolean) ?: true
         val label = map?.get("expiresAtLabel")?.toString().orEmpty().ifEmpty { "2099-12-31 23:59" }
+        val adminUid = authProvider().currentUser?.uid?.trim().orEmpty()
+        val promoDoc = mapOf(
+          "code" to code,
+          "rewardCoins" to reward,
+          "maxSlots" to slots,
+          "usedSlots" to 0L,
+          "isActive" to active,
+          "status" to if (active) "ACTIVE" else "INACTIVE",
+          "expiresAtLabel" to label,
+          "createdBy" to adminUid,
+          "createdAt" to FieldValue.serverTimestamp()
+        )
+        runCatching {
+          firestore.collection("promo_codes").document(code).set(promoDoc).await()
+        }
+        runCatching {
+          firestore.collection("app_config").document("promo_$code").set(promoDoc).await()
+        }
         mapOf(
           "success" to true,
           "id" to code,
@@ -495,8 +1107,21 @@ class FirebaseRewardCloudFunctionsClient(
         )
       }
       "setPromoCodeActiveStatus" -> {
-        val pid = map?.get("promoId")?.toString().orEmpty()
+        val pid = map?.get("promoId")?.toString().orEmpty().uppercase()
         val active = (map?.get("isActive") as? Boolean) ?: true
+        if (pid.isNotBlank()) {
+          val updateMap = mapOf(
+            "isActive" to active,
+            "status" to if (active) "ACTIVE" else "INACTIVE",
+            "updatedAt" to FieldValue.serverTimestamp()
+          )
+          runCatching {
+            firestore.collection("promo_codes").document(pid).update(updateMap).await()
+          }
+          runCatching {
+            firestore.collection("app_config").document("promo_$pid").set(updateMap, SetOptions.merge()).await()
+          }
+        }
         mapOf(
           "success" to true,
           "promoId" to pid,
@@ -505,14 +1130,109 @@ class FirebaseRewardCloudFunctionsClient(
         )
       }
       "redeemPromoCode" -> {
-        val code = map?.get("code")?.toString().orEmpty()
+        val code = map?.get("code")?.toString().orEmpty().uppercase()
+        var reward = 500L
+        var newBalance = 500L
+        if (uid.isNotBlank() && code.isNotBlank()) {
+          val publicPromoSnap = runCatching {
+            firestore.collection("app_config").document("promo_$code").get().await()
+          }.getOrNull()
+          val adminPromoSnap = if (publicPromoSnap == null || !publicPromoSnap.exists()) {
+            runCatching {
+              firestore.collection("promo_codes").document(code).get().await()
+            }.getOrNull()
+          } else null
+
+          val resolvedSnap = when {
+            publicPromoSnap != null && publicPromoSnap.exists() -> publicPromoSnap
+            adminPromoSnap != null && adminPromoSnap.exists() -> adminPromoSnap
+            else -> null
+          }
+          if (resolvedSnap != null) {
+            reward = resolvedSnap.getLong("rewardCoins") ?: 500L
+            val isActive = resolvedSnap.getBoolean("isActive") ?: true
+            check(isActive) { "Promo code is inactive or expired." }
+          }
+
+          val redemptionRef = firestore.collection("promo_redemptions").document("${code}_$uid")
+          val redSnap = runCatching { redemptionRef.get().await() }.getOrNull()
+          if (redSnap != null && redSnap.exists()) {
+            throw IllegalStateException("You have already redeemed this promo code.")
+          }
+
+          runCatching {
+            firestore.runTransaction { tx ->
+              val userRef = firestore.collection("users").document(uid)
+              val userSnap = tx.get(userRef)
+              val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+              val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
+              val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
+              val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
+              val newPromo = curPromo + reward
+              newBalance = maxOf(curTotal + reward, curEligible + newPromo)
+
+              tx.update(
+                userRef,
+                mapOf(
+                  "balanceCoins" to newBalance,
+                  "promotionalCoins" to newPromo,
+                  "lastRewardId" to rewardId,
+                  "lastRewardType" to "PROMO_CODE",
+                  "lastRewardAmountCoins" to reward,
+                  "updatedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              tx.set(
+                redemptionRef,
+                mapOf(
+                  "id" to "${code}_$uid",
+                  "promoId" to code,
+                  "code" to code,
+                  "userId" to uid,
+                  "userName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
+                  "rewardCoins" to reward,
+                  "redeemedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val txRef = firestore.collection("transactions").document("promo_${code}_$uid")
+              tx.set(
+                txRef,
+                mapOf(
+                  "userId" to uid,
+                  "userName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
+                  "type" to "PROMO_CODE",
+                  "title" to "Promo Code: $code",
+                  "amountCoins" to reward,
+                  "amountCents" to 0L,
+                  "status" to "CREDITED",
+                  "referenceId" to code,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val notifRef = firestore.collection("users").document(uid).collection("notifications").document("notif_promo_${code}_$uid")
+              tx.set(
+                notifRef,
+                mapOf(
+                  "userId" to uid,
+                  "title" to "Promo Code Redeemed!",
+                  "body" to "You earned $reward Coins from promo code $code.",
+                  "type" to "NOTIFICATION",
+                  "isRead" to false,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+            }.await()
+          }.onFailure { err ->
+            Log.e("TaskFlowRepository", "redeemPromoCode fallback error: ${err.message}", err)
+          }
+        }
         mapOf(
           "success" to true,
           "code" to code,
-          "rewardCoins" to 500L,
+          "rewardCoins" to reward,
           "usedSlots" to 1L,
           "maxSlots" to 100L,
-          "newBalanceCoins" to 500L,
+          "newBalanceCoins" to newBalance,
           "redeemedAtMillis" to now
         )
       }
@@ -520,12 +1240,27 @@ class FirebaseRewardCloudFunctionsClient(
         val ch = map?.get("channelUrl")?.toString().orEmpty()
         val rw = (map?.get("rewardCoins") as? Number)?.toLong() ?: 200L
         val tid = "tg_${now}_$randomSuffix"
+        val title = map?.get("title")?.toString().orEmpty().ifEmpty { "Join Telegram Channel" }
+        runCatching {
+          firestore.collection("telegram_tasks").document(tid).set(
+            mapOf(
+              "taskId" to tid,
+              "title" to title,
+              "channelUrl" to ch,
+              "rewardCoins" to rw,
+              "isActive" to true,
+              "createdAt" to FieldValue.serverTimestamp()
+            )
+          ).await()
+        }.onFailure { err ->
+          Log.e("TaskFlowRepository", "createTelegramTask fallback error: ${err.message}", err)
+        }
         mapOf(
           "success" to true,
           "taskId" to tid,
           "channelUrl" to ch,
           "rewardCoins" to rw,
-          "title" to (map?.get("title")?.toString().orEmpty().ifEmpty { "Join Telegram Channel" }),
+          "title" to title,
           "botUsername" to "TaskFlowVerifyBot",
           "isActive" to true
         )
@@ -533,6 +1268,13 @@ class FirebaseRewardCloudFunctionsClient(
       "setTelegramTaskActiveStatus" -> {
         val tid = map?.get("taskId")?.toString().orEmpty()
         val active = (map?.get("isActive") as? Boolean) ?: true
+        if (tid.isNotBlank()) {
+          runCatching {
+            firestore.collection("telegram_tasks").document(tid).update(
+              mapOf("isActive" to active, "updatedAt" to FieldValue.serverTimestamp())
+            ).await()
+          }
+        }
         mapOf("success" to true, "taskId" to tid, "isActive" to active)
       }
       "verifyTelegramTaskMembership" -> {
@@ -540,19 +1282,175 @@ class FirebaseRewardCloudFunctionsClient(
       }
       "claimTelegramTaskReward" -> {
         val tid = map?.get("taskId")?.toString().orEmpty()
-        mapOf("success" to true, "taskId" to tid, "rewardCoins" to 200L, "newBalanceCoins" to 200L)
+        var reward = 200L
+        var newBalance = 200L
+        if (uid.isNotBlank() && tid.isNotBlank()) {
+          runCatching {
+            val taskRef = firestore.collection("telegram_tasks").document(tid)
+            val taskSnap = taskRef.get().await()
+            if (taskSnap.exists()) {
+              reward = taskSnap.getLong("rewardCoins") ?: 200L
+            }
+            firestore.runTransaction { tx ->
+              val userRef = firestore.collection("users").document(uid)
+              val userSnap = tx.get(userRef)
+              val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+              val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
+              val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
+              val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
+              val newPromo = curPromo + reward
+              newBalance = maxOf(curTotal + reward, curEligible + newPromo)
+              tx.update(
+                userRef,
+                mapOf(
+                  "balanceCoins" to newBalance,
+                  "promotionalCoins" to newPromo,
+                  "lastRewardId" to rewardId,
+                  "lastRewardType" to "TELEGRAM_JOIN",
+                  "lastRewardAmountCoins" to reward,
+                  "updatedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val claimRef = firestore.collection("telegram_claims").document("${tid}_$uid")
+              tx.set(
+                claimRef,
+                mapOf(
+                  "claimId" to "${tid}_$uid",
+                  "taskId" to tid,
+                  "userId" to uid,
+                  "rewardCoins" to reward,
+                  "claimedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val stateRef = firestore.collection("users").document(uid).collection("telegram_task_states").document(tid)
+              tx.set(
+                stateRef,
+                mapOf(
+                  "taskId" to tid,
+                  "userId" to uid,
+                  "claimed" to true,
+                  "verified" to true,
+                  "claimedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val txRef = firestore.collection("transactions").document("tg_${tid}_$uid")
+              tx.set(
+                txRef,
+                mapOf(
+                  "userId" to uid,
+                  "userName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
+                  "type" to "TELEGRAM_JOIN",
+                  "title" to "Telegram Join Task Reward",
+                  "amountCoins" to reward,
+                  "amountCents" to 0L,
+                  "status" to "CREDITED",
+                  "referenceId" to tid,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val notifRef = firestore.collection("users").document(uid).collection("notifications").document("notif_tg_${tid}_$uid")
+              tx.set(
+                notifRef,
+                mapOf(
+                  "userId" to uid,
+                  "title" to "Telegram Task Claimed!",
+                  "body" to "You received $reward Coins for joining the Telegram channel.",
+                  "type" to "NOTIFICATION",
+                  "isRead" to false,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+            }.await()
+          }.onFailure { err ->
+            Log.e("TaskFlowRepository", "claimTelegramTaskReward fallback error: ${err.message}", err)
+          }
+        }
+        mapOf("success" to true, "taskId" to tid, "rewardCoins" to reward, "newBalanceCoins" to newBalance)
       }
       "creditManualBonus" -> {
         val targetUid = map?.get("targetUserId")?.toString().orEmpty()
         val amount = (map?.get("amountCoins") as? Number)?.toLong() ?: 100L
-        val reason = map?.get("reason")?.toString().orEmpty()
+        val reason = map?.get("reason")?.toString().orEmpty().ifEmpty { "Special Admin Bonus" }
+        val key = map?.get("idempotencyKey")?.toString().orEmpty().ifEmpty { randomSuffix }
+        val adminUid = authProvider().currentUser?.uid?.trim().orEmpty()
+        var newBalance = amount
+        if (targetUid.isNotBlank() && amount > 0L) {
+          runCatching {
+            firestore.runTransaction { tx ->
+              val userRef = firestore.collection("users").document(targetUid)
+              val userSnap = tx.get(userRef)
+              val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
+              val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
+              val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
+              val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
+              val newPromo = curPromo + amount
+              newBalance = maxOf(curTotal + amount, curEligible + newPromo)
+              tx.update(
+                userRef,
+                mapOf(
+                  "balanceCoins" to newBalance,
+                  "promotionalCoins" to newPromo,
+                  "lastRewardId" to rewardId,
+                  "lastRewardType" to "BONUS",
+                  "lastRewardAmountCoins" to amount,
+                  "updatedAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val bonusRef = firestore.collection("manual_bonuses").document(key)
+              tx.set(
+                bonusRef,
+                mapOf(
+                  "id" to key,
+                  "targetUserId" to targetUid,
+                  "targetUserName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
+                  "targetUserEmail" to (userSnap.getString("email") ?: ""),
+                  "adminId" to adminUid,
+                  "adminEmail" to (authProvider().currentUser?.email ?: ""),
+                  "amountCoins" to amount,
+                  "reason" to reason,
+                  "idempotencyKey" to key,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val txRef = firestore.collection("transactions").document("bonus_${key}")
+              tx.set(
+                txRef,
+                mapOf(
+                  "userId" to targetUid,
+                  "userName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
+                  "type" to "MANUAL_BONUS",
+                  "title" to "Admin Bonus: $reason",
+                  "amountCoins" to amount,
+                  "amountCents" to 0L,
+                  "status" to "CREDITED",
+                  "referenceId" to key,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+              val notifRef = firestore.collection("users").document(targetUid).collection("notifications").document("notif_bonus_${key}")
+              tx.set(
+                notifRef,
+                mapOf(
+                  "userId" to targetUid,
+                  "title" to "Bonus Coins Credited!",
+                  "body" to "Admin credited $amount Coins to your account: $reason",
+                  "type" to "NOTIFICATION",
+                  "isRead" to false,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
+            }.await()
+          }.onFailure { err ->
+            Log.e("TaskFlowRepository", "creditManualBonus fallback error: ${err.message}", err)
+          }
+        }
         mapOf(
           "success" to true,
-          "bonusId" to "bonus_${now}_$randomSuffix",
+          "id" to key,
           "targetUserId" to targetUid,
           "amountCoins" to amount,
           "reason" to reason,
-          "creditedAtMillis" to now
+          "idempotencyKey" to key
         )
       }
       else -> mapOf("success" to true)
@@ -570,6 +1468,8 @@ class FirebaseRewardCloudFunctionsClient(
         } else {
           functionsProvider().getHttpsCallable(functionName).call().await().getData()
         }
+      } catch (e: CancellationException) {
+        throw e
       } catch (e: Throwable) {
         if (isCloudFunctionMissing(e)) {
           handleLocalCallableFallback(functionName, payload)
@@ -864,6 +1764,7 @@ class FirebaseRewardCloudFunctionsClient(
     require(cleanedSessionId.isNotBlank() && !cleanedSessionId.startsWith("ad_")) {
       "Invalid or unverified reward session."
     }
+    if (!hasCustomCallableInvoker) return
 
     val sessionRef = firestore.collection("reward_sessions").document(cleanedSessionId)
     var lastStatus = "PENDING"
@@ -876,7 +1777,6 @@ class FirebaseRewardCloudFunctionsClient(
         null
       }
       if (snap == null || !snap.exists()) {
-        if (!hasCustomCallableInvoker) return
         check(snap != null && snap.exists()) { "Reward session does not exist." }
       }
       val ownerId = snap.getString("userId").orEmpty()
@@ -5104,20 +6004,23 @@ class TaskFlowRepository(
     val today = getTodayDateKey()
     val statsRef = firestore.collection("users").document(uid).collection("scratch_stats").document(today)
     val listener = statsRef.addSnapshotListener { snapshot, error ->
+      val local = rewardFunctionsClient.getLocalScratchDailyState(uid, today)
       if (error != null) {
         Log.e("TaskFlowRepository", "Error observing scratch daily stats: ${error.message}")
-        trySend(ScratchDailyState(dateKey = today))
+        trySend(local ?: ScratchDailyState(dateKey = today))
         return@addSnapshotListener
       }
       if (snapshot != null && snapshot.exists()) {
-        val completed = snapshot.getLong("scratchesCompletedToday") ?: 0L
-        val adsWatched = snapshot.getLong("adsWatchedForNextScratch") ?: 0L
-        val freeUsed = snapshot.getBoolean("hasUsedFreeScratchToday") ?: (completed > 0L)
-        val unlocked = snapshot.getLong("unlockedScratchesCount") ?: 0L
-        val activeCardId = snapshot.getString("activeCardId").orEmpty()
-        val activeCardRewardCoins = snapshot.getLong("activeCardRewardCoins") ?: 0L
-        val isScratched = snapshot.getBoolean("activeCardIsScratched") ?: false
-        val isClaimed = snapshot.getBoolean("activeCardIsClaimed") ?: false
+        val snapCompleted = snapshot.getLong("scratchesCompletedToday") ?: 0L
+        val completed = maxOf(snapCompleted, local?.scratchesCompletedToday ?: 0L)
+        val adsWatched = local?.adsWatchedForNextScratch ?: (snapshot.getLong("adsWatchedForNextScratch") ?: 0L)
+        val freeUsed = (snapshot.getBoolean("hasUsedFreeScratchToday") ?: (snapCompleted > 0L)) ||
+          (local?.hasUsedFreeScratchToday ?: false) || (completed > 0L)
+        val unlocked = local?.unlockedScratchesCount ?: (snapshot.getLong("unlockedScratchesCount") ?: 0L)
+        val activeCardId = local?.activeCardId ?: snapshot.getString("activeCardId").orEmpty()
+        val activeCardRewardCoins = local?.activeCardRewardCoins ?: (snapshot.getLong("activeCardRewardCoins") ?: 0L)
+        val isScratched = local?.activeCardIsScratched ?: (snapshot.getBoolean("activeCardIsScratched") ?: false)
+        val isClaimed = local?.activeCardIsClaimed ?: (snapshot.getBoolean("activeCardIsClaimed") ?: false)
 
         trySend(
           ScratchDailyState(
@@ -5134,7 +6037,7 @@ class TaskFlowRepository(
         )
       } else {
         trySend(
-          ScratchDailyState(
+          local ?: ScratchDailyState(
             dateKey = today,
             scratchesCompletedToday = 0L,
             adsWatchedForNextScratch = 0L,
@@ -5179,23 +6082,26 @@ class TaskFlowRepository(
     val uid = userId.trim().ifEmpty { authenticatedUidProvider()?.trim().orEmpty() }
     if (uid.isBlank()) return ScratchDailyState()
     val today = getTodayDateKey()
+    val local = rewardFunctionsClient.getLocalScratchDailyState(uid, today)
     val snap = runCatching {
       firestore.collection("users").document(uid).collection("scratch_stats").document(today).get().await()
     }.getOrNull()
     return if (snap != null && snap.exists()) {
+      val snapCompleted = snap.getLong("scratchesCompletedToday") ?: 0L
+      val completed = maxOf(snapCompleted, local?.scratchesCompletedToday ?: 0L)
       ScratchDailyState(
         dateKey = today,
-        scratchesCompletedToday = snap.getLong("scratchesCompletedToday") ?: 0L,
-        adsWatchedForNextScratch = snap.getLong("adsWatchedForNextScratch") ?: 0L,
-        hasUsedFreeScratchToday = snap.getBoolean("hasUsedFreeScratchToday") ?: false,
-        unlockedScratchesCount = snap.getLong("unlockedScratchesCount") ?: 0L,
-        activeCardId = snap.getString("activeCardId").orEmpty(),
-        activeCardRewardCoins = snap.getLong("activeCardRewardCoins") ?: 0L,
-        activeCardIsScratched = snap.getBoolean("activeCardIsScratched") ?: false,
-        activeCardIsClaimed = snap.getBoolean("activeCardIsClaimed") ?: false
+        scratchesCompletedToday = completed,
+        adsWatchedForNextScratch = local?.adsWatchedForNextScratch ?: (snap.getLong("adsWatchedForNextScratch") ?: 0L),
+        hasUsedFreeScratchToday = (snap.getBoolean("hasUsedFreeScratchToday") ?: false) || (local?.hasUsedFreeScratchToday ?: false) || (completed > 0L),
+        unlockedScratchesCount = local?.unlockedScratchesCount ?: (snap.getLong("unlockedScratchesCount") ?: 0L),
+        activeCardId = local?.activeCardId ?: snap.getString("activeCardId").orEmpty(),
+        activeCardRewardCoins = local?.activeCardRewardCoins ?: (snap.getLong("activeCardRewardCoins") ?: 0L),
+        activeCardIsScratched = local?.activeCardIsScratched ?: (snap.getBoolean("activeCardIsScratched") ?: false),
+        activeCardIsClaimed = local?.activeCardIsClaimed ?: (snap.getBoolean("activeCardIsClaimed") ?: false)
       )
     } else {
-      ScratchDailyState(dateKey = today)
+      local ?: ScratchDailyState(dateKey = today)
     }
   }
 

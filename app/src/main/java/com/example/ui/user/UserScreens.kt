@@ -81,10 +81,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -361,19 +366,57 @@ fun UserHomeScreen(
         }
       }
 
-      // 2. Explore Rewards Section (EXACTLY 4 Equal-Sized Square Cards in a 2x2 Grid)
+      // 2. Explore Rewards Section (6 Equal-Sized Pastel Horizontal Cards in a 2-Column Grid)
       item {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-          Text(
-            text = "Explore Rewards",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 4.dp)
-          )
           Row(
-            modifier = Modifier.fillMaxWidth().height(140.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+              ExploreRewardsHeaderGiftIcon(modifier = Modifier.size(30.dp))
+              Text(
+                text = "Explore Rewards",
+                style = MaterialTheme.typography.titleLarge,
+                fontSize = 20.sp,
+                color = Color(0xFF0F172A),
+                fontWeight = FontWeight.ExtraBold
+              )
+            }
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = Color(0xFFF3E8FF),
+              border = BorderStroke(1.dp, Color(0xFFD8B4FE)),
+              modifier = Modifier.clip(RoundedCornerShape(50)).clickable { onNavigateToOfferWall() }
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+              ) {
+                Text(
+                  text = "View All",
+                  style = MaterialTheme.typography.labelLarge,
+                  fontSize = 12.sp,
+                  fontWeight = FontWeight.Bold,
+                  color = Color(0xFF4C1D95)
+                )
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                  contentDescription = null,
+                  tint = Color(0xFF4C1D95),
+                  modifier = Modifier.size(14.dp)
+                )
+              }
+            }
+          }
+          Row(
+            modifier = Modifier.fillMaxWidth().height(84.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
           ) {
             WatchAndEarnCard(
               onWatchAdClicked = {
@@ -391,8 +434,8 @@ fun UserHomeScreen(
             )
           }
           Row(
-            modifier = Modifier.fillMaxWidth().height(140.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.fillMaxWidth().height(84.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
           ) {
             SpinAndEarnCard(
               onClick = onNavigateToSpin,
@@ -404,8 +447,8 @@ fun UserHomeScreen(
             )
           }
           Row(
-            modifier = Modifier.fillMaxWidth().height(140.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.fillMaxWidth().height(84.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
           ) {
             ScratchCard(
               onClick = onNavigateToScratchCard,
@@ -571,6 +614,172 @@ fun UserHomeScreen(
 }
 
 @Composable
+private fun ExploreRewardsHeaderGiftIcon(modifier: Modifier = Modifier) {
+  Canvas(modifier = modifier) {
+    val w = size.width
+    val h = size.height
+    // Top bow loops
+    val bowPathLeft = Path().apply {
+      moveTo(w * 0.5f, h * 0.28f)
+      cubicTo(w * 0.2f, h * 0.02f, w * 0.1f, h * 0.26f, w * 0.5f, h * 0.28f)
+      close()
+    }
+    val bowPathRight = Path().apply {
+      moveTo(w * 0.5f, h * 0.28f)
+      cubicTo(w * 0.8f, h * 0.02f, w * 0.9f, h * 0.26f, w * 0.5f, h * 0.28f)
+      close()
+    }
+    drawPath(bowPathLeft, color = Color(0xFF9333EA))
+    drawPath(bowPathRight, color = Color(0xFF7C3AED))
+    drawPath(bowPathLeft, color = Color(0xFF6B21A8), style = Stroke(width = w * 0.04f))
+    drawPath(bowPathRight, color = Color(0xFF6B21A8), style = Stroke(width = w * 0.04f))
+
+    // Lower box body
+    drawRoundRect(
+      brush = Brush.verticalGradient(listOf(Color(0xFF9333EA), Color(0xFF6B21A8))),
+      topLeft = Offset(w * 0.12f, h * 0.40f),
+      size = Size(w * 0.76f, h * 0.54f),
+      cornerRadius = CornerRadius(w * 0.10f, w * 0.10f)
+    )
+    // Upper box lid
+    drawRoundRect(
+      brush = Brush.horizontalGradient(listOf(Color(0xFFA855F7), Color(0xFF7C3AED))),
+      topLeft = Offset(w * 0.07f, h * 0.25f),
+      size = Size(w * 0.86f, h * 0.18f),
+      cornerRadius = CornerRadius(w * 0.08f, w * 0.08f)
+    )
+    // Vertical gold ribbon
+    drawRect(
+      brush = Brush.verticalGradient(listOf(Color(0xFFFDE047), Color(0xFFEAB308))),
+      topLeft = Offset(w * 0.42f, h * 0.25f),
+      size = Size(w * 0.16f, h * 0.69f)
+    )
+  }
+}
+
+@Composable
+private fun ExploreRewardPastelCard(
+  title: String,
+  subtitle: String,
+  cardTag: String,
+  subtitleTag: String? = null,
+  arrowTag: String? = null,
+  bgStart: Color,
+  bgEnd: Color,
+  borderColor: Color,
+  waveStart: Color,
+  waveEnd: Color,
+  arrowBgStart: Color,
+  arrowBgEnd: Color,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  iconContent: @Composable () -> Unit
+) {
+  val shape = RoundedCornerShape(18.dp)
+  Box(
+    modifier =
+      modifier
+        .shadow(
+          elevation = 4.dp,
+          shape = shape,
+          ambientColor = borderColor.copy(alpha = 0.45f),
+          spotColor = borderColor.copy(alpha = 0.45f)
+        )
+        .testTag(cardTag)
+        .clip(shape)
+        .background(Brush.horizontalGradient(colors = listOf(bgStart, bgEnd)))
+        .border(1.dp, borderColor, shape)
+        .clickable(onClick = onClick)
+  ) {
+    // Bottom-left curved accent ribbon matching reference image
+    Canvas(modifier = Modifier.fillMaxSize()) {
+      val wavePath = Path().apply {
+        moveTo(0f, size.height * 0.68f)
+        cubicTo(
+          size.width * 0.12f,
+          size.height * 0.82f,
+          size.width * 0.24f,
+          size.height * 0.94f,
+          size.width * 0.44f,
+          size.height
+        )
+        lineTo(0f, size.height)
+        close()
+      }
+      drawPath(
+        path = wavePath,
+        brush = Brush.horizontalGradient(colors = listOf(waveStart, waveEnd))
+      )
+    }
+
+    Row(
+      modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 10.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+      Box(
+        modifier = Modifier.size(46.dp),
+        contentAlignment = Alignment.Center
+      ) {
+        iconContent()
+      }
+
+      Column(
+        modifier = Modifier.weight(1f),
+        verticalArrangement = Arrangement.Center
+      ) {
+        Text(
+          text = title,
+          style = MaterialTheme.typography.titleSmall,
+          fontSize = 13.5.sp,
+          fontWeight = FontWeight.ExtraBold,
+          color = Color(0xFF0F172A),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          lineHeight = 16.sp
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+          text = subtitle,
+          style = MaterialTheme.typography.bodySmall,
+          fontSize = 11.sp,
+          fontWeight = FontWeight.Medium,
+          color = Color(0xFF475569),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          lineHeight = 14.sp,
+          modifier =
+            if (subtitleTag != null) {
+              Modifier.testTag(subtitleTag).clickable(onClick = onClick)
+            } else {
+              Modifier
+            }
+        )
+      }
+
+      Box(
+        modifier =
+          Modifier
+            .size(22.dp)
+            .let { mod -> if (arrowTag != null) mod.testTag(arrowTag).clickable { onClick() } else mod }
+            .clip(CircleShape)
+            .background(
+              Brush.radialGradient(colors = listOf(arrowBgStart, arrowBgEnd))
+            ),
+        contentAlignment = Alignment.Center
+      ) {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+          contentDescription = null,
+          tint = Color(0xFF0F172A),
+          modifier = Modifier.size(15.dp)
+        )
+      }
+    }
+  }
+}
+
+@Composable
 private fun DailyCheckInCard(
   dailyCheckInState: DailyCheckInState,
   onClaimDailyCheckIn: () -> Unit,
@@ -579,64 +788,59 @@ private fun DailyCheckInCard(
 ) {
   val nextDay = dailyCheckInState.nextClaimDay.coerceIn(1, 30)
   val nextCoins = DailyCheckInConstants.getRewardCoinsForDay(nextDay)
-  Box(
-    modifier =
-      modifier
-        .testTag("home_daily_checkin_card")
-        .clip(RoundedCornerShape(22.dp))
-        .background(
-          Brush.verticalGradient(
-            colors = listOf(Color(0xFF1E3A8A), Color(0xFF1D4ED8), Color(0xFF0F172A))
-          )
-        )
-        .border(1.dp, Color(0xFF3B82F6).copy(alpha = 0.45f), RoundedCornerShape(22.dp))
-        .clickable {
-          onClaimDailyCheckIn()
-          onOpenCalendar()
-        }
+  val subtitleText =
+    if (dailyCheckInState.canCheckInToday) {
+      "Day $nextDay: +$nextCoins Coins"
+    } else {
+      "Up to 1,000 Coins"
+    }
+
+  ExploreRewardPastelCard(
+    title = "Daily Check-in",
+    subtitle = subtitleText,
+    cardTag = "home_daily_checkin_card",
+    bgStart = Color(0xFFECFDF5),
+    bgEnd = Color(0xFFE6FAEE),
+    borderColor = Color(0xFFA7F3D0),
+    waveStart = Color(0xFF059669),
+    waveEnd = Color(0xFF10B981),
+    arrowBgStart = Color(0xFFD1FAE5),
+    arrowBgEnd = Color(0xFF6EE7B7),
+    onClick = {
+      onClaimDailyCheckIn()
+      onOpenCalendar()
+    },
+    modifier = modifier
   ) {
-    Column(
-      modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp),
-      verticalArrangement = Arrangement.Center,
-      horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-      Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = Color.White.copy(alpha = 0.16f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
-        modifier = Modifier.size(46.dp)
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.LocalFireDepartment,
-            contentDescription = "Daily Check-in",
-            tint = Color(0xFFFBBF24),
-            modifier = Modifier.size(26.dp)
-          )
-        }
-      }
-      Spacer(modifier = Modifier.height(8.dp))
-      Text(
-        text = "Daily Check-in",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center,
-        lineHeight = 18.sp,
-        color = Color.White
+    Canvas(modifier = Modifier.size(44.dp)) {
+      val r = size.minDimension / 2f
+      drawCircle(
+        brush = Brush.verticalGradient(listOf(Color(0xFF10B981), Color(0xFF047857))),
+        radius = r
       )
-      Spacer(modifier = Modifier.height(2.dp))
-      Text(
-        text =
-          if (dailyCheckInState.canCheckInToday) {
-            "Day $nextDay: +$nextCoins Coins"
-          } else {
-            "Up to 1,000 Coins"
-          },
-        style = MaterialTheme.typography.labelSmall,
-        fontSize = 10.sp,
-        color = Color(0xFFDBEAFE),
-        fontWeight = FontWeight.SemiBold,
-        textAlign = TextAlign.Center
+      val w = size.width
+      val h = size.height
+      // Outer orange flame
+      val outerFlame = Path().apply {
+        moveTo(w * 0.50f, h * 0.16f)
+        cubicTo(w * 0.76f, h * 0.36f, w * 0.80f, h * 0.68f, w * 0.50f, h * 0.84f)
+        cubicTo(w * 0.20f, h * 0.68f, w * 0.24f, h * 0.36f, w * 0.50f, h * 0.16f)
+        close()
+      }
+      drawPath(
+        path = outerFlame,
+        brush = Brush.verticalGradient(listOf(Color(0xFFFBBF24), Color(0xFFF97316)))
+      )
+      // Inner yellow flame
+      val innerFlame = Path().apply {
+        moveTo(w * 0.50f, h * 0.38f)
+        cubicTo(w * 0.66f, h * 0.52f, w * 0.66f, h * 0.72f, w * 0.50f, h * 0.82f)
+        cubicTo(w * 0.34f, h * 0.72f, w * 0.34f, h * 0.52f, w * 0.50f, h * 0.38f)
+        close()
+      }
+      drawPath(
+        path = innerFlame,
+        color = Color(0xFFFDE047)
       )
     }
   }
@@ -648,80 +852,37 @@ private fun WatchAndEarnCard(
   onShowInterstitialClicked: () -> Unit,
   modifier: Modifier = Modifier
 ) {
-  Box(
-    modifier =
-      modifier
-        .testTag("home_watch_earn_card")
-        .clip(RoundedCornerShape(22.dp))
-        .background(
-          Brush.verticalGradient(
-            colors = listOf(Color(0xFF172554), Color(0xFF1E3A8A), Color(0xFF1D4ED8))
-          )
-        )
-        .border(1.dp, Color(0xFF60A5FA).copy(alpha = 0.45f), RoundedCornerShape(22.dp))
+  ExploreRewardPastelCard(
+    title = "Watch & Earn",
+    subtitle = "Watch Videos",
+    cardTag = "home_watch_earn_card",
+    subtitleTag = "watch_earn_badge",
+    arrowTag = "watch_ad_button",
+    bgStart = Color(0xFFEEF4FF),
+    bgEnd = Color(0xFFE4EEFF),
+    borderColor = Color(0xFFBFDBFE),
+    waveStart = Color(0xFF1D4ED8),
+    waveEnd = Color(0xFF3B82F6),
+    arrowBgStart = Color(0xFFDBEAFE),
+    arrowBgEnd = Color(0xFF93C5FD),
+    onClick = onWatchAdClicked,
+    modifier = modifier
   ) {
-    Column(
-      modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp),
-      verticalArrangement = Arrangement.SpaceBetween,
-      horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-      Row(
-        modifier = Modifier.fillMaxWidth().clickable { onWatchAdClicked() },
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Surface(
-          shape = CircleShape,
-          color = Color.White.copy(alpha = 0.18f),
-          border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
-          modifier = Modifier.size(28.dp)
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.Default.PlayArrow,
-              contentDescription = null,
-              tint = Color.White,
-              modifier = Modifier.size(18.dp)
-            )
-          }
-        }
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-          text = "Watch & Earn",
-          style = MaterialTheme.typography.titleSmall,
-          fontWeight = FontWeight.Bold,
-          color = Color.White,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis
-        )
-      }
-
-      Text(
-        text = "Bonus Coins / Cycle",
-        style = MaterialTheme.typography.labelSmall,
-        color = Color(0xFFFDE047),
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.testTag("watch_earn_badge")
+    Canvas(modifier = Modifier.size(44.dp)) {
+      val r = size.minDimension / 2f
+      drawCircle(
+        brush = Brush.verticalGradient(listOf(Color(0xFF38BDF8), Color(0xFF2563EB), Color(0xFF1D4ED8))),
+        radius = r
       )
-
-      Button(
-        onClick = onWatchAdClicked,
-        shape = RoundedCornerShape(50),
-        colors =
-          ButtonDefaults.buttonColors(
-            containerColor = Color.White,
-            contentColor = Color(0xFF1E3A8A)
-          ),
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-        modifier = Modifier.fillMaxWidth().height(34.dp).testTag("watch_ad_button")
-      ) {
-        Text(
-          text = "Watch Now",
-          style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.Bold,
-          color = Color(0xFF1E3A8A)
-        )
+      val w = size.width
+      val h = size.height
+      val playPath = Path().apply {
+        moveTo(w * 0.38f, h * 0.28f)
+        lineTo(w * 0.70f, h * 0.50f)
+        lineTo(w * 0.38f, h * 0.72f)
+        close()
       }
+      drawPath(path = playPath, color = Color.White)
     }
   }
 }
@@ -1102,56 +1263,57 @@ private fun SpinAndEarnCard(
   onClick: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
-  Box(
-    modifier =
-      modifier
-        .testTag("home_spin_earn_card")
-        .clip(RoundedCornerShape(22.dp))
-        .background(
-          Brush.verticalGradient(
-            colors = listOf(Color(0xFFB45309), Color(0xFFD97706), Color(0xFF78350F))
-          )
-        )
-        .border(1.dp, Color(0xFFFBBF24).copy(alpha = 0.5f), RoundedCornerShape(22.dp))
-        .clickable(onClick = onClick)
+  ExploreRewardPastelCard(
+    title = "Spin & Earn",
+    subtitle = "Win 10–150 Coins",
+    cardTag = "home_spin_earn_card",
+    bgStart = Color(0xFFFFF7ED),
+    bgEnd = Color(0xFFFFEDD5),
+    borderColor = Color(0xFFFED7AA),
+    waveStart = Color(0xFFEA580C),
+    waveEnd = Color(0xFFF97316),
+    arrowBgStart = Color(0xFFFFEDD5),
+    arrowBgEnd = Color(0xFFFDBA74),
+    onClick = onClick,
+    modifier = modifier
   ) {
-    Column(
-      modifier = Modifier.fillMaxSize().padding(14.dp),
-      verticalArrangement = Arrangement.Center,
-      horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-      Surface(
-        shape = CircleShape,
-        color = Color.White.copy(alpha = 0.18f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
-        modifier = Modifier.size(46.dp)
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.Refresh,
-            contentDescription = "Spin & Earn",
-            tint = Color(0xFFFDE047),
-            modifier = Modifier.size(26.dp)
-          )
-        }
+    Canvas(modifier = Modifier.size(44.dp)) {
+      val r = size.minDimension / 2f
+      val center = Offset(size.width / 2f, size.height / 2f)
+      // Outer golden rim
+      drawCircle(color = Color(0xFFF59E0B), radius = r, center = center)
+      val innerRadius = r * 0.84f
+      val topLeft = Offset(center.x - innerRadius, center.y - innerRadius)
+      val arcSize = Size(innerRadius * 2f, innerRadius * 2f)
+      // 8 alternating red and cream segments
+      for (i in 0 until 8) {
+        drawArc(
+          color = if (i % 2 == 0) Color(0xFFDC2626) else Color(0xFFFFFBEB),
+          startAngle = i * 45f,
+          sweepAngle = 45f,
+          useCenter = true,
+          topLeft = topLeft,
+          size = arcSize
+        )
       }
-      Spacer(modifier = Modifier.height(8.dp))
-      Text(
-        text = "Spin & Earn",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center,
-        lineHeight = 18.sp,
-        color = Color.White
+      // Inner rim stroke
+      drawCircle(
+        color = Color(0xFFD97706),
+        radius = innerRadius,
+        center = center,
+        style = Stroke(width = size.width * 0.04f)
       )
-      Spacer(modifier = Modifier.height(2.dp))
-      Text(
-        text = "Win 10–150 Coins",
-        style = MaterialTheme.typography.labelSmall,
-        fontSize = 10.sp,
-        color = Color(0xFFFEF3C7),
-        fontWeight = FontWeight.SemiBold
-      )
+      // Center hub
+      drawCircle(color = Color(0xFFB91C1C), radius = r * 0.22f, center = center)
+      drawCircle(color = Color(0xFFFDE047), radius = r * 0.11f, center = center)
+      // Top right pointer pin
+      val pointer = Path().apply {
+        moveTo(size.width * 0.68f, size.height * 0.04f)
+        lineTo(size.width * 0.80f, size.height * 0.12f)
+        lineTo(size.width * 0.58f, size.height * 0.30f)
+        close()
+      }
+      drawPath(pointer, color = Color(0xFF334155))
     }
   }
 }
@@ -1161,55 +1323,35 @@ private fun OfferWallCard(
   onClick: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
-  Box(
-    modifier =
-      modifier
-        .testTag("home_offer_wall_card")
-        .clip(RoundedCornerShape(22.dp))
-        .background(
-          Brush.verticalGradient(
-            colors = listOf(Color(0xFF065F46), Color(0xFF047857), Color(0xFF0F172A))
-          )
-        )
-        .border(1.dp, Color(0xFF34D399).copy(alpha = 0.45f), RoundedCornerShape(22.dp))
-        .clickable(onClick = onClick)
+  ExploreRewardPastelCard(
+    title = "Offer Wall",
+    subtitle = "High Paying Tasks",
+    cardTag = "home_offer_wall_card",
+    bgStart = Color(0xFFECFEFF),
+    bgEnd = Color(0xFFE0F7FA),
+    borderColor = Color(0xFFA5F3FC),
+    waveStart = Color(0xFF0D9488),
+    waveEnd = Color(0xFF06B6D4),
+    arrowBgStart = Color(0xFFCCFBF1),
+    arrowBgEnd = Color(0xFF5EEAD4),
+    onClick = onClick,
+    modifier = modifier
   ) {
-    Column(
-      modifier = Modifier.fillMaxSize().padding(14.dp),
-      verticalArrangement = Arrangement.Center,
-      horizontalAlignment = Alignment.CenterHorizontally
+    Box(
+      modifier =
+        Modifier
+          .size(44.dp)
+          .clip(CircleShape)
+          .background(
+            Brush.verticalGradient(listOf(Color(0xFF38BDF8), Color(0xFF0891B2), Color(0xFF0D9488)))
+          ),
+      contentAlignment = Alignment.Center
     ) {
-      Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = Color.White.copy(alpha = 0.16f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
-        modifier = Modifier.size(46.dp)
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.Campaign,
-            contentDescription = "Offer Wall",
-            tint = Color(0xFFA7F3D0),
-            modifier = Modifier.size(26.dp)
-          )
-        }
-      }
-      Spacer(modifier = Modifier.height(8.dp))
-      Text(
-        text = "Offer Wall",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center,
-        lineHeight = 18.sp,
-        color = Color.White
-      )
-      Spacer(modifier = Modifier.height(2.dp))
-      Text(
-        text = "High Paying Tasks",
-        style = MaterialTheme.typography.labelSmall,
-        fontSize = 10.sp,
-        color = Color(0xFFD1FAE5),
-        fontWeight = FontWeight.SemiBold
+      Icon(
+        imageVector = Icons.Default.Campaign,
+        contentDescription = "Offer Wall",
+        tint = Color.White,
+        modifier = Modifier.size(26.dp)
       )
     }
   }
@@ -1220,56 +1362,60 @@ private fun ScratchCard(
   onClick: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
-  Box(
-    modifier =
-      modifier
-        .testTag("home_scratch_card")
-        .clip(RoundedCornerShape(22.dp))
-        .background(
-          Brush.verticalGradient(
-            colors = listOf(Color(0xFF581C87), Color(0xFF7E22CE), Color(0xFF3B0764))
-          )
-        )
-        .border(1.dp, Color(0xFFC084FC).copy(alpha = 0.45f), RoundedCornerShape(22.dp))
-        .clickable(onClick = onClick)
+  ExploreRewardPastelCard(
+    title = "Scratch Card",
+    subtitle = "Scratch & Win",
+    cardTag = "home_scratch_card",
+    bgStart = Color(0xFFF5F3FF),
+    bgEnd = Color(0xFFEDE9FE),
+    borderColor = Color(0xFFDDD6FE),
+    waveStart = Color(0xFF7C3AED),
+    waveEnd = Color(0xFFA855F7),
+    arrowBgStart = Color(0xFFEDE9FE),
+    arrowBgEnd = Color(0xFFC4B5FD),
+    onClick = onClick,
+    modifier = modifier
   ) {
-    Column(
-      modifier = Modifier.fillMaxSize().padding(14.dp),
-      verticalArrangement = Arrangement.Center,
-      horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-      Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = Color.White.copy(alpha = 0.16f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
-        modifier = Modifier.size(46.dp)
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.CardGiftcard,
-            contentDescription = "Scratch Card",
-            tint = Color(0xFFE9D5FF),
-            modifier = Modifier.size(26.dp)
-          )
-        }
+    Canvas(modifier = Modifier.size(44.dp)) {
+      val r = size.minDimension / 2f
+      drawCircle(
+        brush = Brush.verticalGradient(listOf(Color(0xFFD8B4FE), Color(0xFF9333EA))),
+        radius = r
+      )
+      val w = size.width
+      val h = size.height
+      // Gift box inside soft purple circle
+      drawRoundRect(
+        color = Color(0xFF6B21A8),
+        topLeft = Offset(w * 0.24f, h * 0.42f),
+        size = Size(w * 0.52f, h * 0.36f),
+        cornerRadius = CornerRadius(w * 0.06f, w * 0.06f)
+      )
+      drawRoundRect(
+        color = Color(0xFF7E22CE),
+        topLeft = Offset(w * 0.20f, h * 0.30f),
+        size = Size(w * 0.60f, h * 0.14f),
+        cornerRadius = CornerRadius(w * 0.05f, w * 0.05f)
+      )
+      // Golden ribbons
+      drawRect(
+        color = Color(0xFFFACC15),
+        topLeft = Offset(w * 0.44f, h * 0.30f),
+        size = Size(w * 0.12f, h * 0.48f)
+      )
+      // Golden bow
+      val bowL = Path().apply {
+        moveTo(w * 0.50f, h * 0.30f)
+        cubicTo(w * 0.28f, h * 0.14f, w * 0.24f, h * 0.30f, w * 0.50f, h * 0.30f)
+        close()
       }
-      Spacer(modifier = Modifier.height(8.dp))
-      Text(
-        text = "Scratch Card",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center,
-        lineHeight = 18.sp,
-        color = Color.White
-      )
-      Spacer(modifier = Modifier.height(2.dp))
-      Text(
-        text = "Scratch & Win",
-        style = MaterialTheme.typography.labelSmall,
-        fontSize = 10.sp,
-        color = Color(0xFFF3E8FF),
-        fontWeight = FontWeight.SemiBold
-      )
+      val bowR = Path().apply {
+        moveTo(w * 0.50f, h * 0.30f)
+        cubicTo(w * 0.72f, h * 0.14f, w * 0.76f, h * 0.30f, w * 0.50f, h * 0.30f)
+        close()
+      }
+      drawPath(bowL, color = Color(0xFFFACC15))
+      drawPath(bowR, color = Color(0xFFEAB308))
     }
   }
 }
@@ -1279,56 +1425,63 @@ private fun PromoCodeCard(
   onClick: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
-  Box(
-    modifier =
-      modifier
-        .testTag("home_promo_code_card")
-        .clip(RoundedCornerShape(22.dp))
-        .background(
-          Brush.verticalGradient(
-            colors = listOf(Color(0xFF831843), Color(0xFF9D174D), Color(0xFF4C0519))
-          )
-        )
-        .border(1.dp, Color(0xFFF43F5E).copy(alpha = 0.45f), RoundedCornerShape(22.dp))
-        .clickable(onClick = onClick)
+  ExploreRewardPastelCard(
+    title = "Promo Code",
+    subtitle = "Redeem Bonus",
+    cardTag = "home_promo_code_card",
+    bgStart = Color(0xFFFFF1F2),
+    bgEnd = Color(0xFFFFE4E6),
+    borderColor = Color(0xFFFECDD3),
+    waveStart = Color(0xFFEC4899),
+    waveEnd = Color(0xFFF43F5E),
+    arrowBgStart = Color(0xFFFFE4E6),
+    arrowBgEnd = Color(0xFFFDA4AF),
+    onClick = onClick,
+    modifier = modifier
   ) {
-    Column(
-      modifier = Modifier.fillMaxSize().padding(14.dp),
-      verticalArrangement = Arrangement.Center,
-      horizontalAlignment = Alignment.CenterHorizontally
+    Box(
+      modifier =
+        Modifier
+          .size(44.dp)
+          .clip(CircleShape)
+          .background(
+            Brush.verticalGradient(listOf(Color(0xFFFBCFE8), Color(0xFFF472B6)))
+          ),
+      contentAlignment = Alignment.Center
     ) {
-      Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = Color.White.copy(alpha = 0.16f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
-        modifier = Modifier.size(46.dp)
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.LocalOffer,
-            contentDescription = "Promo Code",
-            tint = Color(0xFFFECDD3),
-            modifier = Modifier.size(26.dp)
+      Canvas(modifier = Modifier.size(30.dp)) {
+        rotate(-35f) {
+          drawRoundRect(
+            brush = Brush.verticalGradient(listOf(Color(0xFFEF4444), Color(0xFFDC2626))),
+            topLeft = Offset(size.width * 0.18f, size.height * 0.10f),
+            size = Size(size.width * 0.64f, size.height * 0.80f),
+            cornerRadius = CornerRadius(size.width * 0.12f, size.width * 0.12f)
+          )
+          // Tag hole
+          drawCircle(
+            color = Color(0xFFFBCFE8),
+            radius = size.width * 0.07f,
+            center = Offset(size.width * 0.50f, size.height * 0.24f)
+          )
+          // Percent '%' symbol inside tag
+          drawLine(
+            color = Color.White,
+            start = Offset(size.width * 0.36f, size.height * 0.72f),
+            end = Offset(size.width * 0.64f, size.height * 0.44f),
+            strokeWidth = size.width * 0.07f
+          )
+          drawCircle(
+            color = Color.White,
+            radius = size.width * 0.055f,
+            center = Offset(size.width * 0.39f, size.height * 0.48f)
+          )
+          drawCircle(
+            color = Color.White,
+            radius = size.width * 0.055f,
+            center = Offset(size.width * 0.61f, size.height * 0.68f)
           )
         }
       }
-      Spacer(modifier = Modifier.height(8.dp))
-      Text(
-        text = "Promo Code",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center,
-        lineHeight = 18.sp,
-        color = Color.White
-      )
-      Spacer(modifier = Modifier.height(2.dp))
-      Text(
-        text = "Redeem Bonus",
-        style = MaterialTheme.typography.labelSmall,
-        fontSize = 10.sp,
-        color = Color(0xFFFFE4E6),
-        fontWeight = FontWeight.SemiBold
-      )
     }
   }
 }

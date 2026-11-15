@@ -2645,6 +2645,10 @@ class TaskFlowViewModel(
                 _scratchCardUiState.update {
                   it.copy(
                     isAdLoading = false,
+                    dailyState = it.dailyState.copy(
+                      adsWatchedForNextScratch = result.adsWatchedForNextScratch,
+                      unlockedScratchesCount = result.unlockedScratchesCount
+                    ),
                     successMessage = feedbackMsg
                   )
                 }

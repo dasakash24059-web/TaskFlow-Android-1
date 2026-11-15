@@ -1988,7 +1988,7 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("home_watch_earn_card").assertIsDisplayed()
     composeTestRule.onNodeWithText("Watch & Earn").assertIsDisplayed()
     composeTestRule.onNodeWithTag("watch_earn_badge").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Watch Now").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Watch Videos").assertIsDisplayed()
 
     // 2. Open Watch & Earn dialog -> Claim button is NOT shown before video completion
     composeTestRule.onNodeWithTag("watch_ad_button").performClick()

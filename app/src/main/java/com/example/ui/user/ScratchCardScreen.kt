@@ -632,7 +632,7 @@ fun ScratchCardScreen(
             val stepLabel = if (adsWatched == 0L) "Video 1 of 2" else "Video 2 of 2"
 
             Text(
-              text = "Watch 2 videos to unlock your next Scratch Card",
+              text = "Watch 2 videos to unlock next card",
               style = MaterialTheme.typography.titleMedium,
               fontWeight = FontWeight.Bold,
               color = MaterialTheme.colorScheme.onSurface,
