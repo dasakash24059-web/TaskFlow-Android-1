@@ -927,7 +927,7 @@ class TaskFlowViewModel(
         "Please enter a valid HTTPS URL (e.g., https://play.google.com/store/apps/details?id=...)."
       return
     }
-    val cleanedIcon = appIconUrl.trim()
+    val cleanedIcon = appIconUrl.trim().ifBlank { "https://cdn-icons-png.flaticon.com/512/906/906334.png" }
     if (!isValidImageUrlOrDataUri(cleanedIcon)) {
       _bannerMessage.value = "Please enter a valid HTTPS icon URL or pick an icon from Gallery."
       return

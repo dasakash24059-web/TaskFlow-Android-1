@@ -2405,12 +2405,12 @@ private fun TaskEditorDialog(
     mutableStateOf(
       existingTask?.let { t ->
         registeredUsers.firstOrNull { (it.userId.ifBlank { it.id }) == t.assignedUserId }
-      } ?: defaultAssignee ?: registeredUsers.first()
+      } ?: defaultAssignee ?: registeredUsers.firstOrNull() ?: UserProfile(id = "unassigned", displayName = "All Users", email = "all@taskflow.app")
     )
   }
 
   val isLinkValid = taskLink.isBlank() || isValidTaskUrl(taskLink)
-  val isIconValid = isValidImageUrlOrDataUri(appIconUrl)
+  val isIconValid = appIconUrl.isBlank() || isValidImageUrlOrDataUri(appIconUrl)
   val isRewardValid = (rewardCoinsStr.trim().toLongOrNull() ?: 0L) > 0L
   val canSave =
     title.isNotBlank() &&

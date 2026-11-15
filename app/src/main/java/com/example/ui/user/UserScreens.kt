@@ -697,7 +697,7 @@ private fun WatchAndEarnCard(
       }
 
       Text(
-        text = "63–125 Coins / Cycle",
+        text = "Bonus Coins / Cycle",
         style = MaterialTheme.typography.labelSmall,
         color = Color(0xFFFDE047),
         fontWeight = FontWeight.SemiBold,
@@ -792,7 +792,7 @@ private fun WatchAdInfoDialog(
                 if (displayedRewardCoins > 0L) {
                   "+${formatCoins(displayedRewardCoins)} Reward"
                 } else {
-                  "63–125 Coins / Cycle"
+                  "Bonus Coins"
                 },
               style = MaterialTheme.typography.labelSmall,
               fontWeight = FontWeight.SemiBold,

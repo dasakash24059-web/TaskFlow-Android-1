@@ -136,20 +136,20 @@ fun ScratchCardScreen(
     AlertDialog(
       onDismissRequest = onDismissCongratulations,
       containerColor = MaterialTheme.colorScheme.surface,
-      shape = RoundedCornerShape(24.dp),
+      shape = RoundedCornerShape(20.dp),
       icon = {
         Surface(
           shape = CircleShape,
           color = Color(0xFFFEF3C7),
-          border = BorderStroke(2.dp, Color(0xFFF59E0B)),
-          modifier = Modifier.size(64.dp)
+          border = BorderStroke(1.5.dp, Color(0xFFF59E0B)),
+          modifier = Modifier.size(52.dp)
         ) {
           Box(contentAlignment = Alignment.Center) {
             Icon(
               imageVector = Icons.Default.EmojiEvents,
               contentDescription = null,
               tint = Color(0xFFD97706),
-              modifier = Modifier.size(36.dp)
+              modifier = Modifier.size(28.dp)
             )
           }
         }
@@ -157,7 +157,7 @@ fun ScratchCardScreen(
       title = {
         Text(
           text = "Congratulations!",
-          style = MaterialTheme.typography.headlineSmall,
+          style = MaterialTheme.typography.titleLarge,
           fontWeight = FontWeight.Bold,
           textAlign = TextAlign.Center,
           modifier = Modifier.fillMaxWidth().testTag("congratulations_title")
@@ -169,15 +169,15 @@ fun ScratchCardScreen(
           horizontalAlignment = Alignment.CenterHorizontally
         ) {
           Text(
-            text = "You won",
-            style = MaterialTheme.typography.bodyMedium,
+            text = "You revealed",
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
-          Spacer(modifier = Modifier.height(6.dp))
+          Spacer(modifier = Modifier.height(4.dp))
           Text(
             text = "+${formatCoins(revealedCoins)} Coins",
-            style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.Black,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.ExtraBold,
             color = Color(0xFFD97706),
             modifier = Modifier.testTag("scratch_reward_amount_text")
           )
@@ -187,14 +187,14 @@ fun ScratchCardScreen(
         Button(
           onClick = onClaimReward,
           enabled = !uiState.isClaiming,
-          shape = RoundedCornerShape(14.dp),
+          shape = RoundedCornerShape(12.dp),
           colors = ButtonDefaults.buttonColors(
             containerColor = Color(0xFFD97706),
             contentColor = Color.White
           ),
           modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .height(46.dp)
             .testTag("claim_scratch_reward_button")
         ) {
           if (uiState.isClaiming) {
@@ -204,7 +204,7 @@ fun ScratchCardScreen(
               strokeWidth = 2.5.dp
             )
           } else {
-            Text("CLAIM", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("CLAIM", fontWeight = FontWeight.Bold, fontSize = 15.sp)
           }
         }
       }
@@ -404,7 +404,13 @@ fun ScratchCardScreen(
                       scratchPath.moveTo(offset.x, offset.y)
                       val cx = ((offset.x / size.width) * 10).toInt().coerceIn(0, 9)
                       val cy = ((offset.y / size.height) * 10).toInt().coerceIn(0, 9)
-                      scratchedCells[cy * 10 + cx] = true
+                      for (dx in -1..1) {
+                        for (dy in -1..1) {
+                          val nx = (cx + dx).coerceIn(0, 9)
+                          val ny = (cy + dy).coerceIn(0, 9)
+                          scratchedCells[ny * 10 + nx] = true
+                        }
+                      }
                       pathVersion++
                     },
                     onDrag = { change, _ ->
@@ -413,12 +419,18 @@ fun ScratchCardScreen(
                       scratchPath.lineTo(pos.x, pos.y)
                       val cx = ((pos.x / size.width) * 10).toInt().coerceIn(0, 9)
                       val cy = ((pos.y / size.height) * 10).toInt().coerceIn(0, 9)
-                      scratchedCells[cy * 10 + cx] = true
+                      for (dx in -1..1) {
+                        for (dy in -1..1) {
+                          val nx = (cx + dx).coerceIn(0, 9)
+                          val ny = (cy + dy).coerceIn(0, 9)
+                          scratchedCells[ny * 10 + nx] = true
+                        }
+                      }
                       pathVersion++
 
-                      // Check scratch percentage threshold (40%)
+                      // Check scratch percentage threshold (smooth, responsive 25%)
                       val filled = scratchedCells.count { it }
-                      if (filled >= 40 && !localRevealed) {
+                      if (filled >= 25 && !localRevealed) {
                         localRevealed = true
                         onScratchRevealed()
                       }

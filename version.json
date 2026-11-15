@@ -1,7 +1,7 @@
 {
-  "latest_version_code": 36,
-  "latest_version_name": "5.6",
+  "latest_version_code": 37,
+  "latest_version_name": "5.7",
   "download_url": "https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk",
-  "release_notes": "TaskFlow v5.6: Server-authoritative reward Cloud Functions (Daily Check-in, Spin & Earn, Scratch Card, Watch & Earn, Promo Codes, Telegram Join, Manual Bonus), Unity S2S verification, UPI & Gift Card withdrawals, and Light Minimal UI.",
+  "release_notes": "TaskFlow v5.7: Server-authoritative reward Cloud Functions (Daily Check-in, Spin & Earn, Scratch Card, Watch & Earn, Promo Codes, Telegram Join, Manual Bonus), Unity S2S verification, UPI & Gift Card withdrawals, and Light Minimal UI.",
   "force_update": false
 }
