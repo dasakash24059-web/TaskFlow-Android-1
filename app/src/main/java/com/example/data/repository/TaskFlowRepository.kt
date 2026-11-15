@@ -951,6 +951,8 @@ class FirebaseRewardCloudFunctionsClient(
         FirebaseFunctionsException.Code.DEADLINE_EXCEEDED,
         FirebaseFunctionsException.Code.UNAVAILABLE ->
           "Server temporarily unavailable. Please try again."
+        FirebaseFunctionsException.Code.NOT_FOUND ->
+          "Backend Cloud Functions are not deployed on Firebase. Please deploy functions/index.js to project taskflow-8852d."
         else -> fallback
       }
     }
