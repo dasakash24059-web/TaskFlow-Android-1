@@ -111,6 +111,7 @@ enum class AdminTab {
   CAMPAIGNS,
   WITHDRAWALS,
   COINS_REWARDS,
+  SUPPORT,
   ANALYTICS,
   VERIFICATION_FRAUD,
   APP_SETTINGS,
@@ -239,6 +240,12 @@ class TaskFlowViewModel(
       .map<List<UserProfile>, UiState<List<UserProfile>>> { UiState.Success(it) }
       .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load leaderboard")) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+
+  val leaderboardCreditedTransactionsState: StateFlow<List<TransactionRecord>> =
+    repository
+      .observeCreditedTransactionsForLeaderboard()
+      .catch { emit(emptyList()) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
   val watchStats: StateFlow<WatchStats> =
     repository
@@ -2414,16 +2421,72 @@ class TaskFlowViewModel(
     }
   }
 
-  fun updateSupportTicketStatus(ticketId: String, status: String, notes: String = "") {
-    if (!isAdminAuthorized.value) return
+  fun updateSupportTicketStatus(
+    ticketId: String,
+    status: String = com.example.data.model.SupportTicketStatus.OPEN,
+    notes: String = "",
+    newStatus: String = status,
+    adminReply: String = notes,
+    onSuccess: () -> Unit = {},
+    onResult: (Boolean) -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value) {
+      onResult(false)
+      return
+    }
+    val effectiveStatus = newStatus.ifBlank { status }
+    val effectiveNotes = adminReply.ifBlank { notes }
     viewModelScope.launch {
-      repository.updateSupportTicketStatus(ticketId, status, notes)
+      _isBusy.value = true
+      repository.adminReplyToSupportTicket(ticketId, effectiveStatus, effectiveNotes)
         .onSuccess {
-          _bannerMessage.value = "Ticket marked as $status"
+          val label = com.example.data.model.SupportTicketStatus.displayLabel(effectiveStatus)
+          _bannerMessage.value =
+            if (effectiveNotes.isNotBlank()) "Reply sent & ticket marked as $label."
+            else "Ticket marked as $label."
+          onSuccess()
+          onResult(true)
         }
         .onFailure { err ->
-          _bannerMessage.value = err.localizedMessage ?: "Failed to update ticket."
+          _bannerMessage.value = err.localizedMessage ?: "Failed to update support ticket."
+          onResult(false)
         }
+      _isBusy.value = false
+    }
+  }
+
+  fun userReplySupportTicket(
+    ticketId: String,
+    replyMessage: String,
+    onSuccess: () -> Unit = {},
+    onResult: (Boolean) -> Unit = {}
+  ) {
+    val cleanMsg = replyMessage.trim()
+    if (cleanMsg.isEmpty()) {
+      _bannerMessage.value = "Please enter a reply message."
+      onResult(false)
+      return
+    }
+    val name = (userProfileState.value as? UiState.Success)?.data?.displayName ?: currentUserDisplayName
+    viewModelScope.launch {
+      _isBusy.value = true
+      repository
+        .userReplyToSupportTicket(
+          ticketId = ticketId,
+          userId = currentUserId,
+          userName = name,
+          replyMessage = cleanMsg
+        )
+        .onSuccess {
+          _bannerMessage.value = "Follow-up message sent to Support."
+          onSuccess()
+          onResult(true)
+        }
+        .onFailure { err ->
+          _bannerMessage.value = err.localizedMessage ?: "Failed to send message."
+          onResult(false)
+        }
+      _isBusy.value = false
     }
   }
 
@@ -2480,12 +2543,14 @@ class TaskFlowViewModel(
           val doc = docStates[tId]
           val fb = feedbackMap[tId]
           val claimed = (doc?.isClaimed == true) || (fb?.isClaimed == true) || claimedIds.contains(tId)
-          val verified = (doc?.isMembershipVerified == true) || (fb?.isMembershipVerified == true)
+          val verified = (doc?.isMembershipVerified == true) || (fb?.isMembershipVerified == true) || claimed
+          val hasJoined = (doc?.hasClickedJoin == true) || (fb?.hasClickedJoin == true) || verified || claimed
           put(
             tId,
             TelegramUserTaskState(
               taskId = tId,
               userId = currentUserId,
+              hasClickedJoin = hasJoined,
               isMembershipVerified = verified,
               isClaimed = claimed,
               rewardCoinsClaimed = maxOf(doc?.rewardCoinsClaimed ?: 0L, fb?.rewardCoinsClaimed ?: 0L),
@@ -2753,6 +2818,27 @@ class TaskFlowViewModel(
     }
   }
 
+  fun recordTelegramTaskJoinClick(taskId: String) {
+    val cleanTaskId = taskId.trim()
+    if (cleanTaskId.isEmpty() || currentUserId.isBlank()) return
+    val currentState =
+      telegramTaskUiStates.value[cleanTaskId]
+        ?: TelegramUserTaskState(taskId = cleanTaskId, userId = currentUserId)
+    _telegramTaskFeedback.update { map ->
+      map + (cleanTaskId to currentState.copy(
+        hasClickedJoin = true,
+        isMembershipVerified = currentState.isMembershipVerified,
+        statusMessage =
+          if (currentState.isMembershipVerified) currentState.statusMessage
+          else "Telegram opened. Join the channel, then return here and tap VERIFY.",
+        errorMessage = null
+      ))
+    }
+    viewModelScope.launch {
+      repository.markTelegramTaskJoinClicked(currentUserId, cleanTaskId)
+    }
+  }
+
   fun verifyTelegramTask(
     taskId: String,
     onOpenBotLink: (String) -> Unit = {},
@@ -2772,6 +2858,7 @@ class TaskFlowViewModel(
               val msg = result.message.ifBlank { "Telegram membership verified! Tap CLAIM to collect your coins." }
               _telegramTaskFeedback.update { map ->
                 map + (cleanTaskId to currentState.copy(
+                  hasClickedJoin = true,
                   isMembershipVerified = true,
                   statusMessage = msg,
                   errorMessage = null
@@ -2793,7 +2880,7 @@ class TaskFlowViewModel(
                 onOpenBotLink(result.botLinkUrl)
               }
             } else {
-              val msg = result.message.ifBlank { "Please join the Telegram channel first, then tap VERIFY." }
+              val msg = result.message.ifBlank { "Please tap JOIN and join the Telegram channel first, then tap VERIFY." }
               _telegramTaskFeedback.update { map ->
                 map + (cleanTaskId to currentState.copy(
                   isMembershipVerified = false,
@@ -3137,13 +3224,9 @@ class TaskFlowViewModel(
     val signature = "$currentUserId|$cleanTarget|$amountCoins|${reason.trim()}"
     val resolvedKey =
       explicitIdempotencyKey?.trim()?.takeIf { it.isNotEmpty() }
-        ?: if (pendingManualBonusSignature == signature && !pendingManualBonusKey.isNullOrBlank()) {
-          pendingManualBonusKey!!
-        } else {
-          UUID.randomUUID().toString().replace("-", "").also { generated ->
-            pendingManualBonusSignature = signature
-            pendingManualBonusKey = generated
-          }
+        ?: UUID.randomUUID().toString().replace("-", "").also { generated ->
+          pendingManualBonusSignature = signature
+          pendingManualBonusKey = generated
         }
 
     _isBusy.value = true
@@ -3164,6 +3247,8 @@ class TaskFlowViewModel(
             onSuccess()
           }
           .onFailure { err ->
+            pendingManualBonusSignature = null
+            pendingManualBonusKey = null
             _bannerMessage.value = err.localizedMessage ?: "Failed to credit manual bonus."
           }
       } finally {

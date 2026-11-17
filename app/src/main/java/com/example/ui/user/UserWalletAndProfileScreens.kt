@@ -1,6 +1,7 @@
 package com.example.ui.user
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -53,6 +54,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -721,7 +723,9 @@ fun UserProfileScreen(
   activeSubScreen: ProfileSubScreen = ProfileSubScreen.MAIN,
   onNavigateSubScreen: ((ProfileSubScreen) -> Unit)? = null,
   onNavigateScreen: ((String) -> Unit)? = null,
-  onSubmitSupportTicket: ((String, String, String, (Boolean) -> Unit) -> Unit)? = null
+  onSubmitSupportTicket: ((String, String, String, (Boolean) -> Unit) -> Unit)? = null,
+  supportTickets: List<com.example.data.model.SupportTicket> = emptyList(),
+  onReplySupportTicket: ((String, String, (Boolean) -> Unit) -> Unit)? = null
 ) {
   var internalSubScreen by rememberSaveable { mutableStateOf(ProfileSubScreen.MAIN) }
   val currentSubScreen =
@@ -791,7 +795,9 @@ fun UserProfileScreen(
         onNavigateScreen = { target ->
           onNavigateScreen?.invoke(target)
         },
-        onSubmitTicket = onSubmitSupportTicket
+        onSubmitTicket = onSubmitSupportTicket,
+        supportTickets = supportTickets,
+        onReplyToTicket = onReplySupportTicket
       )
       return
     }
@@ -813,24 +819,28 @@ fun UserProfileScreen(
       role = profile?.role
     )
 
+  val resolvedUid = userUid.ifBlank { profile?.userId ?: profile?.id ?: "" }
+
   NeonBackgroundBox {
     Column(
       modifier =
         Modifier.fillMaxSize()
           .verticalScroll(rememberScrollState())
-          .padding(horizontal = 18.dp, vertical = 16.dp)
+          .padding(horizontal = 16.dp, vertical = 16.dp)
           .testTag("user_profile_screen"),
       verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-      // Top Header: User Profile Card with Avatar, Crisp Border, Verified Badge Overlay
-      NeonGlassCard(
-        modifier = Modifier.fillMaxWidth().testTag("profile_header_card"),
-        borderColor = MaterialTheme.colorScheme.outlineVariant,
-        backgroundColor = MaterialTheme.colorScheme.surface
+      // 1. Clean, Compact Neutral Profile Header
+      Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier.fillMaxWidth().testTag("profile_header_card")
       ) {
-        Column(
-          modifier = Modifier.fillMaxWidth().padding(20.dp),
-          horizontalAlignment = Alignment.CenterHorizontally
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
           Box(contentAlignment = Alignment.BottomEnd) {
             if (!profile?.photoUrl.isNullOrBlank()) {
@@ -839,274 +849,178 @@ fun UserProfileScreen(
                 contentDescription = displayNameText,
                 contentScale = ContentScale.Crop,
                 modifier =
-                  Modifier.size(84.dp)
+                  Modifier.size(56.dp)
                     .clip(CircleShape)
-                    .border(3.dp, Color(0xFF1E3A8A), CircleShape)
+                    .border(1.5.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
               )
             } else {
-              Box(
-                modifier =
-                  Modifier.size(84.dp)
-                    .clip(CircleShape)
-                    .background(
-                      Brush.linearGradient(
-                        colors = listOf(Color(0xFF1E3A8A), Color(0xFF2563EB))
-                      )
-                    )
-                    .border(3.dp, Color(0xFF1E3A8A), CircleShape),
-                contentAlignment = Alignment.Center
+              Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.size(56.dp)
               ) {
-                Text(
-                  text =
-                    (displayNameText.firstOrNull() ?: visibleEmailText.firstOrNull() ?: 'U')
-                      .uppercaseChar()
-                      .toString(),
-                  style = MaterialTheme.typography.headlineLarge,
-                  color = Color.White,
-                  fontWeight = FontWeight.Bold
-                )
+                Box(contentAlignment = Alignment.Center) {
+                  Text(
+                    text =
+                      (displayNameText.firstOrNull() ?: visibleEmailText.firstOrNull() ?: 'U')
+                        .uppercaseChar()
+                        .toString(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold
+                  )
+                }
               }
             }
 
-            // Verified Badge Overlay on bottom-right of avatar ONLY when backend approvalStatus == "approved"
             if (profile?.approvalStatus == "approved") {
               Surface(
                 shape = CircleShape,
-                color = Color(0xFF16A34A),
-                border = androidx.compose.foundation.BorderStroke(2.dp, Color.White),
-                modifier = Modifier.size(26.dp)
+                color = Color(0xFF059669),
+                border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.surface),
+                modifier = Modifier.size(18.dp)
               ) {
                 Box(contentAlignment = Alignment.Center) {
                   Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = "Verified",
                     tint = Color.White,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(12.dp)
                   )
                 }
               }
             }
           }
 
-          Spacer(modifier = Modifier.height(14.dp))
-
-          Text(
-            text = displayNameText,
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.testTag("profile_display_name")
-          )
-
-          Spacer(modifier = Modifier.height(4.dp))
-
-          Text(
-            text = visibleEmailText,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.testTag("profile_email_address")
-          )
-
-          val resolvedUid = userUid.ifBlank { profile?.userId ?: profile?.id ?: "" }
-          if (resolvedUid.isNotBlank()) {
-            // Preserve testTag without exposing raw UID on primary profile view
-            Text(
-              text = "UID: $resolvedUid",
-              fontSize = 1.sp,
-              color = Color.Transparent,
-              modifier = Modifier.height(1.dp).testTag("profile_user_uid")
-            )
-          }
-
-          Spacer(modifier = Modifier.height(16.dp))
-
-          // 3 Stat Cards Row (Tasks, Completed, Coins)
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+          Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
           ) {
-            val approvedCount = tasks.count { it.status == TaskStatus.APPROVED }
-            val effectiveCoins = profile?.getEffectiveBalanceCoins() ?: 0L
+            Text(
+              text = displayNameText,
+              style = MaterialTheme.typography.titleMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+              fontWeight = FontWeight.Bold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag("profile_display_name")
+            )
 
-            Surface(
-              shape = RoundedCornerShape(16.dp),
-              color = Color(0xFFEFF6FF),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE)),
-              modifier = Modifier.weight(1f)
-            ) {
-              Column(
-                modifier = Modifier.padding(12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Assignment,
-                  contentDescription = null,
-                  tint = Color(0xFF1E3A8A),
-                  modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                  text = "${tasks.size}",
-                  style = MaterialTheme.typography.titleMedium,
-                  color = Color(0xFF0F172A),
-                  fontWeight = FontWeight.Bold
-                )
-                Text(
-                  text = "Tasks",
-                  style = MaterialTheme.typography.labelSmall,
-                  fontSize = 10.sp,
-                  fontWeight = FontWeight.SemiBold,
-                  color = Color(0xFF1E3A8A)
-                )
-              }
-            }
+            Text(
+              text = visibleEmailText,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag("profile_email_address")
+            )
 
-            Surface(
-              shape = RoundedCornerShape(16.dp),
-              color = Color(0xFFECFDF5),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA7F3D0)),
-              modifier = Modifier.weight(1f)
-            ) {
-              Column(
-                modifier = Modifier.padding(12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-              ) {
-                Icon(
-                  imageVector = Icons.Default.CheckCircle,
-                  contentDescription = null,
-                  tint = Color(0xFF059669),
-                  modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                  text = "$approvedCount",
-                  style = MaterialTheme.typography.titleMedium,
-                  color = Color(0xFF064E3B),
-                  fontWeight = FontWeight.Bold
-                )
-                Text(
-                  text = "Completed",
-                  style = MaterialTheme.typography.labelSmall,
-                  fontSize = 10.sp,
-                  fontWeight = FontWeight.SemiBold,
-                  color = Color(0xFF047857)
-                )
-              }
-            }
-
-            Surface(
-              shape = RoundedCornerShape(16.dp),
-              color = Color(0xFFFFFBEB),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFDE68A)),
-              modifier = Modifier.weight(1f)
-            ) {
-              Column(
-                modifier = Modifier.padding(12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-              ) {
-                Icon(
-                  imageVector = Icons.Default.MonetizationOn,
-                  contentDescription = null,
-                  tint = Color(0xFFD97706),
-                  modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                  text = "$effectiveCoins",
-                  style = MaterialTheme.typography.titleMedium,
-                  color = Color(0xFF92400E),
-                  fontWeight = FontWeight.Bold
-                )
-                Text(
-                  text = "Coins",
-                  style = MaterialTheme.typography.labelSmall,
-                  fontSize = 10.sp,
-                  fontWeight = FontWeight.SemiBold,
-                  color = Color(0xFFB45309)
-                )
-              }
+            if (resolvedUid.isNotBlank()) {
+              Text(
+                text = "ID: ${resolvedUid.take(12)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("profile_user_uid")
+              )
             }
           }
         }
       }
 
-      // Menu Cards with Test Tags for Activity, History, Rewards, Settings, Support, About
-      ProfileMenuCard(
-        title = "Personal Information & Activity",
-        subtitle = "Update display name, activity log, and user account info",
-        icon = Icons.Default.Person,
-        onClick = { setSubScreen(ProfileSubScreen.ACTIVITY) },
-        testTag = "profile_menu_activity"
-      )
+      // 2. Simple Aligned Menu Rows inside a Clean Grouped Container
+      Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier.fillMaxWidth()
+      ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+          ProfileMenuCard(
+            title = "Personal Information & Activity",
+            subtitle = "Display name, activity log, and account info",
+            icon = Icons.Default.Person,
+            onClick = { setSubScreen(ProfileSubScreen.ACTIVITY) },
+            testTag = "profile_menu_activity",
+            showDivider = true
+          )
 
-      ProfileMenuCard(
-        title = "History",
-        subtitle = "Browse task submission history cards by status",
-        icon = Icons.Default.History,
-        onClick = { setSubScreen(ProfileSubScreen.HISTORY) },
-        testTag = "profile_menu_history"
-      )
+          ProfileMenuCard(
+            title = "History",
+            subtitle = "Task submission history by status",
+            icon = Icons.Default.History,
+            onClick = { setSubScreen(ProfileSubScreen.HISTORY) },
+            testTag = "profile_menu_history",
+            showDivider = true
+          )
 
-      ProfileMenuCard(
-        title = "Rewards",
-        subtitle = "View earned coin rewards and completed task milestones",
-        icon = Icons.Default.CardGiftcard,
-        onClick = { setSubScreen(ProfileSubScreen.REWARDS) },
-        testTag = "profile_menu_rewards"
-      )
+          ProfileMenuCard(
+            title = "Rewards",
+            subtitle = "Earned coin rewards and milestones",
+            icon = Icons.Default.CardGiftcard,
+            onClick = { setSubScreen(ProfileSubScreen.REWARDS) },
+            testTag = "profile_menu_rewards",
+            showDivider = true
+          )
 
-      ProfileMenuCard(
-        title = "Account Settings",
-        subtitle = "Appearance theme and security configuration",
-        icon = Icons.Default.Settings,
-        onClick = { setSubScreen(ProfileSubScreen.SETTINGS) },
-        testTag = "profile_menu_settings"
-      )
+          ProfileMenuCard(
+            title = "Account Settings",
+            subtitle = "Appearance theme and security settings",
+            icon = Icons.Default.Settings,
+            onClick = { setSubScreen(ProfileSubScreen.SETTINGS) },
+            testTag = "profile_menu_settings",
+            showDivider = true
+          )
 
-      ProfileMenuCard(
-        title = "Help & Support",
-        subtitle = "Contact support and submit help tickets",
-        icon = Icons.AutoMirrored.Filled.Help,
-        onClick = { setSubScreen(ProfileSubScreen.SUPPORT) },
-        testTag = "profile_menu_support"
-      )
+          val unreadSupportReplies = supportTickets.count { it.userUnread }
+          ProfileMenuCard(
+            title = if (unreadSupportReplies > 0) "Help & Support ($unreadSupportReplies)" else "Help & Support",
+            subtitle = "Submit support requests and view admin replies",
+            icon = Icons.AutoMirrored.Filled.Help,
+            onClick = { setSubScreen(ProfileSubScreen.SUPPORT) },
+            testTag = "profile_menu_support",
+            showDivider = true
+          )
 
-      ProfileMenuCard(
-        title = "Privacy Policy & About",
-        subtitle = "TaskFlow overview, privacy rules, and version details",
-        icon = Icons.Default.Shield,
-        onClick = { setSubScreen(ProfileSubScreen.ABOUT) },
-        testTag = "profile_menu_about"
-      )
+          ProfileMenuCard(
+            title = "Privacy Policy & About",
+            subtitle = "App overview, privacy rules, and version details",
+            icon = Icons.Default.Shield,
+            onClick = { setSubScreen(ProfileSubScreen.ABOUT) },
+            testTag = "profile_menu_about",
+            showDivider = false
+          )
+        }
+      }
 
-      // Sign Out / Logout Button
-      Spacer(modifier = Modifier.height(8.dp))
-      Button(
+      // 3. Clean Sign Out Button
+      OutlinedButton(
         onClick = onSignOut,
-        shape = RoundedCornerShape(18.dp),
-        colors = ButtonDefaults.buttonColors(
-          containerColor = Color(0xFFFEF2F2),
-          contentColor = Color(0xFFDC2626)
-        ),
-        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFFCA5A5)),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
+        colors =
+          ButtonDefaults.outlinedButtonColors(
+            contentColor = MaterialTheme.colorScheme.error
+          ),
         modifier =
           Modifier.fillMaxWidth()
-            .height(52.dp)
+            .height(48.dp)
             .testTag("sign_out_button")
       ) {
         Icon(
           imageVector = Icons.AutoMirrored.Filled.Logout,
           contentDescription = null,
-          tint = Color(0xFFDC2626),
-          modifier = Modifier.size(20.dp)
+          tint = MaterialTheme.colorScheme.error,
+          modifier = Modifier.size(18.dp)
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
           text = "Logout",
-          style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold,
-          color = Color(0xFFDC2626)
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.error
         )
       }
     }
@@ -1119,42 +1033,43 @@ private fun ProfileMenuCard(
   subtitle: String,
   icon: ImageVector,
   onClick: () -> Unit,
-  testTag: String
+  testTag: String,
+  showDivider: Boolean = false
 ) {
-  NeonGlassCard(
-    modifier = Modifier.fillMaxWidth().testTag(testTag),
-    borderColor = MaterialTheme.colorScheme.outlineVariant,
-    backgroundColor = MaterialTheme.colorScheme.surface,
-    onClick = onClick
+  Column(
+    modifier =
+      Modifier.fillMaxWidth()
+        .clickable(onClick = onClick)
+        .testTag(testTag)
   ) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
       Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = Color(0xFFEFF6FF),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE)),
-        modifier = Modifier.size(46.dp)
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+        modifier = Modifier.size(38.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = Color(0xFF1E3A8A),
-            modifier = Modifier.size(22.dp)
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(19.dp)
           )
         }
       }
       Column(modifier = Modifier.weight(1f)) {
         Text(
           text = title,
-          style = MaterialTheme.typography.titleMedium,
+          style = MaterialTheme.typography.bodyLarge,
           color = MaterialTheme.colorScheme.onSurface,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(1.dp))
         Text(
           text = subtitle,
           style = MaterialTheme.typography.bodySmall,
@@ -1164,7 +1079,14 @@ private fun ProfileMenuCard(
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open $title",
-        tint = Color(0xFF1E3A8A)
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(20.dp)
+      )
+    }
+    if (showDivider) {
+      HorizontalDivider(
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+        modifier = Modifier.padding(horizontal = 16.dp)
       )
     }
   }

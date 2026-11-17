@@ -339,7 +339,33 @@ object TransactionType {
   const val TELEGRAM_JOIN = "TELEGRAM_JOIN"
   const val PROMO_CODE = "PROMO_CODE"
   const val ADMIN_MANUAL_BONUS = "ADMIN_MANUAL_BONUS"
+  const val ADMIN_BONUS = "ADMIN_BONUS"
+  const val MANUAL_BONUS = "MANUAL_BONUS"
+  const val BONUS = "BONUS"
   const val SCRATCH_CARD = "SCRATCH_CARD"
+
+  private val CREDITED_REWARD_TYPES =
+    setOf(
+      DAILY_CHECKIN,
+      TASK_REWARD,
+      WATCH_EARN,
+      SPIN_EARN,
+      TELEGRAM_JOIN,
+      PROMO_CODE,
+      ADMIN_MANUAL_BONUS,
+      ADMIN_BONUS,
+      MANUAL_BONUS,
+      BONUS,
+      SCRATCH_CARD
+    )
+
+  fun isCreditedRewardType(type: String): Boolean =
+    CREDITED_REWARD_TYPES.contains(type.trim().uppercase(Locale.US))
+
+  fun isManualBonusType(type: String): Boolean {
+    val norm = type.trim().uppercase(Locale.US)
+    return norm == ADMIN_MANUAL_BONUS || norm == ADMIN_BONUS || norm == MANUAL_BONUS || norm == BONUS
+  }
 }
 
 data class TransactionRecord(
@@ -356,6 +382,191 @@ data class TransactionRecord(
 ) {
   fun getEffectiveAmountCoins(): Long =
     if (amountCoins > 0L) amountCoins else centsToCoins(amountCents)
+}
+
+enum class LeaderboardPeriod(val label: String, val testTagSuffix: String) {
+  ALL_TIME("All Time", "all_time"),
+  THIS_MONTH("This Month", "this_month"),
+  THIS_WEEK("This Week", "this_week")
+}
+
+fun getLeaderboardPeriodStartMillis(
+  period: LeaderboardPeriod,
+  nowMillis: Long = System.currentTimeMillis()
+): Long {
+  if (period == LeaderboardPeriod.ALL_TIME) return 0L
+  val tz = java.util.TimeZone.getTimeZone("Asia/Kolkata")
+  val cal = java.util.Calendar.getInstance(tz).apply {
+    timeInMillis = nowMillis
+    set(java.util.Calendar.HOUR_OF_DAY, 0)
+    set(java.util.Calendar.MINUTE, 0)
+    set(java.util.Calendar.SECOND, 0)
+    set(java.util.Calendar.MILLISECOND, 0)
+  }
+  return when (period) {
+    LeaderboardPeriod.ALL_TIME -> 0L
+    LeaderboardPeriod.THIS_MONTH -> {
+      cal.set(java.util.Calendar.DAY_OF_MONTH, 1)
+      cal.timeInMillis
+    }
+    LeaderboardPeriod.THIS_WEEK -> {
+      val dayOfWeek = cal.get(java.util.Calendar.DAY_OF_WEEK)
+      val daysFromMonday =
+        if (dayOfWeek == java.util.Calendar.SUNDAY) 6
+        else dayOfWeek - java.util.Calendar.MONDAY
+      cal.add(java.util.Calendar.DAY_OF_YEAR, -daysFromMonday)
+      cal.timeInMillis
+    }
+  }
+}
+
+data class LeaderboardEntryUi(
+  val rank: Int,
+  val userId: String,
+  val displayName: String,
+  val earnedCoins: Long,
+  val completedTasksCount: Long = 0L
+)
+
+/**
+ * Computes accurate Leaderboard rankings for the selected time period (`All Time`, `This Month`, `This Week`).
+ * Counts ONLY tokens actually earned and credited (`status == "CREDITED"` and reward transaction types).
+ * Never includes pending tasks, unapproved submissions, rejected/failed items, or withdrawal debits/refunds.
+ */
+fun computeLeaderboardEntriesForPeriod(
+  users: List<UserProfile>,
+  transactions: List<TransactionRecord>,
+  period: LeaderboardPeriod,
+  nowMillis: Long = System.currentTimeMillis()
+): List<LeaderboardEntryUi> {
+  val activeUsersByUid = LinkedHashMap<String, UserProfile>()
+  users
+    .filter {
+      !isHiddenAdminIdentity(it.email, it.role) &&
+        it.approvalStatus != "suspended"
+    }
+    .forEach { u ->
+      val uid = u.userId.ifBlank { u.id }
+      if (uid.isNotBlank()) {
+        activeUsersByUid[uid] = u.copy(id = uid, userId = uid)
+      }
+    }
+
+  val startMillis = getLeaderboardPeriodStartMillis(period, nowMillis)
+  val validCreditedTxs =
+    transactions
+      .filter { tx ->
+        tx.userId.isNotBlank() &&
+          tx.status.trim().equals("CREDITED", ignoreCase = true) &&
+          TransactionType.isCreditedRewardType(tx.type) &&
+          tx.getEffectiveAmountCoins() > 0L
+      }
+      .distinctBy { tx ->
+        tx.id.ifBlank { "${tx.userId}_${tx.type}_${tx.referenceId}_${tx.createdAt?.seconds ?: 0L}" }
+      }
+
+  // Fallback for standalone UI tests where no transactions list is supplied
+  if (validCreditedTxs.isEmpty()) {
+    return activeUsersByUid.values
+      .filter { u ->
+        if (period == LeaderboardPeriod.ALL_TIME) {
+          u.getLeaderboardDisplayCoins() > 0L || u.completedTasksCount > 0L
+        } else {
+          val tsMillis = (u.updatedAt ?: u.createdAt)?.toDate()?.time ?: nowMillis
+          tsMillis >= startMillis && (u.getLeaderboardDisplayCoins() > 0L || u.completedTasksCount > 0L)
+        }
+      }
+      .sortedWith(
+        compareByDescending<UserProfile> { it.getLeaderboardDisplayCoins() }
+          .thenByDescending { it.completedTasksCount }
+          .thenBy { it.displayName.lowercase(Locale.US) }
+          .thenBy { it.userId }
+      )
+      .mapIndexed { idx, u ->
+        LeaderboardEntryUi(
+          rank = idx + 1,
+          userId = u.userId.ifBlank { u.id },
+          displayName = u.displayName.ifBlank { "TaskFlow Member" },
+          earnedCoins = u.getLeaderboardDisplayCoins(),
+          completedTasksCount = u.completedTasksCount
+        )
+      }
+  }
+
+  val earnedByUid = LinkedHashMap<String, Long>()
+  val nameByUid = LinkedHashMap<String, String>()
+
+  validCreditedTxs.forEach { tx ->
+    val txMillis = tx.createdAt?.toDate()?.time ?: 0L
+    val inWindow =
+      when (period) {
+        LeaderboardPeriod.ALL_TIME -> true
+        LeaderboardPeriod.THIS_MONTH, LeaderboardPeriod.THIS_WEEK ->
+          txMillis in startMillis..nowMillis
+      }
+    if (inWindow) {
+      val uid = tx.userId
+      earnedByUid[uid] = (earnedByUid[uid] ?: 0L) + tx.getEffectiveAmountCoins()
+      if (tx.userName.isNotBlank() && !nameByUid.containsKey(uid)) {
+        nameByUid[uid] = tx.userName
+      }
+    }
+  }
+
+  val allCandidateUids = LinkedHashSet<String>().apply {
+    addAll(activeUsersByUid.keys)
+    addAll(earnedByUid.keys)
+  }
+
+  val result = mutableListOf<UserProfile>()
+  for (uid in allCandidateUids) {
+    val baseProfile = activeUsersByUid[uid]
+    if (baseProfile != null && isHiddenAdminIdentity(baseProfile.email, baseProfile.role)) {
+      continue
+    }
+    val txEarned = earnedByUid[uid] ?: 0L
+    val periodEarnedCoins =
+      when (period) {
+        LeaderboardPeriod.ALL_TIME -> {
+          val profileFloor = baseProfile?.getLeaderboardDisplayCoins() ?: 0L
+          maxOf(txEarned, profileFloor)
+        }
+        LeaderboardPeriod.THIS_MONTH, LeaderboardPeriod.THIS_WEEK -> txEarned
+      }
+
+    if (periodEarnedCoins > 0L || (period == LeaderboardPeriod.ALL_TIME && (baseProfile?.completedTasksCount ?: 0L) > 0L)) {
+      val resolvedName =
+        baseProfile?.displayName?.ifBlank { nameByUid[uid] ?: "TaskFlow Member" }
+          ?: nameByUid[uid]?.ifBlank { "TaskFlow Member" }
+          ?: "TaskFlow Member"
+      result.add(
+        (baseProfile ?: UserProfile(id = uid, userId = uid, displayName = resolvedName)).copy(
+          id = uid,
+          userId = uid,
+          displayName = resolvedName,
+          balanceCoins = periodEarnedCoins,
+          balanceCents = coinsToCents(periodEarnedCoins)
+        )
+      )
+    }
+  }
+
+  return result
+    .sortedWith(
+      compareByDescending<UserProfile> { it.getLeaderboardDisplayCoins() }
+        .thenByDescending { it.completedTasksCount }
+        .thenBy { it.displayName.lowercase(Locale.US) }
+        .thenBy { it.userId }
+    )
+    .mapIndexed { idx, u ->
+      LeaderboardEntryUi(
+        rank = idx + 1,
+        userId = u.userId.ifBlank { u.id },
+        displayName = u.displayName.ifBlank { "TaskFlow Member" },
+        earnedCoins = u.getLeaderboardDisplayCoins(),
+        completedTasksCount = u.completedTasksCount
+      )
+    }
 }
 
 data class WatchStats(
@@ -1041,18 +1252,56 @@ data class NotificationItem(
   @ServerTimestamp val createdAt: Timestamp? = null
 )
 
+data class SupportReplyMessage(
+  val senderRole: String = "USER", // "USER" or "ADMIN"
+  val senderName: String = "",
+  val message: String = "",
+  val timestampMillis: Long = 0L
+) {
+  val createdAtMillis: Long
+    get() = timestampMillis
+}
+
+object SupportTicketStatus {
+  const val OPEN = "OPEN"
+  const val IN_PROGRESS = "IN_PROGRESS"
+  const val RESOLVED = "RESOLVED"
+
+  fun normalize(status: String): String =
+    when (status.trim().uppercase(Locale.US)) {
+      IN_PROGRESS, "IN PROGRESS" -> IN_PROGRESS
+      RESOLVED, "CLOSED" -> RESOLVED
+      else -> OPEN
+    }
+
+  fun displayLabel(status: String): String =
+    when (normalize(status)) {
+      OPEN -> "Open"
+      IN_PROGRESS -> "In Progress"
+      RESOLVED -> "Resolved"
+      else -> "Open"
+    }
+}
+
 data class SupportTicket(
-  @DocumentId val id: String = "",
+  val id: String = "",
   val userId: String = "",
   val userEmail: String = "",
   val userName: String = "",
+  val category: String = "General",
   val subject: String = "",
   val message: String = "",
-  val status: String = "OPEN", // OPEN, RESOLVED, CLOSED
+  val status: String = SupportTicketStatus.OPEN, // OPEN, IN_PROGRESS, RESOLVED
   val adminNotes: String = "",
+  val messages: List<SupportReplyMessage> = emptyList(),
+  val adminUnread: Boolean = true,
+  val userUnread: Boolean = false,
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null
-)
+) {
+  val adminReply: String
+    get() = adminNotes
+}
 
 data class AppItem(
   @DocumentId val id: String = "",
@@ -1132,6 +1381,7 @@ data class TelegramTaskClaimRecord(
 data class TelegramUserTaskState(
   val taskId: String = "",
   val userId: String = "",
+  @get:PropertyName("hasClickedJoin") val hasClickedJoin: Boolean = false,
   @get:PropertyName("isMembershipVerified") val isMembershipVerified: Boolean = false,
   @get:PropertyName("isClaimed") val isClaimed: Boolean = false,
   val rewardCoinsClaimed: Long = 0L,

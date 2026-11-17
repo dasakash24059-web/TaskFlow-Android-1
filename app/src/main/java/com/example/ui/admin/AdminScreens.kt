@@ -224,7 +224,9 @@ fun AdminDashboardScreen(
    onSaveTelegramConfig: (String, String, Long, Boolean) -> Unit = { _, _, _, _ -> },
    onCreatePromoCode: (String, Long, Long, Long, String, Boolean) -> Unit = { _, _, _, _, _, _ -> },
    onTogglePromoCodeActive: (String, Boolean) -> Unit = { _, _ -> },
-   onCreditManualBonus: (String, Long, String) -> Unit = { _, _, _ -> }
+   onCreditManualBonus: (String, Long, String) -> Unit = { _, _, _ -> },
+   supportTickets: List<com.example.data.model.SupportTicket> = emptyList(),
+   onUpdateSupportTicket: (String, String, String, (Boolean) -> Unit) -> Unit = { _, _, _, cb -> cb(true) }
 ) {
   if (!isAdminAuthorized) {
     UnauthorizedAdminGate(currentUserEmail = currentUserEmail)
@@ -794,6 +796,12 @@ fun AdminDashboardScreen(
               appsState = appsState,
               onCreateApp = onCreateApp,
               onUpdateApp = onUpdateApp
+            )
+          }
+          AdminTab.SUPPORT -> {
+            AdminSupportManagementSection(
+              supportTickets = supportTickets,
+              onUpdateTicket = onUpdateSupportTicket
             )
           }
         }

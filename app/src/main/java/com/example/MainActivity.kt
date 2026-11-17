@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FactCheck
@@ -77,11 +78,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -445,6 +448,9 @@ private fun AuthenticatedWorkspace(
   val isPromoCodeScreenVisible by viewModel.isPromoCodeScreenVisible.collectAsStateWithLifecycle()
   val isScratchCardScreenVisible by viewModel.isScratchCardScreenVisible.collectAsStateWithLifecycle()
   val scratchCardUiState by viewModel.scratchCardUiState.collectAsStateWithLifecycle()
+  val leaderboardTransactions by viewModel.leaderboardCreditedTransactionsState.collectAsStateWithLifecycle()
+  val userSupportTickets by viewModel.userSupportTicketsState.collectAsStateWithLifecycle()
+  val adminSupportTickets by viewModel.adminSupportTicketsState.collectAsStateWithLifecycle()
 
   BackHandler(
     enabled =
@@ -561,6 +567,60 @@ private fun AuthenticatedWorkspace(
           }
         },
         actions = {
+          // Single Compact Header Token Balance Badge beside Notification Bell (User Mode)
+          if (activePortal == PortalLoginTarget.USER_APP || !isAdminAuthorized) {
+            val headerBalanceCoins =
+              (userProfileState as? UiState.Success)?.data?.getEffectiveBalanceCoins() ?: 0L
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+              border =
+                androidx.compose.foundation.BorderStroke(
+                  1.dp,
+                  Color(0xFFD97706).copy(alpha = 0.4f)
+                ),
+              modifier =
+                Modifier.clip(RoundedCornerShape(50))
+                  .clickable {
+                    viewModel.closeWithdrawalFlow()
+                    viewModel.setUserTab(UserTab.WALLET)
+                  }
+                  .testTag("home_header_token_badge")
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                Surface(
+                  shape = CircleShape,
+                  color = Color(0xFFF59E0B).copy(alpha = 0.22f),
+                  border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFD97706)),
+                  modifier = Modifier.size(16.dp)
+                ) {
+                  Box(contentAlignment = Alignment.Center) {
+                    Text(
+                      text = "C",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontSize = 9.sp,
+                      fontWeight = FontWeight.ExtraBold,
+                      color = Color(0xFFB45309)
+                    )
+                  }
+                }
+                Text(
+                  text = "$headerBalanceCoins",
+                  style = MaterialTheme.typography.labelLarge,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  maxLines = 1,
+                  softWrap = false,
+                  modifier = Modifier.testTag("home_header_token_amount")
+                )
+              }
+            }
+          }
+
           val unreadCount = userNotifications.count { !it.isRead }
           IconButton(
             onClick = { viewModel.setNotificationDialogVisible(true) },
@@ -931,7 +991,8 @@ private fun AuthenticatedWorkspace(
                     },
                     onNavigateToPromoCode = {
                       viewModel.setPromoCodeScreenVisible(true)
-                    }
+                    },
+                    leaderboardTransactions = leaderboardTransactions
                   )
                 }
               }
@@ -948,8 +1009,21 @@ private fun AuthenticatedWorkspace(
                   telegramTaskState = activeTelegramState,
                   isTelegramBusy = isBusy,
                   onJoinTelegramTask = { tgTask ->
+                    viewModel.recordTelegramTaskJoinClick(tgTask.effectiveTaskId)
                     runCatching {
-                      val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(tgTask.channelUrl)).apply {
+                      val rawUrl = tgTask.channelUrl.trim()
+                      val normalizedUrl =
+                        if (rawUrl.startsWith("http://", ignoreCase = true) ||
+                          rawUrl.startsWith("https://", ignoreCase = true) ||
+                          rawUrl.startsWith("tg://", ignoreCase = true)
+                        ) {
+                          rawUrl
+                        } else if (rawUrl.startsWith("@")) {
+                          "https://t.me/${rawUrl.removePrefix("@")}"
+                        } else {
+                          "https://$rawUrl"
+                        }
+                      val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(normalizedUrl)).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                       }
                       context.startActivity(intent)
@@ -1125,6 +1199,14 @@ private fun AuthenticatedWorkspace(
                       subject = subject,
                       message = message,
                       category = category,
+                      onResult = onResult
+                    )
+                  },
+                  supportTickets = userSupportTickets,
+                  onReplySupportTicket = { ticketId, replyMessage, onResult ->
+                    viewModel.userReplySupportTicket(
+                      ticketId = ticketId,
+                      replyMessage = replyMessage,
                       onResult = onResult
                     )
                   }
@@ -1381,6 +1463,15 @@ private fun AuthenticatedWorkspace(
                 targetUserId = targetUserId,
                 amountCoins = amountCoins,
                 reason = reason
+              )
+            },
+            supportTickets = (adminSupportTickets as? com.example.ui.viewmodel.UiState.Success)?.data ?: emptyList(),
+            onUpdateSupportTicket = { ticketId, status, adminReply, onResult ->
+              viewModel.updateSupportTicketStatus(
+                ticketId = ticketId,
+                newStatus = status,
+                adminReply = adminReply,
+                onResult = onResult
               )
             }
           )

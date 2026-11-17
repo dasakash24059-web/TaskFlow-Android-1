@@ -323,6 +323,8 @@ interface RewardCloudFunctionsClient {
   fun getOrAssignSessionRewardCoins(sessionId: String): Long = 0L
 
   fun getLocalScratchDailyState(userId: String, dateKey: String): ScratchDailyState? = null
+
+  fun recordTelegramTaskJoinClicked(userId: String, taskId: String) {}
 }
 
 data class ScratchAdWatchResult(
@@ -344,6 +346,7 @@ class FirebaseRewardCloudFunctionsClient(
 
   private val sessionRewardsById = java.util.concurrent.ConcurrentHashMap<String, Long>()
   private val localScratchStats = java.util.concurrent.ConcurrentHashMap<String, ScratchDailyState>()
+  private val localTelegramJoinClicks = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
   private val inFlightCheckInKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
   private val inFlightSpinClaimSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
   private val claimedSpinSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -364,6 +367,11 @@ class FirebaseRewardCloudFunctionsClient(
   override fun getLocalScratchDailyState(userId: String, dateKey: String): ScratchDailyState? {
     if (userId.isBlank() || dateKey.isBlank()) return null
     return localScratchStats["${userId.trim()}_${dateKey.trim()}"]
+  }
+
+  override fun recordTelegramTaskJoinClicked(userId: String, taskId: String) {
+    if (userId.isBlank() || taskId.isBlank()) return
+    localTelegramJoinClicks["${userId.trim()}_${taskId.trim()}"] = true
   }
 
   private fun isCloudFunctionMissing(err: Throwable): Boolean {
@@ -1277,69 +1285,160 @@ class FirebaseRewardCloudFunctionsClient(
         mapOf("success" to true, "taskId" to tid, "isActive" to active)
       }
       "verifyTelegramTaskMembership" -> {
-        mapOf("success" to true, "isMember" to true, "status" to "member", "verified" to true)
+        val tid = map?.get("taskId")?.toString()?.trim().orEmpty()
+        var isVerified = false
+        var verifyMessage =
+          "Membership not verified yet. Please tap JOIN to open and join the Telegram channel first, then tap VERIFY."
+        if (uid.isNotBlank() && tid.isNotBlank()) {
+          val stateRef =
+            firestore.collection("users").document(uid).collection("telegram_task_states").document(tid)
+          val stateSnap = runCatching { stateRef.get().await() }.getOrNull()
+          val alreadyVerified = stateSnap?.getBoolean("isMembershipVerified") ?: false
+          val alreadyClaimed = stateSnap?.getBoolean("isClaimed") ?: false
+          val hasClickedJoinInState = stateSnap?.getBoolean("hasClickedJoin") ?: false
+          val hasClickedJoinLocal = localTelegramJoinClicks["${uid}_$tid"] == true
+
+          if (alreadyVerified || alreadyClaimed || hasClickedJoinInState || hasClickedJoinLocal) {
+            isVerified = true
+            verifyMessage = "Telegram membership verified! Tap CLAIM to collect your Coins."
+            runCatching {
+              stateRef.set(
+                mapOf(
+                  "taskId" to tid,
+                  "userId" to uid,
+                  "hasClickedJoin" to true,
+                  "isMembershipVerified" to true,
+                  "verified" to true,
+                  "isClaimed" to alreadyClaimed,
+                  "verifiedAt" to FieldValue.serverTimestamp()
+                ),
+                SetOptions.merge()
+              ).await()
+            }.onFailure { err ->
+              Log.w("TaskFlowRepository", "verifyTelegramTaskMembership state write warning: ${err.message}")
+            }
+          }
+        }
+        mapOf(
+          "success" to true,
+          "isMember" to isVerified,
+          "status" to if (isVerified) "member" else "left",
+          "verified" to isVerified,
+          "needsAccountLink" to false,
+          "taskId" to tid,
+          "message" to verifyMessage
+        )
       }
       "claimTelegramTaskReward" -> {
-        val tid = map?.get("taskId")?.toString().orEmpty()
+        val tid = map?.get("taskId")?.toString()?.trim().orEmpty()
         var reward = 200L
         var newBalance = 200L
+        var taskTitle = "Telegram Join Task"
+        var channelUrl = ""
         if (uid.isNotBlank() && tid.isNotBlank()) {
+          val stateRef =
+            firestore.collection("users").document(uid).collection("telegram_task_states").document(tid)
+          val stateSnap = runCatching { stateRef.get().await() }.getOrNull()
+          val isVerifiedInDoc =
+            (stateSnap?.getBoolean("isMembershipVerified") ?: false) ||
+              (stateSnap?.getBoolean("verified") ?: false) ||
+              (localTelegramJoinClicks["${uid}_$tid"] == true)
+          val alreadyClaimedInDoc =
+            (stateSnap?.getBoolean("isClaimed") ?: false) ||
+              (stateSnap?.getBoolean("claimed") ?: false)
+          check(!alreadyClaimedInDoc) { "You have already claimed this Telegram task reward." }
+          check(isVerifiedInDoc) {
+            "Please verify your Telegram channel membership before claiming the reward."
+          }
+
+          val claimRef = firestore.collection("telegram_claims").document("${tid}_$uid")
+          val existingClaim = runCatching { claimRef.get().await() }.getOrNull()
+          check(existingClaim == null || !existingClaim.exists()) {
+            "You have already claimed this Telegram task reward."
+          }
+
           runCatching {
             val taskRef = firestore.collection("telegram_tasks").document(tid)
             val taskSnap = taskRef.get().await()
             if (taskSnap.exists()) {
               reward = taskSnap.getLong("rewardCoins") ?: 200L
+              taskTitle = taskSnap.getString("title")?.trim().orEmpty().ifEmpty { "Telegram Join Task" }
+              channelUrl = taskSnap.getString("channelUrl")?.trim().orEmpty()
             }
             firestore.runTransaction { tx ->
               val userRef = firestore.collection("users").document(uid)
               val userSnap = tx.get(userRef)
+              val userName =
+                (userSnap.getString("displayName") ?: "TaskFlow Member").trim().ifEmpty { "TaskFlow Member" }
               val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
               val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
               val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
               val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
               val newPromo = curPromo + reward
               newBalance = maxOf(curTotal + reward, curEligible + newPromo)
-              tx.update(
-                userRef,
-                mapOf(
-                  "balanceCoins" to newBalance,
-                  "promotionalCoins" to newPromo,
-                  "lastRewardId" to rewardId,
-                  "lastRewardType" to "TELEGRAM_JOIN",
-                  "lastRewardAmountCoins" to reward,
-                  "updatedAt" to FieldValue.serverTimestamp()
+              if (userSnap.exists()) {
+                tx.update(
+                  userRef,
+                  mapOf(
+                    "balanceCoins" to newBalance,
+                    "promotionalCoins" to newPromo,
+                    "lastRewardId" to rewardId,
+                    "lastRewardType" to "TELEGRAM_JOIN",
+                    "lastRewardAmountCoins" to reward,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                  )
                 )
-              )
-              val claimRef = firestore.collection("telegram_claims").document("${tid}_$uid")
+                val lbRef = firestore.collection("leaderboard").document(uid)
+                tx.set(
+                  lbRef,
+                  mapOf(
+                    "userId" to uid,
+                    "displayName" to userName,
+                    "balanceCents" to curBalanceCents,
+                    "balanceCoins" to newBalance,
+                    "completedTasksCount" to (userSnap.getLong("completedTasksCount") ?: 0L),
+                    "approvalStatus" to (userSnap.getString("approvalStatus") ?: "approved"),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                  ),
+                  SetOptions.merge()
+                )
+              }
               tx.set(
                 claimRef,
                 mapOf(
                   "claimId" to "${tid}_$uid",
                   "taskId" to tid,
+                  "taskTitle" to taskTitle,
+                  "channelUrl" to channelUrl,
                   "userId" to uid,
+                  "userName" to userName,
                   "rewardCoins" to reward,
                   "claimedAt" to FieldValue.serverTimestamp()
                 )
               )
-              val stateRef = firestore.collection("users").document(uid).collection("telegram_task_states").document(tid)
               tx.set(
                 stateRef,
                 mapOf(
                   "taskId" to tid,
                   "userId" to uid,
+                  "hasClickedJoin" to true,
+                  "isMembershipVerified" to true,
+                  "isClaimed" to true,
                   "claimed" to true,
                   "verified" to true,
+                  "rewardCoinsClaimed" to reward,
                   "claimedAt" to FieldValue.serverTimestamp()
-                )
+                ),
+                SetOptions.merge()
               )
               val txRef = firestore.collection("transactions").document("tg_${tid}_$uid")
               tx.set(
                 txRef,
                 mapOf(
                   "userId" to uid,
-                  "userName" to (userSnap.getString("displayName") ?: "TaskFlow Member"),
+                  "userName" to userName,
                   "type" to "TELEGRAM_JOIN",
-                  "title" to "Telegram Join Task Reward",
+                  "title" to "Telegram Join: $taskTitle",
                   "amountCoins" to reward,
                   "amountCents" to 0L,
                   "status" to "CREDITED",
@@ -1347,14 +1446,17 @@ class FirebaseRewardCloudFunctionsClient(
                   "createdAt" to FieldValue.serverTimestamp()
                 )
               )
-              val notifRef = firestore.collection("users").document(uid).collection("notifications").document("notif_tg_${tid}_$uid")
+              val notifRef =
+                firestore.collection("users").document(uid).collection("notifications").document("notif_tg_${tid}_$uid")
               tx.set(
                 notifRef,
                 mapOf(
                   "userId" to uid,
                   "title" to "Telegram Task Claimed!",
-                  "body" to "You received $reward Coins for joining the Telegram channel.",
+                  "body" to "You received $reward Coins for joining $taskTitle.",
                   "type" to "NOTIFICATION",
+                  "rewardCoins" to reward,
+                  "referenceId" to tid,
                   "isRead" to false,
                   "createdAt" to FieldValue.serverTimestamp()
                 )
@@ -1362,50 +1464,96 @@ class FirebaseRewardCloudFunctionsClient(
             }.await()
           }.onFailure { err ->
             Log.e("TaskFlowRepository", "claimTelegramTaskReward fallback error: ${err.message}", err)
+            throw err
           }
         }
         mapOf("success" to true, "taskId" to tid, "rewardCoins" to reward, "newBalanceCoins" to newBalance)
       }
       "creditManualBonus" -> {
-        val targetUid = map?.get("targetUserId")?.toString().orEmpty()
+        val rawTargetUid = map?.get("targetUserId")?.toString()?.trim().orEmpty()
         val amount = (map?.get("amountCoins") as? Number)?.toLong() ?: 100L
-        val reason = map?.get("reason")?.toString().orEmpty().ifEmpty { "Special Admin Bonus" }
-        val key = map?.get("idempotencyKey")?.toString().orEmpty().ifEmpty { randomSuffix }
-        val adminUid = authProvider().currentUser?.uid?.trim().orEmpty()
+        val reason = map?.get("reason")?.toString()?.trim().orEmpty().ifEmpty { "Special Admin Bonus" }
+        val key = map?.get("idempotencyKey")?.toString()?.trim().orEmpty().ifEmpty { randomSuffix }
+        val adminUid = authProvider().currentUser?.uid?.trim().orEmpty().ifEmpty { uid }
         val adminEmail = authProvider().currentUser?.email?.trim().orEmpty()
+        var targetUid = rawTargetUid
         var newBalance = amount
         var newPromoCoins = amount
         var resolvedTargetName = "TaskFlow Member"
         var resolvedTargetEmail = ""
-        if (targetUid.isNotBlank() && amount > 0L) {
+        if (rawTargetUid.isNotBlank() && amount > 0L) {
+          val directSnap =
+            runCatching { firestore.collection("users").document(rawTargetUid).get().await() }.getOrNull()
+          if (directSnap == null || !directSnap.exists()) {
+            val byUserIdSnap =
+              runCatching {
+                firestore.collection("users").whereEqualTo("userId", rawTargetUid).limit(1).get().await()
+              }.getOrNull()
+            val matchedDoc = byUserIdSnap?.documents?.firstOrNull()
+            if (matchedDoc != null) {
+              targetUid = matchedDoc.id
+            }
+          }
+
           runCatching {
             firestore.runTransaction { tx ->
+              val bonusRef = firestore.collection("manual_bonuses").document(key)
+              val existingBonusSnap = tx.get(bonusRef)
               val userRef = firestore.collection("users").document(targetUid)
               val userSnap = tx.get(userRef)
-              resolvedTargetName =
-                (userSnap.getString("displayName") ?: "TaskFlow Member").trim().ifEmpty { "TaskFlow Member" }
-              resolvedTargetEmail = (userSnap.getString("email") ?: "").trim()
+
+              if (userSnap.exists()) {
+                resolvedTargetName =
+                  (userSnap.getString("displayName") ?: "TaskFlow Member").trim().ifEmpty { "TaskFlow Member" }
+                resolvedTargetEmail = (userSnap.getString("email") ?: "").trim()
+              }
+
               val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
               val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
               val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
               val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
+
+              if (existingBonusSnap.exists()) {
+                newPromoCoins = curPromo
+                newBalance = curTotal
+                return@runTransaction
+              }
+
               newPromoCoins = curPromo + amount
               newBalance = maxOf(curTotal + amount, curEligible + newPromoCoins)
-              tx.update(
-                userRef,
-                mapOf(
-                  "balanceCoins" to newBalance,
-                  "promotionalCoins" to newPromoCoins,
-                  "lastRewardId" to rewardId,
-                  "lastRewardType" to "BONUS",
-                  "lastRewardAmountCoins" to amount,
-                  "updatedAt" to FieldValue.serverTimestamp()
+
+              if (userSnap.exists()) {
+                tx.update(
+                  userRef,
+                  mapOf(
+                    "balanceCoins" to newBalance,
+                    "promotionalCoins" to newPromoCoins,
+                    "lastRewardId" to key,
+                    "lastRewardType" to "BONUS",
+                    "lastRewardAmountCoins" to amount,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                  )
                 )
-              )
-              val bonusRef = firestore.collection("manual_bonuses").document(key)
+                val lbRef = firestore.collection("leaderboard").document(targetUid)
+                tx.set(
+                  lbRef,
+                  mapOf(
+                    "userId" to targetUid,
+                    "displayName" to resolvedTargetName,
+                    "balanceCents" to curBalanceCents,
+                    "balanceCoins" to newBalance,
+                    "completedTasksCount" to (userSnap.getLong("completedTasksCount") ?: 0L),
+                    "approvalStatus" to (userSnap.getString("approvalStatus") ?: "approved"),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                  ),
+                  SetOptions.merge()
+                )
+              }
+
               tx.set(
                 bonusRef,
                 mapOf(
+                  "id" to key,
                   "targetUserId" to targetUid,
                   "targetUserName" to resolvedTargetName,
                   "targetUserEmail" to resolvedTargetEmail,
@@ -1423,16 +1571,21 @@ class FirebaseRewardCloudFunctionsClient(
                 mapOf(
                   "userId" to targetUid,
                   "userName" to resolvedTargetName,
-                  "type" to TransactionType.ADMIN_MANUAL_BONUS,
+                  "type" to TransactionType.ADMIN_BONUS,
                   "title" to "Admin Bonus: $reason",
                   "amountCoins" to amount,
-                  "amountCents" to coinsToCents(amount),
+                  "amountCents" to 0L,
                   "status" to "CREDITED",
                   "referenceId" to key,
                   "createdAt" to FieldValue.serverTimestamp()
                 )
               )
-              val notifRef = firestore.collection("users").document(targetUid).collection("notifications").document("notif_bonus_${key}")
+              val notifRef =
+                firestore
+                  .collection("users")
+                  .document(targetUid)
+                  .collection("notifications")
+                  .document("notif_bonus_${key}")
               tx.set(
                 notifRef,
                 mapOf(
@@ -1446,9 +1599,22 @@ class FirebaseRewardCloudFunctionsClient(
                   "createdAt" to FieldValue.serverTimestamp()
                 )
               )
+              val logRef = firestore.collection("admin_logs").document("bonus_${key}")
+              tx.set(
+                logRef,
+                mapOf(
+                  "actionType" to "REWARD",
+                  "title" to "Credited Manual Bonus (+$amount Coins)",
+                  "details" to "Credited $amount Coins to $resolvedTargetName ($targetUid) • Reason: $reason",
+                  "targetId" to targetUid,
+                  "timestampMillis" to now,
+                  "createdAt" to FieldValue.serverTimestamp()
+                )
+              )
             }.await()
           }.onFailure { err ->
             Log.e("TaskFlowRepository", "creditManualBonus fallback error: ${err.message}", err)
+            throw err
           }
         }
         mapOf(
@@ -4868,6 +5034,33 @@ class TaskFlowRepository(
     awaitClose { listener.remove() }
   }
 
+  /**
+   * Observes all CREDITED reward transactions in real time so any signed-in user can view
+   * accurate time-filtered Leaderboard rankings (`All Time`, `This Month`, `This Week`).
+   */
+  fun observeCreditedTransactionsForLeaderboard(): Flow<List<TransactionRecord>> = callbackFlow {
+    val listener =
+      transactionsCollection
+        .whereEqualTo("status", "CREDITED")
+        .addSnapshotListener { snapshot, error ->
+          if (error != null) {
+            trySend(emptyList())
+            return@addSnapshotListener
+          }
+          val items =
+            runCatching {
+              snapshot
+                ?.documents
+                ?.mapNotNull { it.toTransactionRecordSafe() }
+                ?.filter { com.example.data.model.TransactionType.isCreditedRewardType(it.type) }
+                ?.sortedByDescending { it.createdAt?.seconds ?: 0L }
+                ?: emptyList()
+            }.getOrDefault(emptyList())
+          trySend(items)
+        }
+    awaitClose { listener.remove() }
+  }
+
   internal fun resolveLeaderboardBalanceCoins(
     rawBalanceCoins: Long?,
     rawBalanceCents: Long
@@ -5483,6 +5676,64 @@ class TaskFlowRepository(
   // SUPPORT TICKETS / INQUIRIES
   // ==========================================
 
+  private fun DocumentSnapshot.toSupportTicketSafe(): SupportTicket? {
+    if (!exists()) return null
+    return try {
+      val resolvedId = (runCatching { getString("id") }.getOrNull()?.trim().orEmpty()).ifEmpty { id }
+      val rawStatus = (runCatching { getString("status") }.getOrNull()?.trim().orEmpty()).ifEmpty { "OPEN" }
+      val adminNotes = runCatching { getString("adminNotes") }.getOrNull()?.trim().orEmpty()
+      val rawMessages = runCatching { get("messages") as? List<*> }.getOrNull().orEmpty()
+      val parsedMessages =
+        rawMessages.mapNotNull { item ->
+          val map = item as? Map<*, *> ?: return@mapNotNull null
+          val role = map["senderRole"]?.toString()?.trim().orEmpty().ifEmpty { "USER" }
+          val senderName = map["senderName"]?.toString()?.trim().orEmpty()
+          val msgText = map["message"]?.toString()?.trim().orEmpty()
+          val ts = (map["timestampMillis"] as? Number)?.toLong() ?: 0L
+          if (msgText.isEmpty()) null
+          else com.example.data.model.SupportReplyMessage(
+            senderRole = role,
+            senderName = senderName,
+            message = msgText,
+            timestampMillis = ts
+          )
+        }
+      val finalMessages =
+        if (parsedMessages.isEmpty() && adminNotes.isNotBlank()) {
+          listOf(
+            com.example.data.model.SupportReplyMessage(
+              senderRole = "ADMIN",
+              senderName = "Support Team",
+              message = adminNotes,
+              timestampMillis = (getTimestamp("updatedAt") ?: getTimestamp("createdAt"))?.toDate()?.time ?: 0L
+            )
+          )
+        } else {
+          parsedMessages
+        }
+
+      SupportTicket(
+        id = resolvedId,
+        userId = runCatching { getString("userId") }.getOrNull()?.trim().orEmpty(),
+        userEmail = runCatching { getString("userEmail") }.getOrNull()?.trim().orEmpty(),
+        userName = runCatching { getString("userName") }.getOrNull()?.trim().orEmpty(),
+        category = (runCatching { getString("category") }.getOrNull()?.trim().orEmpty()).ifEmpty { "General" },
+        subject = runCatching { getString("subject") }.getOrNull()?.trim().orEmpty(),
+        message = runCatching { getString("message") }.getOrNull()?.trim().orEmpty(),
+        status = rawStatus,
+        adminNotes = adminNotes,
+        messages = finalMessages,
+        adminUnread = runCatching { getBoolean("adminUnread") }.getOrNull() ?: rawStatus.equals("OPEN", ignoreCase = true),
+        userUnread = runCatching { getBoolean("userUnread") }.getOrNull() ?: false,
+        createdAt = runCatching { getTimestamp("createdAt") }.getOrNull(),
+        updatedAt = runCatching { getTimestamp("updatedAt") }.getOrNull()
+      )
+    } catch (e: Throwable) {
+      Log.w("TaskFlowRepository", "Skipping malformed SupportTicket $id: ${e.message}")
+      null
+    }
+  }
+
   fun observeUserSupportTickets(userId: String): Flow<List<SupportTicket>> = callbackFlow {
     if (userId.isBlank()) {
       trySend(emptyList())
@@ -5497,8 +5748,8 @@ class TaskFlowRepository(
         }
         val items =
           runCatching {
-            snapshot?.documents?.mapNotNull { it.toObjectSafe(SupportTicket::class.java) }
-              ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+            snapshot?.documents?.mapNotNull { it.toSupportTicketSafe() }
+              ?.sortedByDescending { (it.updatedAt ?: it.createdAt)?.seconds ?: 0L } ?: emptyList()
           }.getOrDefault(emptyList())
         trySend(items)
       }
@@ -5508,13 +5759,13 @@ class TaskFlowRepository(
   fun observeAllSupportTickets(): Flow<List<SupportTicket>> = callbackFlow {
     val listener = supportTicketsCollection.addSnapshotListener { snapshot, error ->
       if (error != null) {
-        close(error)
+        trySend(emptyList())
         return@addSnapshotListener
       }
       val items =
         runCatching {
-          snapshot?.documents?.mapNotNull { it.toObjectSafe(SupportTicket::class.java) }
-            ?.sortedByDescending { it.createdAt?.seconds ?: 0L } ?: emptyList()
+          snapshot?.documents?.mapNotNull { it.toSupportTicketSafe() }
+            ?.sortedByDescending { (it.updatedAt ?: it.createdAt)?.seconds ?: 0L } ?: emptyList()
         }.getOrDefault(emptyList())
       trySend(items)
     }
@@ -5533,33 +5784,193 @@ class TaskFlowRepository(
     require(subject.isNotBlank()) { "Subject is required" }
     require(message.isNotBlank()) { "Message is required" }
     val docRef = supportTicketsCollection.document()
+    val ticketId = docRef.id
+    val cleanedUserName = userName.trim().ifEmpty { "User" }
+    val cleanedEmail = userEmail.trim().ifEmpty { "user@taskflow.app" }
+    val cleanedCategory = category.trim().ifEmpty { "General" }
+    val cleanedSubject = subject.trim().take(200)
+    val cleanedMessage = message.trim().take(4000)
+
     val data = mapOf(
       "userId" to userId,
-      "userName" to userName.trim().ifEmpty { "User" },
-      "userEmail" to userEmail.trim().ifEmpty { "user@taskflow.app" },
-      "category" to category,
-      "subject" to subject.trim(),
-      "message" to message.trim(),
+      "userName" to cleanedUserName,
+      "userEmail" to cleanedEmail,
+      "category" to cleanedCategory,
+      "subject" to cleanedSubject,
+      "message" to cleanedMessage,
       "status" to "OPEN",
       "createdAt" to FieldValue.serverTimestamp()
     )
-    docRef.set(data).await()
-    docRef.id
+
+    val adminNotifRef = adminNotificationsCollection.document("admin_support_$ticketId")
+    val adminNotifData = mapOf(
+      "userId" to userId,
+      "userName" to cleanedUserName,
+      "title" to "New Support Request: $cleanedCategory",
+      "body" to "$cleanedUserName: $cleanedSubject",
+      "type" to "SUPPORT_TICKET",
+      "referenceId" to ticketId,
+      "isRead" to false,
+      "createdAt" to FieldValue.serverTimestamp()
+    )
+
+    val batch = firestore.batch()
+    batch.set(docRef, data)
+    batch.set(adminNotifRef, adminNotifData)
+    runCatching {
+      batch.commit().await()
+    }.onFailure {
+      // Fallback to direct ticket creation if admin notification already exists or fails
+      docRef.set(data).await()
+    }
+    ticketId
   }
 
   suspend fun updateSupportTicketStatus(
     ticketId: String,
     status: String,
     adminNotes: String
+  ): Result<Unit> =
+    adminReplyToSupportTicket(
+      ticketId = ticketId,
+      status = status,
+      replyMessage = adminNotes
+    )
+
+  suspend fun adminReplyToSupportTicket(
+    ticketId: String,
+    status: String,
+    replyMessage: String
   ): Result<Unit> = runCatching {
     require(ticketId.isNotBlank()) { "ticketId must not be blank" }
-    supportTicketsCollection.document(ticketId).update(
-      mapOf(
-        "status" to status,
-        "adminNotes" to adminNotes.trim(),
+    val normalizedStatus =
+      when (status.trim().uppercase(Locale.US)) {
+        "IN_PROGRESS", "IN PROGRESS" -> "IN_PROGRESS"
+        "RESOLVED", "CLOSED" -> "RESOLVED"
+        else -> "OPEN"
+      }
+    val cleanedReply = replyMessage.trim().take(3000)
+    val now = System.currentTimeMillis()
+    val ticketRef = supportTicketsCollection.document(ticketId)
+
+    var targetUid = ""
+    var ticketSubject = "Support Request"
+    firestore.runTransaction { tx ->
+      val snap = tx.get(ticketRef)
+      check(snap.exists()) { "Support ticket not found." }
+      targetUid = snap.getString("userId").orEmpty()
+      ticketSubject = snap.getString("subject").orEmpty().ifEmpty { "Support Request" }
+      val existingMessages =
+        (snap.get("messages") as? List<*>)
+          ?.mapNotNull { it as? Map<*, *> }
+          ?.toMutableList()
+          ?: mutableListOf()
+
+      if (cleanedReply.isNotEmpty()) {
+        existingMessages.add(
+          mapOf(
+            "senderRole" to "ADMIN",
+            "senderName" to "Support Team",
+            "message" to cleanedReply,
+            "timestampMillis" to now
+          )
+        )
+      }
+
+      val updates = mutableMapOf<String, Any>(
+        "status" to normalizedStatus,
+        "adminUnread" to false,
+        "userUnread" to cleanedReply.isNotEmpty(),
+        "messages" to existingMessages,
         "updatedAt" to FieldValue.serverTimestamp()
       )
-    ).await()
+      if (cleanedReply.isNotEmpty()) {
+        updates["adminNotes"] = cleanedReply
+      }
+      tx.update(ticketRef, updates)
+
+      if (targetUid.isNotBlank()) {
+        val statusLabel = com.example.data.model.SupportTicketStatus.displayLabel(normalizedStatus)
+        val notifBody =
+          if (cleanedReply.isNotEmpty()) {
+            "Support replied to \"$ticketSubject\": $cleanedReply"
+          } else {
+            "Your support request \"$ticketSubject\" status is now $statusLabel."
+          }
+        val userNotifRef =
+          usersCollection
+            .document(targetUid)
+            .collection("notifications")
+            .document("notif_support_${ticketId}_$now")
+        tx.set(
+          userNotifRef,
+          mapOf(
+            "userId" to targetUid,
+            "title" to "Support Update ($statusLabel)",
+            "body" to notifBody,
+            "type" to "SUPPORT",
+            "referenceId" to ticketId,
+            "isRead" to false,
+            "createdAt" to FieldValue.serverTimestamp()
+          )
+        )
+      }
+    }.await()
+
+    recordAdminActivity(
+      actionType = "SUPPORT",
+      title = "Updated Support Ticket ($normalizedStatus)",
+      details = "Subject: $ticketSubject • User: $targetUid",
+      targetId = ticketId
+    )
+  }
+
+  suspend fun userReplyToSupportTicket(
+    ticketId: String,
+    userId: String,
+    userName: String,
+    replyMessage: String
+  ): Result<Unit> = runCatching {
+    require(ticketId.isNotBlank()) { "ticketId must not be blank" }
+    require(userId.isNotBlank()) { "userId must not be blank" }
+    val cleanedReply = replyMessage.trim().take(3000)
+    require(cleanedReply.isNotEmpty()) { "Please enter a reply message." }
+    val now = System.currentTimeMillis()
+    val ticketRef = supportTicketsCollection.document(ticketId)
+
+    firestore.runTransaction { tx ->
+      val snap = tx.get(ticketRef)
+      check(snap.exists()) { "Support ticket not found." }
+      val ownerUid = snap.getString("userId").orEmpty()
+      check(ownerUid == userId) { "You can only reply to your own support request." }
+      val curStatus = snap.getString("status").orEmpty().ifEmpty { "OPEN" }
+      val nextStatus = if (curStatus.equals("RESOLVED", ignoreCase = true)) "OPEN" else curStatus
+      val existingMessages =
+        (snap.get("messages") as? List<*>)
+          ?.mapNotNull { it as? Map<*, *> }
+          ?.toMutableList()
+          ?: mutableListOf()
+
+      existingMessages.add(
+        mapOf(
+          "senderRole" to "USER",
+          "senderName" to userName.trim().ifEmpty { "User" },
+          "message" to cleanedReply,
+          "timestampMillis" to now
+        )
+      )
+
+      tx.update(
+        ticketRef,
+        mapOf(
+          "messages" to existingMessages,
+          "adminUnread" to true,
+          "userUnread" to false,
+          "status" to nextStatus,
+          "updatedAt" to FieldValue.serverTimestamp()
+        )
+      )
+    }.await()
   }
 
   fun observeApps(): Flow<List<AppItem>> = callbackFlow {
@@ -5762,13 +6173,21 @@ class TaskFlowRepository(
           val map = buildMap<String, TelegramUserTaskState> {
             snapshot.documents.forEach { doc ->
               val tId = (doc.getString("taskId")?.trim().orEmpty()).ifEmpty { doc.id }
+              val hasClicked = doc.getBoolean("hasClickedJoin") ?: false
+              val verified =
+                (doc.getBoolean("isMembershipVerified") ?: false) ||
+                  (doc.getBoolean("verified") ?: false)
+              val claimed =
+                (doc.getBoolean("isClaimed") ?: false) ||
+                  (doc.getBoolean("claimed") ?: false)
               put(
                 tId,
                 TelegramUserTaskState(
                   taskId = tId,
                   userId = userId,
-                  isMembershipVerified = doc.getBoolean("isMembershipVerified") ?: false,
-                  isClaimed = doc.getBoolean("isClaimed") ?: false,
+                  hasClickedJoin = hasClicked || verified || claimed,
+                  isMembershipVerified = verified || claimed,
+                  isClaimed = claimed,
                   rewardCoinsClaimed = doc.getLong("rewardCoinsClaimed") ?: 0L
                 )
               )
@@ -5778,6 +6197,29 @@ class TaskFlowRepository(
         }
       awaitClose { listener.remove() }
     }
+
+  suspend fun markTelegramTaskJoinClicked(
+    userId: String,
+    taskId: String
+  ): Result<Unit> = runCatching {
+    val cleanUserId = userId.trim()
+    val cleanTaskId = taskId.trim()
+    if (cleanUserId.isBlank() || cleanTaskId.isBlank()) return@runCatching
+    rewardFunctionsClient.recordTelegramTaskJoinClicked(cleanUserId, cleanTaskId)
+    val stateRef =
+      usersCollection.document(cleanUserId).collection("telegram_task_states").document(cleanTaskId)
+    runCatching {
+      stateRef.set(
+        mapOf(
+          "taskId" to cleanTaskId,
+          "userId" to cleanUserId,
+          "hasClickedJoin" to true,
+          "joinClickedAt" to FieldValue.serverTimestamp()
+        ),
+        SetOptions.merge()
+      ).await()
+    }
+  }
 
   fun observeTelegramAccountStatus(userId: String): Flow<TelegramAccountLinkStatus> = callbackFlow {
     if (userId.isBlank()) {

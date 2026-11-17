@@ -104,6 +104,9 @@ import com.example.data.model.ManualBonusRecord
 import com.example.data.model.PromoAdminUiFeedback
 import com.example.data.model.PromoCodeItem
 import com.example.data.model.PromoCodeStatus
+import androidx.compose.material.icons.filled.SupportAgent
+import com.example.data.model.SupportTicket
+import com.example.data.model.SupportTicketStatus
 import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.TelegramJoinConfig
@@ -230,6 +233,13 @@ val ADMIN_10_MAIN_SECTIONS: List<AdminNavSectionItem> =
       icon = Icons.Default.History,
       tag = "admin_section_activity_logs",
       defaultSubtitle = "Chronological audit trail"
+    ),
+    AdminNavSectionItem(
+      tab = AdminTab.SUPPORT,
+      label = "Support",
+      icon = Icons.Default.SupportAgent,
+      tag = "admin_section_support",
+      defaultSubtitle = "User tickets & replies"
     )
   )
 
@@ -2341,7 +2351,11 @@ fun AdminManualBonusCreditCard(
 
   val selectedUser =
     remember(users, selectedUserId) {
-      users.firstOrNull { (it.userId.ifBlank { it.id }) == selectedUserId || it.id == selectedUserId }
+      users.firstOrNull {
+        val primaryId = it.id.ifBlank { it.userId }
+        val altId = it.userId.ifBlank { it.id }
+        primaryId == selectedUserId || altId == selectedUserId
+      }
     }
 
   Card(
@@ -2396,8 +2410,8 @@ fun AdminManualBonusCreditCard(
           verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
           matchingUsers.take(5).forEach { user ->
-            val uid = user.userId.ifBlank { user.id }
-            val isSelected = uid == selectedUserId
+            val uid = user.id.ifBlank { user.userId }
+            val isSelected = uid == selectedUserId || (user.userId.isNotBlank() && user.userId == selectedUserId)
             Surface(
               shape = RoundedCornerShape(10.dp),
               color = if (isSelected) AdminBlueTint else AdminSoftGreyBg,
@@ -3792,3 +3806,428 @@ internal fun buildCombinedActivityEntries(
     .sortedByDescending { it.timestampMillis }
     .distinctBy { it.id }
 }
+
+@Composable
+fun AdminSupportManagementSection(
+  supportTickets: List<SupportTicket>,
+  onUpdateTicket: (String, String, String, (Boolean) -> Unit) -> Unit
+) {
+  var selectedFilter by rememberSaveable { mutableStateOf("ALL") }
+  var selectedTicketId by rememberSaveable { mutableStateOf<String?>(null) }
+  var replyText by rememberSaveable { mutableStateOf("") }
+  var statusDraft by rememberSaveable { mutableStateOf(SupportTicketStatus.OPEN) }
+  var isSending by rememberSaveable { mutableStateOf(false) }
+  var feedbackMessage by rememberSaveable { mutableStateOf<String?>(null) }
+
+  val filteredTickets =
+    remember(supportTickets, selectedFilter) {
+      when (selectedFilter) {
+        "UNREAD" -> supportTickets.filter { it.adminUnread }
+        SupportTicketStatus.OPEN ->
+          supportTickets.filter { SupportTicketStatus.normalize(it.status) == SupportTicketStatus.OPEN }
+        SupportTicketStatus.IN_PROGRESS ->
+          supportTickets.filter { SupportTicketStatus.normalize(it.status) == SupportTicketStatus.IN_PROGRESS }
+        SupportTicketStatus.RESOLVED ->
+          supportTickets.filter { SupportTicketStatus.normalize(it.status) == SupportTicketStatus.RESOLVED }
+        else -> supportTickets
+      }
+    }
+
+  val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.US) }
+
+  LazyColumn(
+    modifier = Modifier.fillMaxSize().testTag("admin_support_section"),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+    contentPadding = PaddingValues(bottom = 24.dp)
+  ) {
+    item {
+      Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+        border = BorderStroke(1.dp, AdminBorderColor)
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              Icon(
+                imageVector = Icons.Default.SupportAgent,
+                contentDescription = null,
+                tint = AdminBluePrimary
+              )
+              Column {
+                Text(
+                  text = "User Help & Support Requests",
+                  style = MaterialTheme.typography.titleMedium,
+                  fontWeight = FontWeight.Bold,
+                  color = AdminTextDark
+                )
+                Text(
+                  text = "${supportTickets.count { it.adminUnread }} unread • ${supportTickets.size} total requests",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = AdminTextMuted
+                )
+              }
+            }
+          }
+
+          Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            val filters =
+              listOf(
+                "ALL" to "All (${supportTickets.size})",
+                "UNREAD" to "Unread (${supportTickets.count { it.adminUnread }})",
+                SupportTicketStatus.OPEN to "Open",
+                SupportTicketStatus.IN_PROGRESS to "In Progress",
+                SupportTicketStatus.RESOLVED to "Resolved"
+              )
+            filters.forEach { (key, label) ->
+              FilterChip(
+                selected = selectedFilter == key,
+                onClick = { selectedFilter = key },
+                label = { Text(label) },
+                modifier = Modifier.testTag("admin_support_filter_$key")
+              )
+            }
+          }
+        }
+      }
+    }
+
+    if (filteredTickets.isEmpty()) {
+      item {
+        Card(
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+          border = BorderStroke(1.dp, AdminBorderColor)
+        ) {
+          Text(
+            text = "No support requests match the selected filter.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = AdminTextMuted,
+            modifier = Modifier.padding(20.dp)
+          )
+        }
+      }
+    } else {
+      items(filteredTickets, key = { it.id }) { ticket ->
+        val isExpanded = selectedTicketId == ticket.id
+        val normalizedStatus = SupportTicketStatus.normalize(ticket.status)
+        val statusColor =
+          when (normalizedStatus) {
+            SupportTicketStatus.RESOLVED -> AdminGreenSuccess
+            SupportTicketStatus.IN_PROGRESS -> AdminAmberWarning
+            else -> AdminBluePrimary
+          }
+        val createdLabel =
+          ticket.createdAt?.toDate()?.let { dateFormat.format(it) } ?: "Recent"
+
+        Card(
+          modifier =
+            Modifier.fillMaxWidth()
+              .clickable {
+                if (isExpanded) {
+                  selectedTicketId = null
+                } else {
+                  selectedTicketId = ticket.id
+                  statusDraft = normalizedStatus
+                  replyText = ""
+                  feedbackMessage = null
+                }
+              }
+              .testTag("admin_support_ticket_${ticket.id}"),
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(containerColor = AdminWhiteBg),
+          border =
+            BorderStroke(
+              width = if (ticket.adminUnread) 1.5.dp else 1.dp,
+              color = if (ticket.adminUnread) AdminBluePrimary else AdminBorderColor
+            )
+        ) {
+          Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Column(modifier = Modifier.weight(1f)) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                  if (ticket.adminUnread) {
+                    Surface(
+                      shape = RoundedCornerShape(50),
+                      color = AdminBlueTint,
+                      border = BorderStroke(1.dp, AdminBluePrimary)
+                    ) {
+                      Text(
+                        text = "NEW",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = AdminBluePrimary,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                      )
+                    }
+                  }
+                  Text(
+                    text = ticket.subject.ifBlank { "Support Inquiry" },
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = AdminTextDark,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                  )
+                }
+                Text(
+                  text =
+                    "${ticket.userName.ifBlank { "User" }} • ${ticket.userEmail.ifBlank { ticket.userId }} • ID: ${ticket.userId}",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = AdminTextSecondary,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                  text = "${ticket.category.ifBlank { "General" }} • $createdLabel",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = AdminTextMuted
+                )
+              }
+
+              Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = statusColor.copy(alpha = 0.12f),
+                border = BorderStroke(1.dp, statusColor.copy(alpha = 0.35f))
+              ) {
+                Text(
+                  text = normalizedStatus.replace('_', ' '),
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = statusColor,
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+              }
+            }
+
+            if (!isExpanded) {
+              Text(
+                text = ticket.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = AdminTextSecondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+              )
+            } else {
+              HorizontalDivider(color = AdminBorderColor)
+
+              // User Account & Original Message
+              Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = AdminSoftGreyBg,
+                border = BorderStroke(1.dp, AdminBorderColor),
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Column(
+                  modifier = Modifier.fillMaxWidth().padding(12.dp),
+                  verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                  Text(
+                    text = "Account Details",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = AdminTextDark
+                  )
+                  Text(
+                    text = "Name: ${ticket.userName.ifBlank { "TaskFlow User" }} | Email: ${ticket.userEmail.ifBlank { "N/A" }} | UID: ${ticket.userId}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AdminTextSecondary
+                  )
+                }
+              }
+
+              // Conversation History
+              if (ticket.messages.isNotEmpty()) {
+                Column(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                  ticket.messages.forEach { msg ->
+                    val isAdminMsg = msg.senderRole.equals("admin", ignoreCase = true)
+                    Surface(
+                      shape = RoundedCornerShape(10.dp),
+                      color = if (isAdminMsg) AdminBlueTint else AdminSoftGreyBg,
+                      border = BorderStroke(1.dp, AdminBorderColor),
+                      modifier = Modifier.fillMaxWidth()
+                    ) {
+                      Column(
+                        modifier = Modifier.fillMaxWidth().padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                      ) {
+                        Row(
+                          modifier = Modifier.fillMaxWidth(),
+                          horizontalArrangement = Arrangement.SpaceBetween,
+                          verticalAlignment = Alignment.CenterVertically
+                        ) {
+                          Text(
+                            text = if (isAdminMsg) "Admin (${msg.senderName.ifBlank { "Support" }})" else msg.senderName.ifBlank { "User" },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isAdminMsg) AdminBluePrimary else AdminTextDark
+                          )
+                          if (msg.createdAtMillis > 0L) {
+                            Text(
+                              text = dateFormat.format(Date(msg.createdAtMillis)),
+                              style = MaterialTheme.typography.labelSmall,
+                              color = AdminTextMuted
+                            )
+                          }
+                        }
+                        Text(
+                          text = msg.message,
+                          style = MaterialTheme.typography.bodySmall,
+                          color = AdminTextDark
+                        )
+                      }
+                    }
+                  }
+                }
+              } else {
+                Text(
+                  text = ticket.message,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = AdminTextDark
+                )
+                if (ticket.adminReply.isNotBlank()) {
+                  Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = AdminBlueTint,
+                    border = BorderStroke(1.dp, AdminBorderColor),
+                    modifier = Modifier.fillMaxWidth()
+                  ) {
+                    Column(
+                      modifier = Modifier.fillMaxWidth().padding(10.dp),
+                      verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                      Text(
+                        text = "Previous Admin Reply",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = AdminBluePrimary
+                      )
+                      Text(
+                        text = ticket.adminReply,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AdminTextDark
+                      )
+                    }
+                  }
+                }
+              }
+
+              // Status Selector
+              Text(
+                text = "Update Ticket Status",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = AdminTextDark
+              )
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                listOf(
+                  SupportTicketStatus.OPEN to "Open",
+                  SupportTicketStatus.IN_PROGRESS to "In Progress",
+                  SupportTicketStatus.RESOLVED to "Resolved"
+                ).forEach { (statusCode, statusLabel) ->
+                  FilterChip(
+                    selected = statusDraft == statusCode,
+                    onClick = { statusDraft = statusCode },
+                    label = { Text(statusLabel) },
+                    modifier = Modifier.testTag("admin_support_status_${ticket.id}_$statusCode")
+                  )
+                }
+              }
+
+              // Admin Reply Input
+              OutlinedTextField(
+                value = replyText,
+                onValueChange = { replyText = it },
+                label = { Text("Reply to User") },
+                placeholder = { Text("Write a clear response for the user...") },
+                minLines = 3,
+                modifier =
+                  Modifier.fillMaxWidth()
+                    .testTag("admin_support_reply_input_${ticket.id}")
+              )
+
+              if (!feedbackMessage.isNullOrBlank()) {
+                Text(
+                  text = feedbackMessage.orEmpty(),
+                  style = MaterialTheme.typography.labelSmall,
+                  color = AdminGreenSuccess,
+                  fontWeight = FontWeight.SemiBold
+                )
+              }
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Button(
+                  onClick = {
+                    isSending = true
+                    onUpdateTicket(ticket.id, statusDraft, replyText.trim()) { ok ->
+                      isSending = false
+                      if (ok) {
+                        replyText = ""
+                        feedbackMessage = "Support ticket updated and user notified."
+                      } else {
+                        feedbackMessage = "Failed to update support ticket."
+                      }
+                    }
+                  },
+                  enabled = !isSending,
+                  colors = ButtonDefaults.buttonColors(containerColor = AdminBluePrimary),
+                  shape = RoundedCornerShape(10.dp),
+                  modifier =
+                    Modifier.fillMaxWidth()
+                      .testTag("admin_support_send_reply_btn_${ticket.id}")
+                ) {
+                  Text(
+                    text =
+                      if (isSending) {
+                        "Saving..."
+                      } else if (replyText.trim().isNotEmpty()) {
+                        "Send Reply & Update Status"
+                      } else {
+                        "Update Status"
+                      },
+                    fontWeight = FontWeight.SemiBold
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

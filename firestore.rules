@@ -1220,7 +1220,8 @@ service cloud.firestore {
       match /telegram_task_states/{taskId} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
         allow create, update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) &&
-                              incoming().keys().hasAll(['taskId', 'userId', 'claimedAt']) &&
+                              incoming().keys().hasAll(['taskId', 'userId']) &&
+                              ('claimedAt' in incoming() || 'verifiedAt' in incoming() || 'joinClickedAt' in incoming()) &&
                               incoming().taskId == taskId &&
                               incoming().userId == userId;
         allow delete: if false;
@@ -1343,8 +1344,8 @@ service cloud.firestore {
     // - Withdrawal debit & refund transactions require atomic withdrawal creation / rejection.
     // - Promotional Coin transactions (DAILY_CHECKIN, WATCH_EARN, SPIN_EARN) require atomic promotionalCoins credit.
     match /transactions/{transactionId} {
-      allow get: if isSignedIn() && (isAdmin() || (resource != null && resource.data.userId == request.auth.uid));
-      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && (isAdmin() || (resource != null && (resource.data.userId == request.auth.uid || resource.data.status == 'CREDITED')));
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.status == 'CREDITED' || isAdmin());
       allow create: if isSignedIn() && (
         isValidAdminTaskRewardTransaction() ||
         isValidWithdrawalDebitTransaction(transactionId) ||
@@ -1445,20 +1446,35 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Admin Notifications Queue (notifies Admin when new withdrawal requests arrive)
+    // Admin Notifications Queue (notifies Admin when new withdrawal requests or support tickets arrive)
     match /admin_notifications/{notifId} {
       allow get, list: if isAdmin();
-      allow create: if isSignedIn() &&
-                    incoming().userId == request.auth.uid &&
-                    isNonEmptyString(incoming().referenceId, 128) &&
-                    notifId == 'admin_wd_' + incoming().referenceId &&
-                    !exists(/databases/$(database)/documents/admin_notifications/$(notifId)) &&
-                    !exists(/databases/$(database)/documents/withdrawal_requests/$(incoming().referenceId)) &&
-                    isNonEmptyString(incoming().title, 160) &&
-                    isNonEmptyString(incoming().body, 600) &&
-                    incoming().isRead == false &&
-                    existsAfter(/databases/$(database)/documents/withdrawal_requests/$(incoming().referenceId)) &&
-                    getAfter(/databases/$(database)/documents/withdrawal_requests/$(incoming().referenceId)).data.userId == request.auth.uid;
+      allow create: if isSignedIn() && (
+                    isAdmin() ||
+                    (
+                      incoming().userId == request.auth.uid &&
+                      isNonEmptyString(incoming().referenceId, 128) &&
+                      notifId == 'admin_wd_' + incoming().referenceId &&
+                      !exists(/databases/$(database)/documents/admin_notifications/$(notifId)) &&
+                      !exists(/databases/$(database)/documents/withdrawal_requests/$(incoming().referenceId)) &&
+                      isNonEmptyString(incoming().title, 160) &&
+                      isNonEmptyString(incoming().body, 600) &&
+                      incoming().isRead == false &&
+                      existsAfter(/databases/$(database)/documents/withdrawal_requests/$(incoming().referenceId)) &&
+                      getAfter(/databases/$(database)/documents/withdrawal_requests/$(incoming().referenceId)).data.userId == request.auth.uid
+                    ) ||
+                    (
+                      incoming().userId == request.auth.uid &&
+                      isNonEmptyString(incoming().referenceId, 128) &&
+                      notifId == 'admin_support_' + incoming().referenceId &&
+                      !exists(/databases/$(database)/documents/admin_notifications/$(notifId)) &&
+                      isNonEmptyString(incoming().title, 160) &&
+                      isNonEmptyString(incoming().body, 600) &&
+                      incoming().isRead == false &&
+                      existsAfter(/databases/$(database)/documents/support_tickets/$(incoming().referenceId)) &&
+                      getAfter(/databases/$(database)/documents/support_tickets/$(incoming().referenceId)).data.userId == request.auth.uid
+                    )
+                  );
       allow update: if isAdmin() && changedKeys().hasOnly(['isRead']);
       allow delete: if isAdmin();
     }
@@ -1473,15 +1489,24 @@ service cloud.firestore {
     // User Support Tickets / Inquiries
     match /support_tickets/{ticketId} {
       allow get: if isSignedIn() && (isAdmin() || (resource != null && resource.data.userId == request.auth.uid));
-      allow list: if isAdmin();
+      allow list: if isSignedIn() && (isAdmin() || (resource != null && resource.data.userId == request.auth.uid));
       allow create: if isSignedIn() &&
                     request.resource.data.userId == request.auth.uid &&
-                    hasExactKeys(['userId', 'userName', 'userEmail', 'category', 'subject', 'message', 'status', 'createdAt']) &&
+                    request.resource.data.keys().hasAll(['userId', 'userName', 'userEmail', 'subject', 'message', 'status', 'createdAt']) &&
                     isNonEmptyString(request.resource.data.subject, 200) &&
                     isNonEmptyString(request.resource.data.message, 4000) &&
                     request.resource.data.status == 'OPEN' &&
                     request.resource.data.createdAt is timestamp;
-      allow update: if isAdmin();
+      allow update: if isAdmin() || (
+                    isSignedIn() &&
+                    resource != null &&
+                    resource.data.userId == request.auth.uid &&
+                    request.resource.data.userId == resource.data.userId &&
+                    request.resource.data.subject == resource.data.subject &&
+                    changedKeys().hasOnly(['messages', 'userUnread', 'adminUnread', 'status', 'updatedAt']) &&
+                    request.resource.data.status in ['OPEN', 'IN_PROGRESS', 'RESOLVED'] &&
+                    request.resource.data.updatedAt is timestamp
+                  );
       allow delete: if isAdmin();
     }
 

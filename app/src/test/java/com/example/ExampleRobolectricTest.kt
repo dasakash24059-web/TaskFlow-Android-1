@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Looper
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -2107,6 +2108,287 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("admin_control_center_home").assertIsDisplayed()
     assertEquals(5, TaskStatus.ALL_STAGES.size)
   }
+
+  @Test
+  fun `Leaderboard computes accurate period earnings for All Time, This Month, and This Week excluding withdrawals and renders Podium and Ranks 4 to 6`() {
+    val nowMs = 1_773_500_000_000L // Fixed timestamp
+    val recentTxTs = com.google.firebase.Timestamp(java.util.Date(nowMs - 60_000L))
+    val oldMonthTxTs = com.google.firebase.Timestamp(java.util.Date(nowMs - 45L * 24L * 3600_000L))
+
+    val users =
+      listOf(
+        UserProfile(id = "u1", userId = "u1", displayName = "Aarav", balanceCoins = 100L), // Withdrew most coins, but earned 900 total
+        UserProfile(id = "u2", userId = "u2", displayName = "Diya", balanceCoins = 750L),
+        UserProfile(id = "u3", userId = "u3", displayName = "Kabir", balanceCoins = 600L),
+        UserProfile(id = "u4", userId = "u4", displayName = "Meera", balanceCoins = 500L),
+        UserProfile(id = "u5", userId = "u5", displayName = "Rohan", balanceCoins = 400L),
+        UserProfile(id = "u6", userId = "u6", displayName = "Sanya", balanceCoins = 300L)
+      )
+
+    val transactions =
+      listOf(
+        // Aarav earned 500 this week + 400 45 days ago = 900 All Time, plus a 800 withdrawal debit that MUST NOT reduce leaderboard score
+        com.example.data.model.TransactionRecord(
+          id = "tx1",
+          userId = "u1",
+          userName = "Aarav",
+          type = com.example.data.model.TransactionType.TASK_REWARD,
+          amountCoins = 500L,
+          status = "CREDITED",
+          createdAt = recentTxTs
+        ),
+        com.example.data.model.TransactionRecord(
+          id = "tx2",
+          userId = "u1",
+          userName = "Aarav",
+          type = com.example.data.model.TransactionType.ADMIN_BONUS,
+          amountCoins = 400L,
+          status = "CREDITED",
+          createdAt = oldMonthTxTs
+        ),
+        com.example.data.model.TransactionRecord(
+          id = "tx_wd",
+          userId = "u1",
+          userName = "Aarav",
+          type = com.example.data.model.TransactionType.WITHDRAWAL_DEBIT,
+          amountCoins = 800L,
+          status = "DEBITED",
+          createdAt = recentTxTs
+        ),
+        // Diya earned 750 this week
+        com.example.data.model.TransactionRecord(
+          id = "tx3",
+          userId = "u2",
+          userName = "Diya",
+          type = com.example.data.model.TransactionType.SPIN_EARN,
+          amountCoins = 750L,
+          status = "CREDITED",
+          createdAt = recentTxTs
+        ),
+        // Kabir earned 600 this week
+        com.example.data.model.TransactionRecord(
+          id = "tx4",
+          userId = "u3",
+          userName = "Kabir",
+          type = com.example.data.model.TransactionType.TELEGRAM_JOIN,
+          amountCoins = 600L,
+          status = "CREDITED",
+          createdAt = recentTxTs
+        ),
+        // Meera, Rohan, Sanya earned 500, 400, 300 this week
+        com.example.data.model.TransactionRecord(
+          id = "tx5",
+          userId = "u4",
+          userName = "Meera",
+          type = com.example.data.model.TransactionType.WATCH_EARN,
+          amountCoins = 500L,
+          status = "CREDITED",
+          createdAt = recentTxTs
+        ),
+        com.example.data.model.TransactionRecord(
+          id = "tx6",
+          userId = "u5",
+          userName = "Rohan",
+          type = com.example.data.model.TransactionType.DAILY_CHECKIN,
+          amountCoins = 400L,
+          status = "CREDITED",
+          createdAt = recentTxTs
+        ),
+        com.example.data.model.TransactionRecord(
+          id = "tx7",
+          userId = "u6",
+          userName = "Sanya",
+          type = com.example.data.model.TransactionType.SCRATCH_CARD,
+          amountCoins = 300L,
+          status = "CREDITED",
+          createdAt = recentTxTs
+        )
+      )
+
+    val allTimeRankings =
+      com.example.data.model.computeLeaderboardEntriesForPeriod(
+        users = users,
+        transactions = transactions,
+        period = com.example.data.model.LeaderboardPeriod.ALL_TIME,
+        nowMillis = nowMs
+      )
+    assertEquals(6, allTimeRankings.size)
+    // Aarav is #1 All Time with 900 credited coins (withdrawal debit of 800 is excluded!)
+    assertEquals("Aarav", allTimeRankings[0].displayName)
+    assertEquals(900L, allTimeRankings[0].earnedCoins)
+    assertEquals("Diya", allTimeRankings[1].displayName)
+    assertEquals(750L, allTimeRankings[1].earnedCoins)
+
+    val thisWeekRankings =
+      com.example.data.model.computeLeaderboardEntriesForPeriod(
+        users = users,
+        transactions = transactions,
+        period = com.example.data.model.LeaderboardPeriod.THIS_WEEK,
+        nowMillis = nowMs
+      )
+    // This week: Diya (750) is #1, Kabir (600) is #2, Aarav (500) is #3
+    assertEquals("Diya", thisWeekRankings[0].displayName)
+    assertEquals(750L, thisWeekRankings[0].earnedCoins)
+    assertEquals("Kabir", thisWeekRankings[1].displayName)
+    assertEquals(600L, thisWeekRankings[1].earnedCoins)
+    assertEquals("Aarav", thisWeekRankings[2].displayName)
+    assertEquals(500L, thisWeekRankings[2].earnedCoins)
+  }
+
+  @Test
+  fun `AdminManualBonusCreditCard credits User A, then User B, then User A again reliably`() {
+    val users =
+      listOf(
+        UserProfile(id = "user_a", userId = "user_a", displayName = "User A", email = "a@example.com", balanceCoins = 100L),
+        UserProfile(id = "user_b", userId = "user_b", displayName = "User B", email = "b@example.com", balanceCoins = 200L)
+      )
+    val creditedOperations = mutableListOf<Triple<String, Long, String>>()
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        androidx.compose.foundation.layout.Column(
+          modifier =
+            androidx.compose.ui.Modifier.verticalScroll(
+              androidx.compose.foundation.rememberScrollState()
+            )
+        ) {
+          com.example.ui.admin.AdminManualBonusCreditCard(
+            users = users,
+            manualBonuses = emptyList(),
+            isBusy = false,
+            onCreditBonus = { targetUid, coins, reason ->
+              creditedOperations.add(Triple(targetUid, coins, reason))
+            }
+          )
+        }
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. Credit User A (+150 Coins)
+    composeTestRule.onNodeWithTag("admin_manual_bonus_user_user_a").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("admin_manual_bonus_amount_input").performScrollTo().performTextInput("150")
+    composeTestRule.onNodeWithTag("admin_manual_bonus_reason_input").performScrollTo().performTextInput("First bonus A")
+    composeTestRule.onNodeWithTag("admin_manual_bonus_submit_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+
+    // 2. Credit User B (+250 Coins)
+    composeTestRule.onNodeWithTag("admin_manual_bonus_user_user_b").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("admin_manual_bonus_amount_input").performScrollTo().performTextInput("250")
+    composeTestRule.onNodeWithTag("admin_manual_bonus_reason_input").performScrollTo().performTextInput("Bonus B")
+    composeTestRule.onNodeWithTag("admin_manual_bonus_submit_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+
+    // 3. Credit User A again (+300 Coins)
+    composeTestRule.onNodeWithTag("admin_manual_bonus_user_user_a").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("admin_manual_bonus_amount_input").performScrollTo().performTextInput("300")
+    composeTestRule.onNodeWithTag("admin_manual_bonus_reason_input").performScrollTo().performTextInput("Second bonus A")
+    composeTestRule.onNodeWithTag("admin_manual_bonus_submit_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals(3, creditedOperations.size)
+    assertEquals(Triple("user_a", 150L, "First bonus A"), creditedOperations[0])
+    assertEquals(Triple("user_b", 250L, "Bonus B"), creditedOperations[1])
+    assertEquals(Triple("user_a", 300L, "Second bonus A"), creditedOperations[2])
+  }
+
+  @Test
+  fun `TelegramJoinTaskCard enforces sequential JOIN then VERIFY then CLAIM flow`() {
+    val task =
+      com.example.data.model.TelegramTaskItem(
+        id = "tg_seq_1",
+        taskId = "tg_seq_1",
+        title = "Join Official TaskFlow Channel",
+        channelUrl = "https://t.me/taskflow_official",
+        rewardCoins = 120L,
+        isActive = true
+      )
+    val stateHolder =
+      androidx.compose.runtime.mutableStateOf(
+        com.example.data.model.TelegramUserTaskState(
+          taskId = "tg_seq_1",
+          userId = "u_tg_1",
+          hasClickedJoin = false,
+          isMembershipVerified = false,
+          isClaimed = false
+        )
+      )
+    var joinClicked = false
+    var verifyClicked = false
+    var claimClicked = false
+
+    composeTestRule.setContent {
+      TaskFlowTheme {
+        com.example.ui.user.TelegramJoinTaskCard(
+          task = task,
+          taskState = stateHolder.value,
+          isBusy = false,
+          onJoin = {
+            joinClicked = true
+            stateHolder.value =
+              stateHolder.value.copy(
+                hasClickedJoin = true,
+                statusMessage = "Channel opened. After joining the Telegram channel, return and tap VERIFY."
+              )
+          },
+          onVerify = {
+            verifyClicked = true
+            if (!stateHolder.value.hasClickedJoin) {
+              stateHolder.value =
+                stateHolder.value.copy(
+                  isMembershipVerified = false,
+                  errorMessage = "Please tap JOIN and join the Telegram channel first, then tap VERIFY."
+                )
+            } else {
+              stateHolder.value =
+                stateHolder.value.copy(
+                  isMembershipVerified = true,
+                  errorMessage = "",
+                  statusMessage = "Membership verified! Tap CLAIM to collect your reward."
+                )
+            }
+          },
+          onClaim = {
+            claimClicked = true
+            stateHolder.value =
+              stateHolder.value.copy(
+                isClaimed = true,
+                rewardCoinsClaimed = 120L
+              )
+          }
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. Initially CLAIM is disabled
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsNotEnabled()
+
+    // 2. Clicking VERIFY before JOIN fails verification and keeps CLAIM disabled
+    composeTestRule.onNodeWithTag("user_telegram_verify_button").performClick()
+    composeTestRule.waitForIdle()
+    assertTrue(verifyClicked)
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("user_telegram_error_text").assertIsDisplayed()
+
+    // 3. Clicking JOIN records join click, does NOT auto-verify, and keeps CLAIM disabled
+    composeTestRule.onNodeWithTag("user_telegram_join_button").performClick()
+    composeTestRule.waitForIdle()
+    assertTrue(joinClicked)
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsNotEnabled()
+
+    // 4. Clicking VERIFY after JOIN succeeds and enables CLAIM
+    composeTestRule.onNodeWithTag("user_telegram_verify_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsEnabled()
+
+    // 5. Clicking CLAIM credits reward and disables buttons
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").performClick()
+    composeTestRule.waitForIdle()
+    assertTrue(claimClicked)
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsNotEnabled()
+  }
 }
+
 
 

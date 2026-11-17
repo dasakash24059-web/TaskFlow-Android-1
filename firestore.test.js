@@ -3020,6 +3020,114 @@ test("15. Step 9B Security Audit: blocks client /transactions creation for all s
   await assertSucceeds(validBatch.commit());
 });
 
+test("16. Support Tickets Security: users can only read/create/reply to their own support requests; admins can read all, update status, and post admin replies", async () => {
+  const ts = nowTimestamp();
+
+  const aliceDb = testEnv
+    .authenticatedContext(ALICE_UID, {
+      email: ALICE_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const bobDb = testEnv
+    .authenticatedContext(BOB_UID, {
+      email: BOB_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const adminDb = testEnv
+    .authenticatedContext(ADMIN_UID, {
+      email: ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const ticketId = "sup_alice_001";
+
+  // 1. Alice can create her own OPEN support request and notify admin atomically
+  const createBatch = aliceDb.batch();
+  createBatch.set(aliceDb.collection("support_tickets").doc(ticketId), {
+    id: ticketId,
+    userId: ALICE_UID,
+    userName: "Alice",
+    userEmail: ALICE_EMAIL,
+    category: "Reward / Wallet",
+    subject: "Missing task credit",
+    message: "I completed the task yesterday.",
+    status: "OPEN",
+    adminReply: "",
+    messages: [
+      {
+        senderId: ALICE_UID,
+        senderName: "Alice",
+        senderRole: "user",
+        message: "I completed the task yesterday.",
+        createdAtMillis: Date.now(),
+      },
+    ],
+    adminUnread: true,
+    userUnread: false,
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  createBatch.set(aliceDb.collection("admin_notifications").doc(`admin_support_${ticketId}`), {
+    id: `admin_support_${ticketId}`,
+    type: "SUPPORT_TICKET",
+    title: "New Support Request: Missing task credit",
+    body: "Alice (Reward / Wallet): I completed the task yesterday.",
+    referenceId: ticketId,
+    userId: ALICE_UID,
+    userName: "Alice",
+    isRead: false,
+    createdAt: ts,
+  });
+  await assertSucceeds(createBatch.commit());
+
+  // 2. Alice can read her own support ticket; Bob CANNOT read or update Alice's ticket
+  await assertSucceeds(aliceDb.collection("support_tickets").doc(ticketId).get());
+  await assertFails(bobDb.collection("support_tickets").doc(ticketId).get());
+  await assertFails(
+    bobDb.collection("support_tickets").doc(ticketId).update({
+      status: "RESOLVED",
+      updatedAt: new Date(),
+    })
+  );
+
+  // 3. Admin can read all support requests, update status, and post admin replies
+  await assertSucceeds(adminDb.collection("support_tickets").doc(ticketId).get());
+  await assertSucceeds(
+    adminDb.collection("support_tickets").doc(ticketId).update({
+      status: "IN_PROGRESS",
+      adminReply: "We are reviewing your submission.",
+      adminUnread: false,
+      userUnread: true,
+      updatedAt: new Date(),
+    })
+  );
+
+  // 4. Alice can send a follow-up reply on her own ticket
+  await assertSucceeds(
+    aliceDb.collection("support_tickets").doc(ticketId).update({
+      messages: [
+        {
+          senderId: ALICE_UID,
+          senderName: "Alice",
+          senderRole: "user",
+          message: "Thank you, here is my reference ID.",
+          createdAtMillis: Date.now(),
+        },
+      ],
+      adminUnread: true,
+      userUnread: false,
+      status: "IN_PROGRESS",
+      updatedAt: new Date(),
+    })
+  );
+});
+
+
 
 
 
