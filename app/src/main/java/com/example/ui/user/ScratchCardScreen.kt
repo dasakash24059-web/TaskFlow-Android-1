@@ -353,35 +353,21 @@ fun ScratchCardScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
           ) {
-            Surface(
-              shape = CircleShape,
-              color = Color(0xFFFEF3C7),
-              border = BorderStroke(2.dp, Color(0xFFF59E0B)),
-              modifier = Modifier.size(56.dp)
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                Icon(
-                  imageVector = Icons.Default.MonetizationOn,
-                  contentDescription = null,
-                  tint = Color(0xFFD97706),
-                  modifier = Modifier.size(34.dp)
-                )
-              }
-            }
+            com.example.ui.components.TFTokenIcon(size = 54.dp)
             Spacer(modifier = Modifier.height(10.dp))
             Text(
               text = "+${formatCoins(revealedCoins)}",
-              fontSize = 44.sp,
-              fontWeight = FontWeight.Black,
+              fontSize = 42.sp,
+              fontWeight = FontWeight.Bold,
               color = Color(0xFFFDE047),
-              letterSpacing = 1.sp
+              letterSpacing = 0.5.sp
             )
             Text(
-              text = "COINS",
-              fontSize = 15.sp,
-              fontWeight = FontWeight.ExtraBold,
+              text = "TF REWARD",
+              fontSize = 14.sp,
+              fontWeight = FontWeight.SemiBold,
               color = Color(0xFFFBBF24),
-              letterSpacing = 2.sp
+              letterSpacing = 1.5.sp
             )
           }
         }

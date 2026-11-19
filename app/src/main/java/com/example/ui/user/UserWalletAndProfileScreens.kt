@@ -236,15 +236,21 @@ fun UserWalletScreen(
               }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            Text(
-              text = formatCoins(totalBalanceCoins),
-              style = MaterialTheme.typography.headlineLarge,
-              color = MaterialTheme.colorScheme.onSurface,
-              fontWeight = FontWeight.Bold,
-              modifier = Modifier.testTag("wallet_available_balance")
-            )
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+              com.example.ui.components.TFTokenIcon(size = 30.dp)
+              Text(
+                text = formatCoins(totalBalanceCoins),
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.testTag("wallet_available_balance")
+              )
+            }
 
             Spacer(modifier = Modifier.height(10.dp))
 

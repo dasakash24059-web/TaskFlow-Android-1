@@ -81,7 +81,7 @@ private val DarkColorScheme =
 // TaskFlow Balanced Light Theme (Default) — Deep Navy Blue, Clean White & Subtle Neutral Slate
 private val LightColorScheme =
   lightColorScheme(
-    primary = Color(0xFF1E3A8A),
+    primary = Color(0xFF1D4ED8),
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFDBEAFE),
     onPrimaryContainer = Color(0xFF1E3A8A),
@@ -89,15 +89,15 @@ private val LightColorScheme =
     onSecondary = Color(0xFFFFFFFF),
     secondaryContainer = Color(0xFFE2E8F0),
     onSecondaryContainer = Color(0xFF0F172A),
-    tertiary = Color(0xFF0F766E),
+    tertiary = Color(0xFFD97706),
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFCCFBF1),
-    onTertiaryContainer = Color(0xFF115E59),
-    background = Color(0xFFF1F5F9),
+    tertiaryContainer = Color(0xFFFEF3C7),
+    onTertiaryContainer = Color(0xFF92400E),
+    background = Color(0xFFF8FAFC),
     onBackground = Color(0xFF0F172A),
     surface = Color(0xFFFFFFFF),
     onSurface = Color(0xFF0F172A),
-    surfaceVariant = Color(0xFFF8FAFC),
+    surfaceVariant = Color(0xFFF1F5F9),
     onSurfaceVariant = Color(0xFF475569),
     error = Color(0xFFDC2626),
     onError = Color(0xFFFFFFFF),
@@ -111,33 +111,35 @@ val TaskFlowTypography =
   Typography(
     displayLarge =
       TextStyle(
-        fontFamily = SpaceGroteskFontFamily,
-        fontWeight = FontWeight.Bold,
+        fontFamily = PlusJakartaSansFontFamily,
+        fontWeight = FontWeight.SemiBold,
         fontSize = 30.sp,
         lineHeight = 36.sp,
         letterSpacing = (-0.4).sp
       ),
     displayMedium =
       TextStyle(
-        fontFamily = SpaceGroteskFontFamily,
-        fontWeight = FontWeight.Bold,
-        fontSize = 25.sp,
+        fontFamily = PlusJakartaSansFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 24.sp,
         lineHeight = 32.sp,
         letterSpacing = (-0.25).sp
       ),
     headlineLarge =
       TextStyle(
-        fontFamily = SpaceGroteskFontFamily,
+        fontFamily = PlusJakartaSansFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 22.sp,
-        lineHeight = 28.sp
+        lineHeight = 28.sp,
+        letterSpacing = (-0.2).sp
       ),
     headlineMedium =
       TextStyle(
-        fontFamily = SpaceGroteskFontFamily,
+        fontFamily = PlusJakartaSansFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 19.sp,
-        lineHeight = 25.sp
+        lineHeight = 25.sp,
+        letterSpacing = (-0.1).sp
       ),
     titleLarge =
       TextStyle(
@@ -185,23 +187,25 @@ val TaskFlowTypography =
       TextStyle(
         fontFamily = PlusJakartaSansFontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 13.5.sp,
-        lineHeight = 18.sp
+        fontSize = 13.sp,
+        lineHeight = 18.sp,
+        letterSpacing = 0.1.sp
       ),
     labelMedium =
       TextStyle(
         fontFamily = PlusJakartaSansFontFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 12.sp,
-        lineHeight = 16.sp
+        lineHeight = 16.sp,
+        letterSpacing = 0.1.sp
       ),
     labelSmall =
       TextStyle(
         fontFamily = PlusJakartaSansFontFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
-        lineHeight = 14.sp,
-        letterSpacing = 0.2.sp
+        lineHeight = 15.sp,
+        letterSpacing = 0.15.sp
       )
   )
 

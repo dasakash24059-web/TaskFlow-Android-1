@@ -375,12 +375,21 @@ class FirebaseRewardCloudFunctionsClient(
   }
 
   private fun isCloudFunctionMissing(err: Throwable): Boolean {
-    if (!hasCustomCallableInvoker) return true
     if (err is FirebaseFunctionsException) {
       return err.code == FirebaseFunctionsException.Code.NOT_FOUND ||
         err.code == FirebaseFunctionsException.Code.UNAVAILABLE
     }
     val msg = err.message.orEmpty()
+    if (
+      msg.contains("PERMISSION_DENIED", ignoreCase = true) ||
+        msg.contains("FAILED_PRECONDITION", ignoreCase = true) ||
+        msg.contains("ALREADY_EXISTS", ignoreCase = true) ||
+        msg.contains("INVALID_ARGUMENT", ignoreCase = true) ||
+        msg.contains("UNAUTHENTICATED", ignoreCase = true)
+    ) {
+      return false
+    }
+    if (!hasCustomCallableInvoker) return true
     return msg.contains("NOT_FOUND", ignoreCase = true) ||
       msg.contains("UNAVAILABLE", ignoreCase = true) ||
       msg.contains("404", ignoreCase = true)
@@ -1650,7 +1659,10 @@ class FirebaseRewardCloudFunctionsClient(
       } catch (e: CancellationException) {
         throw e
       } catch (e: Throwable) {
-        if (isCloudFunctionMissing(e)) {
+        val isServerOnlyTelegramCall =
+          functionName == "verifyTelegramTaskMembership" ||
+            functionName == "claimTelegramTaskReward"
+        if (!isServerOnlyTelegramCall && isCloudFunctionMissing(e)) {
           handleLocalCallableFallback(functionName, payload)
         } else {
           throw e

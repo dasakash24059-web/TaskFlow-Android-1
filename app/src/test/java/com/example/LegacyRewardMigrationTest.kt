@@ -1124,7 +1124,7 @@ class LegacyRewardMigrationTest {
       val finalState = vm.scratchCardUiState.value
       assertEquals(null, finalState.activeSession)
       assertEquals(null, finalState.errorMessage)
-      assertTrue(finalState.successMessage?.contains("45 Coins") == true)
+      assertTrue(finalState.successMessage?.contains("45 TF") == true)
       assertEquals(1L, finalState.dailyState.scratchesCompletedToday)
       assertFalse(finalState.dailyState.canScratchNow)
     } finally {

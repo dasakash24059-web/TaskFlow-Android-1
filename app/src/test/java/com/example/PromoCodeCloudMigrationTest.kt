@@ -311,7 +311,7 @@ class PromoCodeCloudMigrationTest {
         assertEquals("BONUS100", vm.promoRedemptionUiState.value.lastRedeemedCode)
         assertEquals(100L, vm.promoRedemptionUiState.value.lastCreditedCoins)
         assertTrue(
-          vm.promoRedemptionUiState.value.successMessage.orEmpty().contains("+100 Coins")
+          vm.promoRedemptionUiState.value.successMessage.orEmpty().contains("+100 TF")
         )
         assertNull(vm.promoRedemptionUiState.value.errorMessage)
       } finally {

@@ -668,6 +668,15 @@ class RewardsSystemTest {
     var joinedTask = ""
     var verifiedTask = ""
     var claimedTask = ""
+    val stateHolder =
+      androidx.compose.runtime.mutableStateOf(
+        TelegramUserTaskState(
+          taskId = "tg_1",
+          userId = "u1",
+          hasClickedJoin = false,
+          isMembershipVerified = false
+        )
+      )
 
     composeTestRule.setContent {
       TaskFlowTheme {
@@ -678,8 +687,11 @@ class RewardsSystemTest {
           onSelectTask = {},
           currentUserId = "u1",
           nextTelegramTask = task1,
-          telegramTaskState = TelegramUserTaskState(taskId = "tg_1", userId = "u1", isMembershipVerified = false),
-          onJoinTelegramTask = { joinedTask = it.effectiveTaskId },
+          telegramTaskState = stateHolder.value,
+          onJoinTelegramTask = {
+            joinedTask = it.effectiveTaskId
+            stateHolder.value = stateHolder.value.copy(hasClickedJoin = true)
+          },
           onVerifyTelegramTask = { verifiedTask = it.effectiveTaskId },
           onClaimTelegramTask = { claimedTask = it.effectiveTaskId }
         )
@@ -689,10 +701,19 @@ class RewardsSystemTest {
     composeTestRule.onNodeWithTag("user_telegram_task_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("user_telegram_new_badge").assertIsDisplayed()
     composeTestRule.onNodeWithTag("user_telegram_reward_badge").assertIsDisplayed()
-    composeTestRule.onNodeWithText("+350 Coins").assertIsDisplayed()
+    composeTestRule.onNodeWithText("+350 TF").assertIsDisplayed()
+
+    // State 1: Single dynamic button displays JOIN NOW; VERIFY & CLAIM buttons do not exist simultaneously
+    composeTestRule.onNodeWithTag("user_telegram_verify_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertDoesNotExist()
     composeTestRule.onNodeWithTag("user_telegram_join_button").assertIsDisplayed().performClick()
+    composeTestRule.waitForIdle()
+
+    // State 2: After JOIN click, the single dynamic button transitions to VERIFY; CLAIM still does not exist
+    composeTestRule.onNodeWithTag("user_telegram_join_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertDoesNotExist()
     composeTestRule.onNodeWithTag("user_telegram_verify_button").assertIsDisplayed().performClick()
-    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsDisplayed().assertIsNotEnabled()
+
     assertEquals("tg_1", joinedTask)
     assertEquals("tg_1", verifiedTask)
     assertEquals("", claimedTask)

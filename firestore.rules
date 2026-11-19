@@ -1223,7 +1223,14 @@ service cloud.firestore {
                               incoming().keys().hasAll(['taskId', 'userId']) &&
                               ('claimedAt' in incoming() || 'verifiedAt' in incoming() || 'joinClickedAt' in incoming()) &&
                               incoming().taskId == taskId &&
-                              incoming().userId == userId;
+                              incoming().userId == userId &&
+                              (
+                                isAdmin() ||
+                                (
+                                  (!('isMembershipVerified' in incoming()) || incoming().isMembershipVerified == false || (resource != null && resource.data.isMembershipVerified == true)) &&
+                                  (!('isClaimed' in incoming()) || incoming().isClaimed == false || (resource != null && resource.data.isClaimed == true))
+                                )
+                              );
         allow delete: if false;
       }
 

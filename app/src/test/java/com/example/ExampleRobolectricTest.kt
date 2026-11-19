@@ -966,7 +966,7 @@ class ExampleRobolectricTest {
     }
     composeTestRule.waitForIdle()
 
-    composeTestRule.onNodeWithTag("wallet_available_balance").assertIsDisplayed().assertTextEquals("43,750 Coins")
+    composeTestRule.onNodeWithTag("wallet_available_balance").assertIsDisplayed().assertTextEquals("43,750 TF")
     composeTestRule.onNodeWithTag("wallet_withdraw_button").assertIsDisplayed().performClick()
     assertTrue(openedMain)
 
@@ -1037,8 +1037,8 @@ class ExampleRobolectricTest {
 
     composeTestRule.onNodeWithTag("upi_denom_200").assertIsDisplayed()
     composeTestRule.onNodeWithTag("upi_denom_500").assertIsDisplayed()
-    composeTestRule.onAllNodesWithText("33,000 Coins").onFirst().assertIsDisplayed()
-    composeTestRule.onNodeWithText("82,500 Coins").assertIsDisplayed()
+    composeTestRule.onAllNodesWithText("33,000 TF").onFirst().assertIsDisplayed()
+    composeTestRule.onNodeWithText("82,500 TF").assertIsDisplayed()
 
     // No pre-submit error shown on initial render
     composeTestRule.onNodeWithTag("upi_validation_error").assertDoesNotExist()
@@ -1082,9 +1082,9 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("gift_card_denom_150").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("gift_card_denom_200").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("gift_card_denom_250").performScrollTo().assertIsDisplayed()
-    composeTestRule.onAllNodesWithText("33,000 Coins").onFirst().assertExists()
-    composeTestRule.onNodeWithText("44,000 Coins").assertExists()
-    composeTestRule.onNodeWithText("55,000 Coins").assertExists()
+    composeTestRule.onAllNodesWithText("33,000 TF").onFirst().assertExists()
+    composeTestRule.onNodeWithText("44,000 TF").assertExists()
+    composeTestRule.onNodeWithText("55,000 TF").assertExists()
 
     // No email or phone number inputs
     composeTestRule.onNodeWithText("Email", substring = true).assertDoesNotExist()
@@ -1661,7 +1661,7 @@ class ExampleRobolectricTest {
 
     composeTestRule.onNodeWithTag("wallet_available_balance").assertIsDisplayed()
     composeTestRule.onNodeWithTag("wallet_total_earnings").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("wallet_pending_rewards").assertIsDisplayed().assertTextEquals("4,375 Coins")
+    composeTestRule.onNodeWithTag("wallet_pending_rewards").assertIsDisplayed().assertTextEquals("4,375 TF")
     composeTestRule
       .onNodeWithTag("user_wallet_screen")
       .performScrollToNode(hasTestTag("wallet_transaction_history_section"))
@@ -2023,8 +2023,8 @@ class ExampleRobolectricTest {
       )
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("watch_earn_ready_to_claim_banner").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithText("+32 Coins").assertIsDisplayed()
-    composeTestRule.onNodeWithText("+1–200 Coins").assertDoesNotExist()
+    composeTestRule.onNodeWithText("+32 TF").assertIsDisplayed()
+    composeTestRule.onNodeWithText("+1–200 TF").assertDoesNotExist()
     composeTestRule.onNodeWithTag("claim_watch_reward_button").performScrollTo().assertIsDisplayed().performClick()
     assertTrue(rewardClaimed)
 
@@ -2314,7 +2314,8 @@ class ExampleRobolectricTest {
         )
       )
     var joinClicked = false
-    var verifyClicked = false
+    var verifyClickedCount = 0
+    var serverMembershipConfirmed = false
     var claimClicked = false
 
     composeTestRule.setContent {
@@ -2332,12 +2333,13 @@ class ExampleRobolectricTest {
               )
           },
           onVerify = {
-            verifyClicked = true
-            if (!stateHolder.value.hasClickedJoin) {
+            verifyClickedCount++
+            if (!stateHolder.value.hasClickedJoin || !serverMembershipConfirmed) {
               stateHolder.value =
                 stateHolder.value.copy(
                   isMembershipVerified = false,
-                  errorMessage = "Please tap JOIN and join the Telegram channel first, then tap VERIFY."
+                  errorMessage = "We could not verify your membership in this Telegram channel. Please join the channel and tap VERIFY again.",
+                  statusMessage = ""
                 )
             } else {
               stateHolder.value =
@@ -2361,32 +2363,41 @@ class ExampleRobolectricTest {
     }
     composeTestRule.waitForIdle()
 
-    // 1. Initially CLAIM is disabled
-    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsNotEnabled()
+    // 1. State 1: Initial state shows ONLY JOIN NOW button (never VERIFY or CLAIM)
+    composeTestRule.onNodeWithTag("user_telegram_join_button").assertIsDisplayed().assertIsEnabled()
+    composeTestRule.onNodeWithTag("user_telegram_verify_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertDoesNotExist()
 
-    // 2. Clicking VERIFY before JOIN fails verification and keeps CLAIM disabled
-    composeTestRule.onNodeWithTag("user_telegram_verify_button").performClick()
-    composeTestRule.waitForIdle()
-    assertTrue(verifyClicked)
-    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsNotEnabled()
-    composeTestRule.onNodeWithTag("user_telegram_error_text").assertIsDisplayed()
-
-    // 3. Clicking JOIN records join click, does NOT auto-verify, and keeps CLAIM disabled
+    // 2. State 2: Tapping JOIN NOW opens Telegram and transitions the single button to VERIFY (does NOT auto-verify or show CLAIM)
     composeTestRule.onNodeWithTag("user_telegram_join_button").performClick()
     composeTestRule.waitForIdle()
     assertTrue(joinClicked)
-    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("user_telegram_join_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("user_telegram_verify_button").assertIsDisplayed().assertIsEnabled()
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertDoesNotExist()
 
-    // 4. Clicking VERIFY after JOIN succeeds and enables CLAIM
+    // 3. Tapping VERIFY when user has NOT joined the channel fails verification, shows error, and keeps button at VERIFY
     composeTestRule.onNodeWithTag("user_telegram_verify_button").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsEnabled()
+    assertEquals(1, verifyClickedCount)
+    composeTestRule.onNodeWithTag("user_telegram_error_text").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("user_telegram_verify_button").assertIsDisplayed().assertIsEnabled()
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertDoesNotExist()
 
-    // 5. Clicking CLAIM credits reward and disables buttons
+    // 4. State 3: After user actually joins the Telegram channel, tapping VERIFY succeeds and transitions button to CLAIM
+    serverMembershipConfirmed = true
+    composeTestRule.onNodeWithTag("user_telegram_verify_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(2, verifyClickedCount)
+    composeTestRule.onNodeWithTag("user_telegram_verify_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsDisplayed().assertIsEnabled()
+
+    // 5. State 4: Tapping CLAIM credits reward and transitions button to COMPLETED (disabled)
     composeTestRule.onNodeWithTag("user_telegram_claim_button").performClick()
     composeTestRule.waitForIdle()
     assertTrue(claimClicked)
-    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("user_telegram_claim_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("user_telegram_completed_button").assertIsDisplayed().assertIsNotEnabled()
   }
 }
 

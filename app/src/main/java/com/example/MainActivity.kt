@@ -552,73 +552,44 @@ private fun AuthenticatedWorkspace(
         title = {
           Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
           ) {
-            TaskFlowBrandLogo(size = 30.dp)
-            Text(
-              text = stringResource(R.string.app_name),
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              softWrap = false,
-              overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-            )
+            TaskFlowBrandLogo(size = 36.dp)
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+              Text(
+                text = stringResource(R.string.app_name),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                softWrap = false,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+              )
+              Text(
+                text = "Complete • Earn • Grow",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false
+              )
+            }
           }
         },
         actions = {
-          // Single Compact Header Token Balance Badge beside Notification Bell (User Mode)
+          // Single Compact Header TF Token Balance Badge beside Notification Bell (User Mode)
           if (activePortal == PortalLoginTarget.USER_APP || !isAdminAuthorized) {
             val headerBalanceCoins =
               (userProfileState as? UiState.Success)?.data?.getEffectiveBalanceCoins() ?: 0L
-            Surface(
-              shape = RoundedCornerShape(50),
-              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-              border =
-                androidx.compose.foundation.BorderStroke(
-                  1.dp,
-                  Color(0xFFD97706).copy(alpha = 0.4f)
-                ),
-              modifier =
-                Modifier.clip(RoundedCornerShape(50))
-                  .clickable {
-                    viewModel.closeWithdrawalFlow()
-                    viewModel.setUserTab(UserTab.WALLET)
-                  }
-                  .testTag("home_header_token_badge")
-            ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-              ) {
-                Surface(
-                  shape = CircleShape,
-                  color = Color(0xFFF59E0B).copy(alpha = 0.22f),
-                  border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFD97706)),
-                  modifier = Modifier.size(16.dp)
-                ) {
-                  Box(contentAlignment = Alignment.Center) {
-                    Text(
-                      text = "C",
-                      style = MaterialTheme.typography.labelSmall,
-                      fontSize = 9.sp,
-                      fontWeight = FontWeight.ExtraBold,
-                      color = Color(0xFFB45309)
-                    )
-                  }
-                }
-                Text(
-                  text = "$headerBalanceCoins",
-                  style = MaterialTheme.typography.labelLarge,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onSurface,
-                  maxLines = 1,
-                  softWrap = false,
-                  modifier = Modifier.testTag("home_header_token_amount")
-                )
-              }
-            }
+            com.example.ui.components.TFBalanceDisplay(
+              balanceCoins = headerBalanceCoins,
+              tokenSize = 22.dp,
+              amountTestTag = "home_header_token_amount",
+              onClick = {
+                viewModel.closeWithdrawalFlow()
+                viewModel.setUserTab(UserTab.WALLET)
+              },
+              modifier = Modifier.testTag("home_header_token_badge")
+            )
           }
 
           val unreadCount = userNotifications.count { !it.isRead }

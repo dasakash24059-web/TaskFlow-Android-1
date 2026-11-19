@@ -2782,7 +2782,7 @@ class TaskFlowViewModel(
             revealedCoins = 0L,
             dailyState = nextDaily,
             errorMessage = null,
-            successMessage = "Successfully claimed +${formatCoins(coins)} Coins!"
+            successMessage = "Successfully claimed +${formatCoins(coins)}!"
           )
         }
         if (shouldPrepareNextCard) {

@@ -2272,14 +2272,23 @@ async function handleVerifyTelegramTaskMembership(request, deps = {}) {
   }
 
   const isMember = parseTelegramChatMemberStatus(tgRes);
+  const ts = getDefaultServerTimestamp(deps);
   if (!isMember) {
+    await stateRef.set(
+      {
+        taskId,
+        userId,
+        isMembershipVerified: false,
+        updatedAt: ts
+      },
+      { merge: true }
+    );
     throw new HttpsError(
       "permission-denied",
       "You are not a member of this Telegram channel yet. Tap JOIN first, then VERIFY."
     );
   }
 
-  const ts = getDefaultServerTimestamp(deps);
   await stateRef.set(
     {
       taskId,

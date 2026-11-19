@@ -33,9 +33,39 @@ fun centsToCoins(cents: Long): Long = (cents * COINS_PER_RUPEE) / 100L
 fun coinsToCents(coins: Long): Long = (coins * 100L) / COINS_PER_RUPEE
 
 /**
- * Formats integer Coins for user-facing display (e.g., "25,000 Coins").
+ * Formats integer TF tokens for user-facing display (e.g., "375 TF", "25,000 TF").
  */
-fun formatCoins(coins: Long): String = "${String.format(Locale.US, "%,d", coins)} Coins"
+fun formatCoins(coins: Long): String = "${String.format(Locale.US, "%,d", coins)} TF"
+
+/**
+ * Formats integer TF tokens for user-facing display (e.g., "375 TF", "25,000 TF").
+ */
+fun formatTf(coins: Long): String = formatCoins(coins)
+
+/**
+ * Formats TF token amounts into compact notation for leaderboards and badges (e.g., "375 TF", "12.5K TF").
+ */
+fun formatCompactTf(coins: Long): String {
+  val absVal = kotlin.math.abs(coins)
+  val sign = if (coins < 0) "-" else ""
+  return when {
+    absVal >= 1_000_000L -> {
+      val m = absVal / 1_000_000.0
+      val formatted =
+        if (absVal % 1_000_000L == 0L) String.format(Locale.US, "%dM", absVal / 1_000_000L)
+        else String.format(Locale.US, "%.1fM", m).replace(".0M", "M")
+      "$sign$formatted TF"
+    }
+    absVal >= 1_000L -> {
+      val k = absVal / 1_000.0
+      val formatted =
+        if (absVal % 1_000L == 0L) String.format(Locale.US, "%dK", absVal / 1_000L)
+        else String.format(Locale.US, "%.1fK", k).replace(".0K", "K")
+      "$sign$formatted TF"
+    }
+    else -> "$coins TF"
+  }
+}
 
 /**
  * Returns true if the given email or role belongs to the administrator.

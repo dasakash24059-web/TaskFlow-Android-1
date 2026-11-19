@@ -214,7 +214,283 @@ fun VerifiedBadge(
 }
 
 /**
- * High-contrast Coin Badge component for displaying Coin rewards and balances clearly on light & dark cards.
+ * Master Reusable Hexagonal Gold TF Token (`TFTokenIcon` / `TFToken`).
+ * Visual specification matching reference design:
+ * - Regular pointy-top hexagonal token shape.
+ * - Metallic golden outer border with beveled golden edges on all sides.
+ * - Deep royal purple inner hexagonal surface.
+ * - Distinctive white/golden "TF" letters centered inside.
+ * - Clean, polished 2D appearance with subtle metallic highlights.
+ */
+@Composable
+fun TFTokenIcon(
+  modifier: Modifier = Modifier,
+  size: Dp = 22.dp
+) {
+  Canvas(
+    modifier =
+      modifier
+        .size(size)
+        .testTag("tf_token_icon")
+  ) {
+    val w = this.size.width
+    val h = this.size.height
+    val cx = w * 0.5f
+    val cy = h * 0.5f
+
+    fun hexVertex(radiusX: Float, radiusY: Float, index: Int): Offset {
+      val angleDeg = -90.0 + index * 60.0
+      val angleRad = Math.toRadians(angleDeg)
+      return Offset(
+        x = cx + (radiusX * kotlin.math.cos(angleRad)).toFloat(),
+        y = cy + (radiusY * kotlin.math.sin(angleRad)).toFloat()
+      )
+    }
+
+    val outerRx = w * 0.47f
+    val outerRy = h * 0.48f
+    val midRx = w * 0.375f
+    val midRy = h * 0.385f
+    val innerRx = w * 0.335f
+    val innerRy = h * 0.345f
+
+    val outerVertices = (0..5).map { hexVertex(outerRx, outerRy, it) }
+    val midVertices = (0..5).map { hexVertex(midRx, midRy, it) }
+    val innerVertices = (0..5).map { hexVertex(innerRx, innerRy, it) }
+
+    val outerHexPath = Path().apply {
+      moveTo(outerVertices[0].x, outerVertices[0].y)
+      for (i in 1..5) lineTo(outerVertices[i].x, outerVertices[i].y)
+      close()
+    }
+
+    // 1. Base metallic gold hexagon fill
+    drawPath(
+      path = outerHexPath,
+      brush =
+        Brush.linearGradient(
+          colors = listOf(Color(0xFFFDE047), Color(0xFFF59E0B), Color(0xFFB45309)),
+          start = Offset(0f, 0f),
+          end = Offset(w, h)
+        )
+    )
+
+    // 2. Six beveled golden facet sides around the outer perimeter
+    val facetColors =
+      listOf(
+        Color(0xFFFEF08A), // Top-Right bevel (bright highlight)
+        Color(0xFFF59E0B), // Right bevel (metallic mid gold)
+        Color(0xFFD97706), // Bottom-Right bevel (rich amber gold)
+        Color(0xFFB45309), // Bottom-Left bevel (deep burnished gold)
+        Color(0xFFF59E0B), // Left bevel (warm gold)
+        Color(0xFFFDE047)  // Top-Left bevel (bright golden edge)
+      )
+    for (i in 0..5) {
+      val next = (i + 1) % 6
+      val facetPath = Path().apply {
+        moveTo(outerVertices[i].x, outerVertices[i].y)
+        lineTo(outerVertices[next].x, outerVertices[next].y)
+        lineTo(midVertices[next].x, midVertices[next].y)
+        lineTo(midVertices[i].x, midVertices[i].y)
+        close()
+      }
+      drawPath(path = facetPath, color = facetColors[i])
+    }
+
+    // 3. Outer golden rim stroke
+    drawPath(
+      path = outerHexPath,
+      color = Color(0xFFB45309),
+      style = Stroke(width = (w * 0.035f).coerceAtLeast(0.8f), join = StrokeJoin.Round)
+    )
+
+    // 4. Inner golden ring cushion
+    val midHexPath = Path().apply {
+      moveTo(midVertices[0].x, midVertices[0].y)
+      for (i in 1..5) lineTo(midVertices[i].x, midVertices[i].y)
+      close()
+    }
+    drawPath(
+      path = midHexPath,
+      brush =
+        Brush.linearGradient(
+          colors = listOf(Color(0xFFD97706), Color(0xFFFDE047)),
+          start = Offset(0f, h),
+          end = Offset(w, 0f)
+        )
+    )
+
+    // 5. Deep royal purple inner hexagonal surface
+    val innerHexPath = Path().apply {
+      moveTo(innerVertices[0].x, innerVertices[0].y)
+      for (i in 1..5) lineTo(innerVertices[i].x, innerVertices[i].y)
+      close()
+    }
+    drawPath(
+      path = innerHexPath,
+      brush =
+        Brush.linearGradient(
+          colors = listOf(Color(0xFF4C1D95), Color(0xFF3B0764), Color(0xFF2E1065)),
+          start = Offset(w * 0.2f, h * 0.15f),
+          end = Offset(w * 0.8f, h * 0.85f)
+        )
+    )
+
+    // 6. Subtle top-left gloss highlight inside purple core
+    val glossPath = Path().apply {
+      moveTo(innerVertices[5].x, innerVertices[5].y)
+      lineTo(innerVertices[0].x, innerVertices[0].y)
+      lineTo(innerVertices[1].x, innerVertices[1].y)
+      lineTo(cx, cy)
+      close()
+    }
+    drawPath(path = glossPath, color = Color.White.copy(alpha = 0.08f))
+
+    // 7. Crisp centered "TF" vector monogram ("T" in bright white, "F" in metallic gold)
+    val strokeW = (w * 0.082f).coerceAtLeast(1.2f)
+    val topY = cy - h * 0.145f
+    val bottomY = cy + h * 0.155f
+
+    // "T" (left-center in crisp white)
+    val tLeftX = cx - w * 0.185f
+    val tRightX = cx + w * 0.015f
+    val tStemX = (tLeftX + tRightX) * 0.5f
+    drawLine(
+      color = Color.White,
+      start = Offset(tLeftX, topY),
+      end = Offset(tRightX, topY),
+      strokeWidth = strokeW,
+      cap = StrokeCap.Round
+    )
+    drawLine(
+      color = Color.White,
+      start = Offset(tStemX, topY),
+      end = Offset(tStemX, bottomY),
+      strokeWidth = strokeW,
+      cap = StrokeCap.Round
+    )
+
+    // "F" (right-center in bright metallic gold)
+    val fLeftX = cx + w * 0.035f
+    val fRightX = cx + w * 0.19f
+    val fMidY = cy + h * 0.005f
+    drawLine(
+      color = Color(0xFFFBBF24),
+      start = Offset(fLeftX, topY),
+      end = Offset(fLeftX, bottomY),
+      strokeWidth = strokeW,
+      cap = StrokeCap.Round
+    )
+    drawLine(
+      color = Color(0xFFFDE047),
+      start = Offset(fLeftX, topY),
+      end = Offset(fRightX, topY),
+      strokeWidth = strokeW,
+      cap = StrokeCap.Round
+    )
+    drawLine(
+      color = Color(0xFFFBBF24),
+      start = Offset(fLeftX, fMidY),
+      end = Offset(fRightX - w * 0.03f, fMidY),
+      strokeWidth = strokeW * 0.92f,
+      cap = StrokeCap.Round
+    )
+  }
+}
+
+@Composable
+fun TFToken(
+  modifier: Modifier = Modifier,
+  size: Dp = 22.dp
+) {
+  TFTokenIcon(modifier = modifier, size = size)
+}
+
+/**
+ * Reusable TF Balance Display pill matching the top header balance reference ("375 TF").
+ */
+@Composable
+fun TFBalanceDisplay(
+  balanceCoins: Long,
+  modifier: Modifier = Modifier,
+  tokenSize: Dp = 22.dp,
+  amountTestTag: String? = null,
+  onClick: (() -> Unit)? = null
+) {
+  val baseModifier =
+    if (onClick != null) {
+      modifier.clip(RoundedCornerShape(50)).clickable(onClick = onClick)
+    } else {
+      modifier
+    }
+  Surface(
+    shape = RoundedCornerShape(50),
+    color = MaterialTheme.colorScheme.surface,
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    shadowElevation = 0.5.dp,
+    modifier = baseModifier
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+      TFTokenIcon(size = tokenSize)
+      Text(
+        text = com.example.data.model.formatTf(balanceCoins),
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurface,
+        maxLines = 1,
+        softWrap = false,
+        modifier = if (amountTestTag != null) Modifier.testTag(amountTestTag) else Modifier
+      )
+    }
+  }
+}
+
+/**
+ * Reusable TF Reward Badge displaying the hexagonal gold TF Token + formatted TF reward (e.g., "+100 TF").
+ */
+@Composable
+fun TFRewardBadge(
+  coins: Long,
+  modifier: Modifier = Modifier,
+  prefix: String = "+",
+  tokenSize: Dp = 18.dp,
+  fontSize: Int = 12,
+  textTestTag: String? = null
+) {
+  val formatted = com.example.data.model.formatTf(coins)
+  val displayText = if (prefix.isNotEmpty() && coins >= 0) "$prefix$formatted" else formatted
+  Surface(
+    shape = RoundedCornerShape(50),
+    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    modifier = modifier
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+      TFTokenIcon(size = tokenSize)
+      Text(
+        text = displayText,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurface,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = fontSize.sp,
+        maxLines = 1,
+        softWrap = false,
+        modifier = if (textTestTag != null) Modifier.testTag(textTestTag) else Modifier
+      )
+    }
+  }
+}
+
+/**
+ * High-contrast TF Token Badge component for displaying TF rewards and balances clearly on light & dark cards.
  */
 @Composable
 fun NeonCoinBadge(
@@ -222,32 +498,13 @@ fun NeonCoinBadge(
   modifier: Modifier = Modifier,
   fontSize: Int = 13
 ) {
-  Surface(
-    shape = RoundedCornerShape(50),
-    color = Color(0xFFFEF3C7),
-    border = BorderStroke(1.dp, Color(0xFFF59E0B)),
-    modifier = modifier
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
-      Icon(
-        imageVector = Icons.Default.MonetizationOn,
-        contentDescription = "Coins",
-        tint = Color(0xFFD97706),
-        modifier = Modifier.size(16.dp)
-      )
-      Text(
-        text = "$coins Coins",
-        style = MaterialTheme.typography.labelMedium,
-        color = Color(0xFF92400E),
-        fontWeight = FontWeight.ExtraBold,
-        fontSize = fontSize.sp
-      )
-    }
-  }
+  TFRewardBadge(
+    coins = coins,
+    modifier = modifier,
+    prefix = "",
+    tokenSize = 17.dp,
+    fontSize = fontSize
+  )
 }
 
 
@@ -940,14 +1197,185 @@ fun RewardBadge(rewardCents: Long, modifier: Modifier = Modifier) {
 }
 
 /**
- * Compact horizontal Task Card for the User Dashboard & Available Tasks list (Light Minimal UI).
- * Displays:
- * - App/campaign icon
- * - Task title
- * - Short description
- * - Reward coins (125 Coins = ₹1)
- * - Task status badge
- * - Clear Open / View action button
+ * Reusable compact pill action button on the right side of UnifiedTaskCard.
+ * Keeps consistent position and dimensions across states (e.g. JOIN NOW -> VERIFY -> CLAIM -> COMPLETED or View Task).
+ */
+@Composable
+fun DynamicTaskActionButton(
+  label: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  showChevron: Boolean = true,
+  containerColor: Color = MaterialTheme.colorScheme.primary,
+  contentColor: Color = MaterialTheme.colorScheme.onPrimary
+) {
+  Button(
+    onClick = onClick,
+    enabled = enabled,
+    shape = RoundedCornerShape(50),
+    contentPadding = PaddingValues(horizontal = 13.dp, vertical = 6.dp),
+    colors =
+      ButtonDefaults.buttonColors(
+        containerColor = containerColor,
+        contentColor = contentColor,
+        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+      ),
+    modifier = modifier.height(36.dp)
+  ) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelMedium,
+      fontWeight = FontWeight.SemiBold,
+      maxLines = 1,
+      softWrap = false
+    )
+    if (showChevron && enabled) {
+      Spacer(modifier = Modifier.width(3.dp))
+      Icon(
+        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+        contentDescription = null,
+        modifier = Modifier.size(13.dp)
+      )
+    }
+  }
+}
+
+/**
+ * Master Reusable Horizontal Task Card (`UnifiedTaskCard`) used across ALL task categories:
+ * - Telegram Join Tasks
+ * - Mobile App Install Campaigns
+ * - App Testing Campaigns
+ * - Website Visit Tasks
+ * - Feedback Tasks
+ * - All Admin Dashboard campaigns
+ *
+ * Structure matching reference UI:
+ * - LEFT: Task category/app icon + subtle vertical divider
+ * - MIDDLE: Task title, short task description, and relevant task metadata
+ * - RIGHT: Gold TF Token reward badge (+X TF) above ONE compact action button
+ */
+@Composable
+fun UnifiedTaskCard(
+  title: String,
+  description: String,
+  rewardCoins: Long,
+  actionLabel: String,
+  onActionClick: () -> Unit,
+  leadingIcon: @Composable () -> Unit,
+  modifier: Modifier = Modifier,
+  onCardClick: (() -> Unit)? = null,
+  actionEnabled: Boolean = true,
+  showActionChevron: Boolean = true,
+  actionContainerColor: Color = MaterialTheme.colorScheme.primary,
+  actionButtonModifier: Modifier = Modifier,
+  rewardBadgeModifier: Modifier = Modifier,
+  titleLeadingBadge: (@Composable () -> Unit)? = null,
+  supportingContent: (@Composable () -> Unit)? = null,
+  footerContent: (@Composable () -> Unit)? = null
+) {
+  val cardMod =
+    modifier
+      .fillMaxWidth()
+      .clip(RoundedCornerShape(18.dp))
+      .then(if (onCardClick != null) Modifier.clickable(onClick = onCardClick) else Modifier)
+      .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp))
+
+  Card(
+    modifier = cardMod,
+    shape = RoundedCornerShape(18.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        // LEFT: Category / Campaign Icon + Vertical Divider
+        leadingIcon()
+
+        Box(
+          modifier =
+            Modifier.width(1.dp)
+              .height(44.dp)
+              .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
+        )
+
+        // MIDDLE: Task Title, Short Description & Supporting Metadata
+        Column(
+          modifier = Modifier.weight(1f),
+          verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+          ) {
+            if (titleLeadingBadge != null) {
+              titleLeadingBadge()
+            }
+            Text(
+              text = title,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis
+            )
+          }
+
+          Text(
+            text = description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+          )
+
+          if (supportingContent != null) {
+            supportingContent()
+          }
+        }
+
+        // RIGHT: Gold TF Token Reward Badge + Single Compact Action Button
+        Column(
+          horizontalAlignment = Alignment.End,
+          verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          TFRewardBadge(
+            coins = rewardCoins,
+            prefix = "+",
+            tokenSize = 18.dp,
+            fontSize = 12,
+            modifier = rewardBadgeModifier
+          )
+
+          DynamicTaskActionButton(
+            label = actionLabel,
+            onClick = onActionClick,
+            enabled = actionEnabled,
+            showChevron = showActionChevron,
+            containerColor = actionContainerColor,
+            modifier = actionButtonModifier
+          )
+        }
+      }
+
+      if (footerContent != null) {
+        footerContent()
+      }
+    }
+  }
+}
+
+/**
+ * Compact horizontal Task Card for all campaign tasks on the User Dashboard & Available Tasks list.
+ * Automatically uses `UnifiedTaskCard` for every campaign category.
  */
 @Composable
 fun TaskItemCard(
@@ -960,146 +1388,55 @@ fun TaskItemCard(
   val appOrSiteLabel = resolveAppOrWebsiteLabel(task)
   val shortDescription =
     task.description.trim().ifBlank { "$appOrSiteLabel • ${task.category}" }
-  val coinsText = com.example.data.model.formatCoins(task.getEffectiveRewardCoins())
 
-  Card(
-    modifier =
-      modifier
-        .fillMaxWidth()
-        .clip(RoundedCornerShape(16.dp))
-        .clickable(onClick = onClick)
-        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
-        .testTag("task_card_${task.id}"),
-    shape = RoundedCornerShape(16.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-  ) {
-    Column(
-      modifier = Modifier.fillMaxWidth().padding(14.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
+  UnifiedTaskCard(
+    title = task.title,
+    description = shortDescription,
+    rewardCoins = task.getEffectiveRewardCoins(),
+    actionLabel = "View Task",
+    onActionClick = onClick,
+    onCardClick = onClick,
+    modifier = modifier.testTag("task_card_${task.id}"),
+    actionButtonModifier = Modifier.testTag("start_or_view_task_button_${task.id}"),
+    leadingIcon = {
+      AppIconThumbnail(
+        appIconUrl = task.appIconUrl,
+        appName = task.appName,
+        category = task.category,
+        size = 46.dp
+      )
+    },
+    supportingContent = {
       Row(
-        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
       ) {
-        AppIconThumbnail(
-          appIconUrl = task.appIconUrl,
-          appName = task.appName,
-          category = task.category,
-          size = 48.dp
+        Text(
+          text = appOrSiteLabel,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.primary,
+          fontWeight = FontWeight.Medium,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
         )
-
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = task.title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-          )
-          Spacer(modifier = Modifier.height(2.dp))
-          Text(
-            text = shortDescription,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-          )
-          Spacer(modifier = Modifier.height(4.dp))
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-          ) {
-            Text(
-              text = appOrSiteLabel,
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.primary,
-              fontWeight = FontWeight.SemiBold,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis
-            )
-            if (task.targetSubmissions > 0L) {
-              Text(
-                text = "• Quota: ${task.completedSubmissions}/${task.targetSubmissions}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-              )
-            }
-          }
-        }
-
-        Column(
-          horizontalAlignment = Alignment.End,
-          verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-          Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.primaryContainer
-          ) {
-            Text(
-              text = coinsText,
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onPrimaryContainer,
-              fontWeight = FontWeight.ExtraBold,
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-            )
-          }
-          RewardBadge(rewardCents = task.rewardCents)
-        }
-      }
-
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+        Text(
+          text = "•",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+          text = formatRewardInr(task.rewardCents),
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          fontWeight = FontWeight.Medium,
+          maxLines = 1
+        )
+        if (task.status != TaskStatus.PENDING || !task.isActive) {
           StatusBadge(status = task.status, isActive = task.isActive)
-          Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant
-          ) {
-            Text(
-              text = task.category,
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              fontWeight = FontWeight.SemiBold,
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-            )
-          }
-        }
-
-        Button(
-          onClick = onClick,
-          shape = RoundedCornerShape(10.dp),
-          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-          colors =
-            ButtonDefaults.buttonColors(
-              containerColor = MaterialTheme.colorScheme.primary,
-              contentColor = MaterialTheme.colorScheme.onPrimary
-            ),
-          modifier = Modifier.testTag("start_or_view_task_button_${task.id}")
-        ) {
-          Text(
-            text = "View Task",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold
-          )
-          Spacer(modifier = Modifier.width(4.dp))
-          Icon(
-            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-            contentDescription = null,
-            modifier = Modifier.size(15.dp)
-          )
         }
       }
     }
-  }
+  )
 }
 
 @Composable
