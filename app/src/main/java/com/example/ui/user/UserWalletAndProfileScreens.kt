@@ -114,6 +114,7 @@ import com.example.ui.components.TaskFlowBrandLogo
 import com.example.ui.components.VerifiedBadge
 import com.example.ui.components.WithdrawalBrandLogo
 import com.example.ui.components.resolveAppOrWebsiteLabel
+import com.example.ui.theme.taskFlowColors
 import com.example.ui.viewmodel.ProfileSubScreen
 import com.example.ui.viewmodel.UiState
 import java.text.SimpleDateFormat
@@ -138,6 +139,7 @@ fun UserWalletScreen(
   onOpenWithdrawalMain: () -> Unit = {},
   onOpenWithdrawalHistory: () -> Unit = {}
 ) {
+  val tfColors = taskFlowColors()
   val profile = (profileState as? UiState.Success)?.data
   val eligibleCoins = profile?.getEligibleWithdrawalCoins() ?: 0L
   val promotionalCoins = profile?.getPromotionalBalanceCoins() ?: 0L
@@ -197,7 +199,7 @@ fun UserWalletScreen(
       item {
         NeonGlassCard(
           modifier = Modifier.fillMaxWidth().testTag("wallet_hero_card"),
-          borderColor = Color(0xFFCBD5E1),
+          borderColor = MaterialTheme.colorScheme.outlineVariant,
           backgroundColor = MaterialTheme.colorScheme.surface
         ) {
           Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
@@ -207,15 +209,15 @@ fun UserWalletScreen(
             ) {
               Surface(
                 shape = CircleShape,
-                color = Color(0xFFDBEAFE),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF93C5FD)),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
                 modifier = Modifier.size(40.dp)
               ) {
                 Box(contentAlignment = Alignment.Center) {
                   Icon(
                     imageVector = Icons.Default.AccountBalanceWallet,
                     contentDescription = "TaskFlow Wallet",
-                    tint = Color(0xFF1E3A8A),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.size(20.dp)
                   )
                 }
@@ -224,8 +226,8 @@ fun UserWalletScreen(
                 Text(
                   text = "TASKFLOW COIN WALLET",
                   style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFF1E3A8A),
-                  fontWeight = FontWeight.Bold
+                  color = MaterialTheme.colorScheme.primary,
+                  fontWeight = FontWeight.SemiBold
                 )
                 Text(
                   text = "Total Coin Balance",
@@ -261,48 +263,48 @@ fun UserWalletScreen(
             ) {
               Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFECFDF5),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF6EE7B7)),
+                color = tfColors.rewardBadgeBg,
+                border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.rewardBadgeBorder),
                 modifier = Modifier.weight(1f)
               ) {
                 Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                   Text(
                     text = "Eligible Withdrawable",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF065F46),
-                    fontWeight = FontWeight.SemiBold,
+                    color = tfColors.rewardBadgeText,
+                    fontWeight = FontWeight.Medium,
                     fontSize = 10.sp
                   )
                   Spacer(modifier = Modifier.height(2.dp))
                   Text(
                     text = formatCoins(eligibleCoins),
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color(0xFF047857),
-                    fontWeight = FontWeight.Bold,
+                    color = tfColors.goldText,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.testTag("wallet_eligible_coins")
                   )
                 }
               }
               Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFEFF6FF),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF93C5FD)),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = if (tfColors.isDark) 0.45f else 0.55f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
                 modifier = Modifier.weight(1f)
               ) {
                 Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                   Text(
                     text = "Promotional Coins",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF1E3A8A),
-                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontWeight = FontWeight.Medium,
                     fontSize = 10.sp
                   )
                   Spacer(modifier = Modifier.height(2.dp))
                   Text(
                     text = formatCoins(promotionalCoins),
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color(0xFF1D4ED8),
-                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.testTag("wallet_promotional_coins")
                   )
                 }
@@ -316,8 +318,8 @@ fun UserWalletScreen(
               shape = RoundedCornerShape(14.dp),
               colors =
                 ButtonDefaults.buttonColors(
-                  containerColor = Color(0xFF1E3A8A),
-                  contentColor = Color.White
+                  containerColor = MaterialTheme.colorScheme.primary,
+                  contentColor = MaterialTheme.colorScheme.onPrimary
                 ),
               modifier =
                 Modifier.fillMaxWidth()
@@ -333,7 +335,7 @@ fun UserWalletScreen(
               Text(
                 text = "Withdraw Coins",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
             }
 
@@ -356,7 +358,7 @@ fun UserWalletScreen(
               Text(
                 text = "Withdrawal History",
                 style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
             }
           }
@@ -385,8 +387,8 @@ fun UserWalletScreen(
               Text(
                 text = formatCoins(totalEarningsCoins),
                 style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFF16A34A),
+                fontWeight = FontWeight.SemiBold,
+                color = tfColors.goldText,
                 modifier = Modifier.testTag("wallet_total_earnings")
               )
             }
@@ -408,8 +410,8 @@ fun UserWalletScreen(
               Text(
                 text = formatCoins(pendingRewardsCoins),
                 style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFFD97706),
+                fontWeight = FontWeight.SemiBold,
+                color = tfColors.goldAccent,
                 modifier = Modifier.testTag("wallet_pending_rewards")
               )
             }
@@ -427,12 +429,12 @@ fun UserWalletScreen(
           Text(
             text = "Withdrawal Requests (${withdrawalRequests.size})",
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground
           )
           if (withdrawalRequests.isNotEmpty()) {
             TextButton(onClick = onOpenWithdrawalHistory) {
-              Text("See All", fontWeight = FontWeight.Bold)
+              Text("See All", fontWeight = FontWeight.SemiBold)
             }
           }
         }
@@ -480,11 +482,13 @@ fun UserWalletScreen(
           val (badgeBg, badgeFg) =
             when {
               request.status.equals(WithdrawalStatus.COMPLETED, true) ||
-                request.status.equals("approved", true) -> Color(0xFFDCFCE7) to Color(0xFF166534)
+                request.status.equals("approved", true) ->
+                tfColors.statusConfirmedBg to tfColors.statusConfirmedFg
               request.status.equals(WithdrawalStatus.REJECTED, true) ->
-                Color(0xFFFEE2E2) to Color(0xFF991B1B)
-              request.isDelayedAt() -> Color(0xFFFEF3C7) to Color(0xFF92400E)
-              else -> Color(0xFFE0E7FF) to Color(0xFF3730A3)
+                MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+              request.isDelayedAt() -> tfColors.rewardBadgeBg to tfColors.rewardBadgeText
+              else ->
+                MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
             }
           val rupees = request.getEffectiveAmountRupees()
           Card(
@@ -536,7 +540,7 @@ fun UserWalletScreen(
                       text = statusLabel,
                       style = MaterialTheme.typography.labelSmall,
                       color = badgeFg,
-                      fontWeight = FontWeight.Bold,
+                      fontWeight = FontWeight.SemiBold,
                       modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
                     )
                   }
@@ -554,7 +558,7 @@ fun UserWalletScreen(
           Text(
             text = "Credited Task Rewards (${approvedUserTasks.size})",
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground
           )
         }
@@ -605,7 +609,7 @@ fun UserWalletScreen(
         Text(
           text = "Transaction History (${transactions.size})",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           color = MaterialTheme.colorScheme.onBackground,
           modifier = Modifier.testTag("wallet_transaction_history_section")
         )
@@ -682,12 +686,12 @@ fun UserWalletScreen(
                     "+${formatCoins(txCoins)}"
                   },
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.ExtraBold,
+                fontWeight = FontWeight.SemiBold,
                 color =
                   if (isDebitTx) {
-                    Color(0xFFDC2626)
+                    tfColors.debitText
                   } else {
-                    Color(0xFF16A34A)
+                    tfColors.goldText
                   }
               )
             }
@@ -826,6 +830,7 @@ fun UserProfileScreen(
     )
 
   val resolvedUid = userUid.ifBlank { profile?.userId ?: profile?.id ?: "" }
+  val tfColors = taskFlowColors()
 
   NeonBackgroundBox {
     Column(
@@ -874,7 +879,7 @@ fun UserProfileScreen(
                         .toString(),
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.SemiBold
                   )
                 }
               }
@@ -883,7 +888,7 @@ fun UserProfileScreen(
             if (profile?.approvalStatus == "approved") {
               Surface(
                 shape = CircleShape,
-                color = Color(0xFF059669),
+                color = tfColors.goldAccent,
                 border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.surface),
                 modifier = Modifier.size(18.dp)
               ) {
@@ -891,7 +896,7 @@ fun UserProfileScreen(
                   Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = "Verified",
-                    tint = Color.White,
+                    tint = tfColors.claimContent,
                     modifier = Modifier.size(12.dp)
                   )
                 }
@@ -907,7 +912,7 @@ fun UserProfileScreen(
               text = displayNameText,
               style = MaterialTheme.typography.titleMedium,
               color = MaterialTheme.colorScheme.onSurface,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
               modifier = Modifier.testTag("profile_display_name")
@@ -1193,7 +1198,7 @@ fun UserHistoryScreen(
         Text(
           text = "History",
           style = MaterialTheme.typography.headlineMedium,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
         Text(
           text = "Tap any compact task card to inspect your submission details",
@@ -1274,6 +1279,7 @@ private fun CompactHistoryTaskCard(
   task: TaskItem,
   onClick: () -> Unit
 ) {
+  val tfColors = taskFlowColors()
   val dateStr =
     (task.updatedAt ?: task.createdAt)?.toDate()?.let {
       SimpleDateFormat("MMM d, yyyy", Locale.US).format(it)
@@ -1281,9 +1287,11 @@ private fun CompactHistoryTaskCard(
   val statusLabel = TaskStatus.historyLabel(task.status)
   val (statusBg, statusFg) =
     when (task.status) {
-      TaskStatus.APPROVED -> Color(0xFFD1FAE5) to Color(0xFF065F46)
-      TaskStatus.REJECTED -> Color(0xFFFEE2E2) to Color(0xFF991B1B)
-      else -> Color(0xFFEDE9FE) to Color(0xFF5B21B6)
+      TaskStatus.APPROVED -> tfColors.statusConfirmedBg to tfColors.statusConfirmedFg
+      TaskStatus.REJECTED ->
+        MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+      else ->
+        MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
     }
 
   Card(
@@ -1314,7 +1322,7 @@ private fun CompactHistoryTaskCard(
         Text(
           text = task.title,
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
@@ -1333,7 +1341,7 @@ private fun CompactHistoryTaskCard(
             text = statusLabel,
             style = MaterialTheme.typography.labelSmall,
             color = statusFg,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
           )
         }
@@ -1348,7 +1356,7 @@ private fun CompactHistoryTaskCard(
           text = formatRewardInr(task.rewardCents),
           style = MaterialTheme.typography.titleMedium,
           color = MaterialTheme.colorScheme.primary,
-          fontWeight = FontWeight.ExtraBold
+          fontWeight = FontWeight.SemiBold
         )
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -1391,7 +1399,7 @@ private fun HistorySubmissionDetailsDialog(
           Text(
             text = task.title,
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           Text(
             text = "$appOrSiteLabel • $statusLabel",
@@ -1421,7 +1429,7 @@ private fun HistorySubmissionDetailsDialog(
                 text = "STATUS: ${statusLabel.uppercase(Locale.US)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               Text(
                 text = dateStr,
@@ -1433,7 +1441,7 @@ private fun HistorySubmissionDetailsDialog(
               text = formatRewardInr(task.rewardCents),
               style = MaterialTheme.typography.titleLarge,
               color = MaterialTheme.colorScheme.primary,
-              fontWeight = FontWeight.ExtraBold
+              fontWeight = FontWeight.SemiBold
             )
           }
         }
@@ -1449,7 +1457,7 @@ private fun HistorySubmissionDetailsDialog(
                 text = "SUBMITTED WRITTEN PROOF",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               Spacer(modifier = Modifier.height(4.dp))
               Text(
@@ -1471,7 +1479,7 @@ private fun HistorySubmissionDetailsDialog(
                 text = "SUBMITTED SCREENSHOT PROOF",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               Spacer(modifier = Modifier.height(8.dp))
               Box(
@@ -1504,7 +1512,7 @@ private fun HistorySubmissionDetailsDialog(
                 text = "ADMIN FEEDBACK",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.secondary,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               Spacer(modifier = Modifier.height(4.dp))
               Text(
@@ -1651,7 +1659,7 @@ fun UserActivityScreen(
         Text(
           text = "Activity",
           style = MaterialTheme.typography.headlineMedium,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
         Text(
           text = "Real-time feed of your account, task submissions, and withdrawal requests",
@@ -1724,7 +1732,7 @@ fun UserActivityScreen(
                 Text(
                   text = item.title,
                   style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
@@ -1745,7 +1753,7 @@ fun UserActivityScreen(
                   text = item.amountText,
                   style = MaterialTheme.typography.titleMedium,
                   color = MaterialTheme.colorScheme.primary,
-                  fontWeight = FontWeight.ExtraBold
+                  fontWeight = FontWeight.SemiBold
                 )
               }
             }
@@ -1789,7 +1797,7 @@ private fun UserRewardsSubScreen(
       Text(
         text = "Rewards",
         style = MaterialTheme.typography.headlineMedium,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.SemiBold
       )
     }
 
@@ -1803,14 +1811,14 @@ private fun UserRewardsSubScreen(
           text = "TOTAL EARNED REWARDS (INR)",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.primary,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
           text = formatRewardInr(profile?.balanceCents ?: 0L),
           style = MaterialTheme.typography.displayMedium,
           color = MaterialTheme.colorScheme.primary,
-          fontWeight = FontWeight.ExtraBold
+          fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
@@ -1858,7 +1866,7 @@ private fun UserSettingsSubScreen(
       Text(
         text = "Settings",
         style = MaterialTheme.typography.headlineMedium,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.SemiBold
       )
     }
 
@@ -1875,7 +1883,7 @@ private fun UserSettingsSubScreen(
         Text(
           text = "App Theme",
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
         Text(
           text = "Choose your preferred appearance mode for all screens",
@@ -1913,7 +1921,7 @@ private fun UserSettingsSubScreen(
                 Text(
                   text = mode.title,
                   style = MaterialTheme.typography.titleSmall,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
                 Text(
                   text = mode.description,
@@ -1940,7 +1948,7 @@ private fun UserSettingsSubScreen(
         Text(
           text = "Profile Display Name",
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
         OutlinedTextField(
           value = editedName,
@@ -1974,7 +1982,7 @@ private fun UserSettingsSubScreen(
         Text(
           text = "Help & Security",
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
         OutlinedButton(
           onClick = onOpenSupport,
@@ -2021,7 +2029,7 @@ private fun UserAboutSubScreen(
       Text(
         text = "About TaskFlow",
         style = MaterialTheme.typography.headlineMedium,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.SemiBold
       )
     }
 
@@ -2039,7 +2047,7 @@ private fun UserAboutSubScreen(
         Text(
           text = "TaskFlow Micro-Task & Reward Platform",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           textAlign = TextAlign.Center
         )
         Text(

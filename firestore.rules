@@ -1216,21 +1216,27 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // Per-user Telegram Task verification & claim states
+      // Per-user Telegram Task verification & claim states.
+      // Clients may ONLY record the join-link click (`taskId`, `userId`, `hasClickedJoin`, `joinClickedAt`).
+      // Verification (`isMembershipVerified`) and claim (`isClaimed`) states are strictly server-only via Cloud Functions.
       match /telegram_task_states/{taskId} {
         allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow create, update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) &&
-                              incoming().keys().hasAll(['taskId', 'userId']) &&
-                              ('claimedAt' in incoming() || 'verifiedAt' in incoming() || 'joinClickedAt' in incoming()) &&
-                              incoming().taskId == taskId &&
-                              incoming().userId == userId &&
-                              (
-                                isAdmin() ||
-                                (
-                                  (!('isMembershipVerified' in incoming()) || incoming().isMembershipVerified == false || (resource != null && resource.data.isMembershipVerified == true)) &&
-                                  (!('isClaimed' in incoming()) || incoming().isClaimed == false || (resource != null && resource.data.isClaimed == true))
-                                )
-                              );
+        allow create: if isSignedIn() &&
+                      request.auth.uid == userId &&
+                      hasExactKeys(['taskId', 'userId', 'hasClickedJoin', 'joinClickedAt']) &&
+                      incoming().taskId == taskId &&
+                      incoming().userId == userId &&
+                      incoming().hasClickedJoin == true &&
+                      incoming().joinClickedAt is timestamp &&
+                      incoming().joinClickedAt <= request.time;
+        allow update: if isSignedIn() &&
+                      request.auth.uid == userId &&
+                      changedKeys().hasOnly(['taskId', 'userId', 'hasClickedJoin', 'joinClickedAt']) &&
+                      incoming().taskId == taskId &&
+                      incoming().userId == userId &&
+                      incoming().hasClickedJoin == true &&
+                      incoming().joinClickedAt is timestamp &&
+                      incoming().joinClickedAt <= request.time;
         allow delete: if false;
       }
 
@@ -1486,10 +1492,18 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Client & Partner Campaigns
+    // Client & Partner Campaigns (must never store private tracking or postback secrets)
     match /campaigns/{campaignId} {
       allow get, list: if isSignedIn();
-      allow create, update: if isAdmin();
+      allow create, update: if isAdmin() &&
+                            !incoming().keys().hasAny([
+                              'postbackSecret',
+                              'postbackSecretHash',
+                              'hmacSecret',
+                              'apiSecret',
+                              'webhookSecret',
+                              'privateSecretRef'
+                            ]);
       allow delete: if isAdmin();
     }
 
@@ -1605,6 +1619,49 @@ service cloud.firestore {
 
     match /telegram_task_user_claims/{claimKey} {
       allow read, write: if false;
+    }
+
+    // Universal Campaign Tracking Engine (Strictly Server-Only via Cloud Functions / Admin SDK)
+    // Protects private postback secrets, tracking configs, click records, and conversion states
+    // from both regular Android clients and ordinary Admin UI client queries.
+    match /campaign_tracking_configs/{configId} {
+      allow read, write: if false;
+
+      match /{subpath=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /campaign_networks/{networkId} {
+      allow read, write: if false;
+
+      match /{subpath=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /campaign_clicks/{clickId} {
+      allow read, write: if false;
+
+      match /{subpath=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /campaign_conversions/{conversionId} {
+      allow read, write: if false;
+
+      match /{subpath=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /campaign_click_guards/{guardId} {
+      allow read, write: if false;
+
+      match /{subpath=**} {
+        allow read, write: if false;
+      }
     }
 
     // Default deny for all other paths

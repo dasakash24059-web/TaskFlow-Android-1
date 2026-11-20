@@ -83,6 +83,7 @@ import com.example.data.model.formatCoins
 import com.example.ui.components.NeonBackgroundBox
 import com.example.ui.components.NeonGlassCard
 import com.example.ui.components.TaskFlowBrandLogo
+import com.example.ui.theme.taskFlowColors
 import com.example.util.findActivity
 
 /**
@@ -106,6 +107,7 @@ fun ScratchCardScreen(
   onRetryPrepare: () -> Unit = {}
 ) {
   BackHandler(onBack = onBack)
+  val tfColors = taskFlowColors()
   val context = LocalContext.current
   val activity = remember(context) { context.findActivity() }
 
@@ -140,15 +142,15 @@ fun ScratchCardScreen(
       icon = {
         Surface(
           shape = CircleShape,
-          color = Color(0xFFFEF3C7),
-          border = BorderStroke(1.5.dp, Color(0xFFF59E0B)),
+          color = tfColors.rewardBadgeBg,
+          border = BorderStroke(1.5.dp, tfColors.rewardBadgeBorder),
           modifier = Modifier.size(52.dp)
         ) {
           Box(contentAlignment = Alignment.Center) {
             Icon(
               imageVector = Icons.Default.EmojiEvents,
               contentDescription = null,
-              tint = Color(0xFFD97706),
+              tint = tfColors.goldAccent,
               modifier = Modifier.size(28.dp)
             )
           }
@@ -158,7 +160,7 @@ fun ScratchCardScreen(
         Text(
           text = "Congratulations!",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           textAlign = TextAlign.Center,
           modifier = Modifier.fillMaxWidth().testTag("congratulations_title")
         )
@@ -177,8 +179,8 @@ fun ScratchCardScreen(
           Text(
             text = "+${formatCoins(revealedCoins)} Coins",
             style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.ExtraBold,
-            color = Color(0xFFD97706),
+            fontWeight = FontWeight.SemiBold,
+            color = tfColors.goldText,
             modifier = Modifier.testTag("scratch_reward_amount_text")
           )
         }
@@ -189,8 +191,8 @@ fun ScratchCardScreen(
           enabled = !uiState.isClaiming,
           shape = RoundedCornerShape(12.dp),
           colors = ButtonDefaults.buttonColors(
-            containerColor = Color(0xFFD97706),
-            contentColor = Color.White
+            containerColor = tfColors.claimContainer,
+            contentColor = tfColors.claimContent
           ),
           modifier = Modifier
             .fillMaxWidth()
@@ -200,11 +202,11 @@ fun ScratchCardScreen(
           if (uiState.isClaiming) {
             CircularProgressIndicator(
               modifier = Modifier.size(20.dp),
-              color = Color.White,
+              color = tfColors.claimContent,
               strokeWidth = 2.5.dp
             )
           } else {
-            Text("CLAIM", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Text("CLAIM", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
           }
         }
       }
@@ -244,7 +246,7 @@ fun ScratchCardScreen(
         Text(
           text = "Scratch & Win",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           color = MaterialTheme.colorScheme.onBackground
         )
       }
@@ -274,7 +276,8 @@ fun ScratchCardScreen(
         uiState.successMessage?.let { success ->
           Surface(
             shape = RoundedCornerShape(12.dp),
-            color = Color(0xFFDCFCE7),
+            color = tfColors.statusConfirmedBg,
+            border = BorderStroke(1.dp, tfColors.statusConfirmedBorder),
             modifier = Modifier
               .fillMaxWidth()
               .clickable { onClearFeedback() }
@@ -284,7 +287,7 @@ fun ScratchCardScreen(
               text = success,
               style = MaterialTheme.typography.bodySmall,
               fontWeight = FontWeight.SemiBold,
-              color = Color(0xFF166534),
+              color = tfColors.statusConfirmedFg,
               modifier = Modifier.padding(12.dp)
             )
           }
@@ -358,7 +361,7 @@ fun ScratchCardScreen(
             Text(
               text = "+${formatCoins(revealedCoins)}",
               fontSize = 42.sp,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               color = Color(0xFFFDE047),
               letterSpacing = 0.5.sp
             )
@@ -485,7 +488,7 @@ fun ScratchCardScreen(
                 Text(
                   text = if (canScratchNow) "SCRATCH HERE" else "LOCKED",
                   style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.ExtraBold,
+                  fontWeight = FontWeight.SemiBold,
                   letterSpacing = 2.sp,
                   color = Color(0xFF1E293B)
                 )
@@ -526,8 +529,8 @@ fun ScratchCardScreen(
           enabled = !uiState.isClaiming,
           shape = RoundedCornerShape(14.dp),
           colors = ButtonDefaults.buttonColors(
-            containerColor = Color(0xFFD97706),
-            contentColor = Color.White
+            containerColor = tfColors.claimContainer,
+            contentColor = tfColors.claimContent
           ),
           modifier = Modifier
             .fillMaxWidth()
@@ -537,17 +540,17 @@ fun ScratchCardScreen(
           if (uiState.isClaiming) {
             CircularProgressIndicator(
               modifier = Modifier.size(22.dp),
-              color = Color.White,
+              color = tfColors.claimContent,
               strokeWidth = 2.5.dp
             )
           } else {
-            Text("CLAIM REWARD", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("CLAIM REWARD", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
           }
         }
       } else if (dailyState.canScratchNow && uiState.activeSession == null) {
         NeonGlassCard(
           shape = RoundedCornerShape(20.dp),
-          borderColor = Color(0xFF93C5FD).copy(alpha = 0.5f),
+          borderColor = MaterialTheme.colorScheme.outlineVariant,
           modifier = Modifier.fillMaxWidth()
         ) {
           Column(
@@ -569,7 +572,7 @@ fun ScratchCardScreen(
               Text(
                 text = "Your Scratch Card is ready",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center
               )
@@ -593,7 +596,7 @@ fun ScratchCardScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                   text = "Retry Loading Scratch Card",
-                  fontWeight = FontWeight.Bold,
+                  fontWeight = FontWeight.SemiBold,
                   fontSize = 15.sp
                 )
               }
@@ -604,7 +607,7 @@ fun ScratchCardScreen(
         // User needs to watch rewarded ads to unlock the next scratch
         NeonGlassCard(
           shape = RoundedCornerShape(20.dp),
-          borderColor = Color(0xFF93C5FD).copy(alpha = 0.5f),
+          borderColor = MaterialTheme.colorScheme.outlineVariant,
           modifier = Modifier.fillMaxWidth()
         ) {
           Column(
@@ -620,7 +623,7 @@ fun ScratchCardScreen(
             Text(
               text = "Watch 2 videos to unlock next card",
               style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               color = MaterialTheme.colorScheme.onSurface,
               textAlign = TextAlign.Center
             )
@@ -631,8 +634,8 @@ fun ScratchCardScreen(
             ) {
               Surface(
                 shape = RoundedCornerShape(50),
-                color = if (adsWatched >= 1L) Color(0xFFDCFCE7) else Color(0xFFF1F5F9),
-                border = BorderStroke(1.dp, if (adsWatched >= 1L) Color(0xFF16A34A) else Color(0xFFCBD5E1))
+                color = if (adsWatched >= 1L) tfColors.statusConfirmedBg else tfColors.neutralSurfaceBg,
+                border = BorderStroke(1.dp, if (adsWatched >= 1L) tfColors.statusConfirmedBorder else tfColors.neutralSurfaceBorder)
               ) {
                 Row(
                   modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -642,22 +645,22 @@ fun ScratchCardScreen(
                   Icon(
                     imageVector = if (adsWatched >= 1L) Icons.Default.CheckCircle else Icons.Default.PlayArrow,
                     contentDescription = null,
-                    tint = if (adsWatched >= 1L) Color(0xFF16A34A) else Color(0xFF64748B),
+                    tint = if (adsWatched >= 1L) tfColors.goldAccent else tfColors.neutralSurfaceFg,
                     modifier = Modifier.size(16.dp)
                   )
                   Text(
                     text = "Video 1",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (adsWatched >= 1L) Color(0xFF166534) else Color(0xFF64748B)
+                    color = if (adsWatched >= 1L) tfColors.statusConfirmedFg else tfColors.neutralSurfaceFg
                   )
                 }
               }
 
               Surface(
                 shape = RoundedCornerShape(50),
-                color = if (adsWatched >= 2L) Color(0xFFDCFCE7) else Color(0xFFF1F5F9),
-                border = BorderStroke(1.dp, if (adsWatched >= 2L) Color(0xFF16A34A) else Color(0xFFCBD5E1))
+                color = if (adsWatched >= 2L) tfColors.statusConfirmedBg else tfColors.neutralSurfaceBg,
+                border = BorderStroke(1.dp, if (adsWatched >= 2L) tfColors.statusConfirmedBorder else tfColors.neutralSurfaceBorder)
               ) {
                 Row(
                   modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -667,14 +670,14 @@ fun ScratchCardScreen(
                   Icon(
                     imageVector = if (adsWatched >= 2L) Icons.Default.CheckCircle else Icons.Default.PlayArrow,
                     contentDescription = null,
-                    tint = if (adsWatched >= 2L) Color(0xFF16A34A) else Color(0xFF64748B),
+                    tint = if (adsWatched >= 2L) tfColors.goldAccent else tfColors.neutralSurfaceFg,
                     modifier = Modifier.size(16.dp)
                   )
                   Text(
                     text = "Video 2",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (adsWatched >= 2L) Color(0xFF166534) else Color(0xFF64748B)
+                    color = if (adsWatched >= 2L) tfColors.statusConfirmedFg else tfColors.neutralSurfaceFg
                   )
                 }
               }
@@ -712,7 +715,7 @@ fun ScratchCardScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                   text = "Watch $stepLabel",
-                  fontWeight = FontWeight.Bold,
+                  fontWeight = FontWeight.SemiBold,
                   fontSize = 15.sp
                 )
               }

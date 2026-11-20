@@ -87,6 +87,7 @@ import androidx.lifecycle.lifecycleScope
 import com.example.R
 import com.example.ensureFirebaseInitialized
 import com.example.ui.components.TaskFlowBrandLogo
+import com.example.ui.theme.taskFlowColors
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -308,7 +309,7 @@ fun TaskFlowSplashScreen(
               }
             },
           style = MaterialTheme.typography.displayMedium,
-          fontWeight = FontWeight.ExtraBold,
+          fontWeight = FontWeight.SemiBold,
           fontSize = 42.sp,
           modifier = Modifier.testTag("splash_app_name")
         )
@@ -547,37 +548,45 @@ fun AuthScreen(
     onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
   }
 
+  val tfColors = taskFlowColors()
+  val bgColors =
+    if (tfColors.isDark) {
+      listOf(
+        MaterialTheme.colorScheme.background,
+        MaterialTheme.colorScheme.surface,
+        MaterialTheme.colorScheme.background
+      )
+    } else {
+      listOf(
+        Color(0xFFFFFFFF),
+        Color(0xFFF8FAFC),
+        Color(0xFFF1F5F9)
+      )
+    }
+  val ambientAlphaScale = if (tfColors.isDark) 0.25f else 1f
+
   Box(
     modifier =
       Modifier.fillMaxSize()
-        .background(
-          Brush.verticalGradient(
-            colors =
-              listOf(
-                Color(0xFFFFFFFF),
-                Color(0xFFF8FAFC),
-                Color(0xFFF1F5F9)
-              )
-          )
-        )
+        .background(Brush.verticalGradient(colors = bgColors))
         .windowInsetsPadding(WindowInsets.safeDrawing)
         .testTag("google_login_screen"),
     contentAlignment = Alignment.TopCenter
   ) {
-    // Ambient soft lavender/blue blurred circles matching the screenshot
+    // Ambient soft slate/indigo blurred circles
     Canvas(modifier = Modifier.fillMaxSize()) {
       drawCircle(
-        color = Color(0xFFC7D2FE).copy(alpha = 0.35f),
+        color = Color(0xFFC7D2FE).copy(alpha = 0.35f * ambientAlphaScale),
         radius = size.width * 0.38f,
         center = Offset(size.width * 1.05f, size.height * 0.16f)
       )
       drawCircle(
-        color = Color(0xFFDDD6FE).copy(alpha = 0.30f),
+        color = Color(0xFFDDD6FE).copy(alpha = 0.30f * ambientAlphaScale),
         radius = size.width * 0.28f,
         center = Offset(size.width * -0.05f, size.height * 0.04f)
       )
       drawCircle(
-        color = Color(0xFFE0E7FF).copy(alpha = 0.40f),
+        color = Color(0xFFE0E7FF).copy(alpha = 0.40f * ambientAlphaScale),
         radius = size.width * 0.45f,
         center = Offset(size.width * 0.15f, size.height * 0.94f)
       )
@@ -597,9 +606,9 @@ fun AuthScreen(
       ) {
         Spacer(modifier = Modifier.height(24.dp))
 
-        // TaskFlow Brand Logo (matching screenshot)
+        // TaskFlow Brand Logo
         Box(modifier = Modifier.testTag("login_logo")) {
-          TaskFlowBrandLogo(size = 88.dp)
+          TaskFlowBrandLogo(size = 88.dp, isLightMode = !tfColors.isDark)
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -608,8 +617,8 @@ fun AuthScreen(
         Text(
           text = stringResource(R.string.app_name),
           style = MaterialTheme.typography.displayMedium,
-          color = Color(0xFF1E1B4B),
-          fontWeight = FontWeight.ExtraBold,
+          color = MaterialTheme.colorScheme.onBackground,
+          fontWeight = FontWeight.SemiBold,
           textAlign = TextAlign.Center,
           modifier = Modifier.testTag("login_app_name")
         )
@@ -628,8 +637,8 @@ fun AuthScreen(
             Text(
               text = stringResource(R.string.welcome_to_taskflow),
               style = MaterialTheme.typography.headlineMedium.copy(fontSize = 26.sp),
-              color = Color(0xFF0F172A),
-              fontWeight = FontWeight.ExtraBold,
+              color = MaterialTheme.colorScheme.onBackground,
+              fontWeight = FontWeight.SemiBold,
               textAlign = TextAlign.Center,
               modifier = Modifier.testTag("login_welcome_heading")
             )
@@ -639,7 +648,7 @@ fun AuthScreen(
             Text(
               text = stringResource(R.string.sign_in_to_continue),
               style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp),
-              color = Color(0xFF475569),
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
               textAlign = TextAlign.Center,
               modifier = Modifier.testTag("login_subtitle")
             )
@@ -742,7 +751,7 @@ fun AuthScreen(
               text = "Signing in…",
               style = MaterialTheme.typography.titleMedium,
               color = Color.White,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
           } else {
             Row(
@@ -817,7 +826,7 @@ fun AuthScreen(
                 text = stringResource(R.string.sign_in_with_google),
                 style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp),
                 color = Color.White,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
 
               Spacer(modifier = Modifier.weight(1f))
@@ -869,7 +878,7 @@ private fun TaskFlowAuthIllustration(modifier: Modifier = Modifier) {
       size = androidx.compose.ui.geometry.Size(w * 0.68f, h * 0.14f)
     )
 
-    // 2. Green leaves on the left
+    // 2. Subtle accent leaves on the left
     val leafPath1 =
       Path().apply {
         moveTo(w * 0.22f, h * 0.78f)
@@ -877,7 +886,7 @@ private fun TaskFlowAuthIllustration(modifier: Modifier = Modifier) {
         cubicTo(w * 0.25f, h * 0.58f, w * 0.26f, h * 0.70f, w * 0.22f, h * 0.78f)
         close()
       }
-    drawPath(path = leafPath1, color = Color(0xFF4ADE80))
+    drawPath(path = leafPath1, color = Color(0xFF93C5FD))
 
     val leafPath2 =
       Path().apply {
@@ -886,7 +895,7 @@ private fun TaskFlowAuthIllustration(modifier: Modifier = Modifier) {
         cubicTo(w * 0.22f, h * 0.66f, w * 0.26f, h * 0.76f, w * 0.24f, h * 0.82f)
         close()
       }
-    drawPath(path = leafPath2, color = Color(0xFF22C55E))
+    drawPath(path = leafPath2, color = Color(0xFF60A5FA))
 
     // 3. Royal Blue Clipboard (behind trophy, on left-center)
     val boardLeft = w * 0.26f

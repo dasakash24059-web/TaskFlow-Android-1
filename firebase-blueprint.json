@@ -376,6 +376,167 @@
         }
       },
       "required": ["userId", "email", "createdAt"]
+    },
+    "CampaignNetwork": {
+      "title": "CampaignNetwork",
+      "description": "Server-only extensible tracking network & adapter configuration (never client-readable).",
+      "type": "object",
+      "properties": {
+        "networkId": { "type": "string", "description": "Unique network configuration identifier." },
+        "name": { "type": "string", "description": "Human-readable network or verification provider name." },
+        "adapterType": {
+          "type": "string",
+          "enum": ["AFFILIATE_POSTBACK", "ADVERTISER_S2S_API", "TELEGRAM_BOT_API", "MANUAL_PROOF", "CUSTOM_APPROVED"]
+        },
+        "isActive": { "type": "boolean" },
+        "capabilities": { "type": "object", "description": "Declared capabilities such as supportsIncentivizedTraffic, supportsPostback, supportsInstallAttribution." },
+        "parameterMapping": { "type": "object", "description": "Network-specific query/body parameter name mappings." },
+        "postbackStatusMapping": { "type": "object", "description": "Maps raw provider statuses to PENDING, APPROVED, REJECTED, REVERSED." },
+        "signatureConfig": { "type": "object", "description": "Signature algorithm and environment secret reference key (never raw secrets)." },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["networkId", "name", "adapterType", "isActive", "parameterMapping", "signatureConfig", "createdAt"]
+    },
+    "CampaignTrackingConfig": {
+      "title": "CampaignTrackingConfig",
+      "description": "Server-only campaign eligibility, verification mode, attribution config, and private secret reference (never readable by clients or ordinary Admin UI queries).",
+      "type": "object",
+      "properties": {
+        "configId": { "type": "string" },
+        "campaignId": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "startAtMillis": { "type": "integer" },
+        "expiresAtMillis": { "type": "integer" },
+        "startAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "submissionBudget": { "type": "integer" },
+        "usedSubmissions": { "type": "integer" },
+        "rewardBudgetTf": { "type": "integer" },
+        "spentBudgetTf": { "type": "integer" },
+        "allowedCountries": { "type": "array" },
+        "allowedPlatforms": { "type": "array" },
+        "rewardTf": { "type": "integer" },
+        "verificationMode": {
+          "type": "string",
+          "enum": ["AFFILIATE_POSTBACK", "ADVERTISER_S2S_API", "TELEGRAM_BOT_API", "MANUAL_PROOF", "CUSTOM_APPROVED"]
+        },
+        "networkId": { "type": "string" },
+        "trackingNetworkRef": { "type": "string" },
+        "trackingBaseUrl": { "type": "string" },
+        "parameterOverrides": { "type": "object" },
+        "conversionRequirements": { "type": "object" },
+        "privateSecretRef": { "type": "string", "description": "Server-side secret identifier reference only." },
+        "postbackSecretHash": { "type": "string", "description": "Server-only SHA-256 digest of postback verification secret." },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "configId",
+        "campaignId",
+        "isActive",
+        "submissionBudget",
+        "allowedCountries",
+        "allowedPlatforms",
+        "rewardTf",
+        "verificationMode",
+        "networkId",
+        "trackingNetworkRef",
+        "createdAt"
+      ]
+    },
+    "CampaignClick": {
+      "title": "CampaignClick",
+      "description": "Server-only unique unpredictable click attribution record created prior to outbound campaign navigation.",
+      "type": "object",
+      "properties": {
+        "clickId": { "type": "string" },
+        "userId": { "type": "string" },
+        "campaignId": { "type": "string" },
+        "networkId": { "type": "string" },
+        "trackingNetworkRef": { "type": "string" },
+        "verificationMode": {
+          "type": "string",
+          "enum": ["AFFILIATE_POSTBACK", "ADVERTISER_S2S_API", "TELEGRAM_BOT_API", "MANUAL_PROOF", "CUSTOM_APPROVED"]
+        },
+        "countryCode": { "type": "string" },
+        "devicePlatform": { "type": "string" },
+        "resolvedParameters": { "type": "object" },
+        "status": {
+          "type": "string",
+          "enum": ["ISSUED", "CONVERTED", "EXPIRED", "CANCELLED"]
+        },
+        "expiresAtMillis": { "type": "integer" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clickId", "userId", "campaignId", "networkId", "trackingNetworkRef", "verificationMode", "status", "expiresAtMillis", "createdAt"]
+    },
+    "CampaignConversion": {
+      "title": "CampaignConversion",
+      "description": "Server-only campaign conversion lifecycle and idempotency record (PENDING, APPROVED, REJECTED, REVERSED).",
+      "type": "object",
+      "properties": {
+        "conversionId": { "type": "string" },
+        "clickId": { "type": "string" },
+        "userId": { "type": "string" },
+        "campaignId": { "type": "string" },
+        "networkId": { "type": "string" },
+        "trackingNetworkRef": { "type": "string" },
+        "verificationMode": {
+          "type": "string",
+          "enum": ["AFFILIATE_POSTBACK", "ADVERTISER_S2S_API", "TELEGRAM_BOT_API", "MANUAL_PROOF", "CUSTOM_APPROVED"]
+        },
+        "state": {
+          "type": "string",
+          "enum": ["PENDING", "APPROVED", "REJECTED", "REVERSED"]
+        },
+        "rewardTf": { "type": "integer" },
+        "externalTransactionId": { "type": "string" },
+        "idempotencyKey": { "type": "string" },
+        "statusReason": { "type": "string" },
+        "sourceCallbackType": { "type": "string" },
+        "rewardCredited": { "type": "boolean" },
+        "verifiedAt": { "type": "string", "format": "date-time" },
+        "reversedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "conversionId",
+        "userId",
+        "campaignId",
+        "networkId",
+        "verificationMode",
+        "state",
+        "rewardTf",
+        "idempotencyKey",
+        "rewardCredited",
+        "createdAt"
+      ]
+    },
+    "CampaignClickGuard": {
+      "title": "CampaignClickGuard",
+      "description": "Server-only per-user rate-limit and click deduplication lock state for safe click issuance.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "campaignId": { "type": "string" },
+        "activeClickId": { "type": "string" },
+        "activeClickExpiresAtMillis": { "type": "integer" },
+        "hasActiveReservation": { "type": "boolean" },
+        "hasCompletedConversion": { "type": "boolean" },
+        "lastIssuedAtMillis": { "type": "integer" },
+        "lastIdempotencyKey": { "type": "string" },
+        "windowStartedAtMillis": { "type": "integer" },
+        "windowClickCount": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "updatedAt"]
     }
   },
   "firestore": {
@@ -410,6 +571,26 @@
     "/admins/{adminId}": {
       "schema": { "$ref": "#/entities/AdminRecord" },
       "description": "Stores trusted administrator UIDs for role-based access control."
+    },
+    "/campaign_networks/{networkId}": {
+      "schema": { "$ref": "#/entities/CampaignNetwork" },
+      "description": "Server-only extensible tracking network & adapter definitions."
+    },
+    "/campaign_tracking_configs/{configId}": {
+      "schema": { "$ref": "#/entities/CampaignTrackingConfig" },
+      "description": "Server-only campaign tracking configurations, eligibility rules, and private postback secret references."
+    },
+    "/campaign_clicks/{clickId}": {
+      "schema": { "$ref": "#/entities/CampaignClick" },
+      "description": "Server-only unique click tracking records."
+    },
+    "/campaign_conversions/{conversionId}": {
+      "schema": { "$ref": "#/entities/CampaignConversion" },
+      "description": "Server-only campaign conversion records and idempotent verification states."
+    },
+    "/campaign_click_guards/{guardId}": {
+      "schema": { "$ref": "#/entities/CampaignClickGuard" },
+      "description": "Server-only click rate-limit and deduplication guard records."
     }
   }
 }

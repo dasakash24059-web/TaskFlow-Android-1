@@ -183,6 +183,9 @@ class TaskFlowViewModel(
   private val _isBusy = MutableStateFlow(false)
   val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
+  private val _isOpeningCampaignLink = MutableStateFlow(false)
+  val isOpeningCampaignLink: StateFlow<Boolean> = _isOpeningCampaignLink.asStateFlow()
+
   private val _uploadProgress = MutableStateFlow<Int?>(null)
   val uploadProgress: StateFlow<Int?> = _uploadProgress.asStateFlow()
 
@@ -446,6 +449,62 @@ class TaskFlowViewModel(
         installationConfirmed = true,
         currentStepNumber = (current?.currentStepNumber ?: 1).coerceAtLeast(1)
       )
+    }
+  }
+
+  /**
+   * Opens a task destination URL safely:
+   * - For tracked campaigns (`campaignId` present), requests a server-issued click via
+   *   `createCampaignClick` first, and only opens the returned attribution tracking URL.
+   * - For legacy manual proof tasks without a linked campaign (`campaignId` blank),
+   *   preserves the direct validated HTTPS launch flow.
+   */
+  fun openCampaignTaskLink(
+    task: TaskItem,
+    overrideUrl: String = "",
+    onTrackingUrlReady: (String) -> Unit
+  ) {
+    val rawUrl = overrideUrl.trim().ifEmpty { task.taskLink.trim() }
+    val cleanCampaignId = task.campaignId.trim()
+    if (cleanCampaignId.isEmpty()) {
+      if (!isValidTaskUrl(rawUrl)) {
+        _bannerMessage.value = "Invalid or unsafe campaign URL."
+        return
+      }
+      confirmTaskInstallation(task)
+      onTrackingUrlReady(rawUrl)
+      return
+    }
+
+    if (_isOpeningCampaignLink.value) return
+    _isOpeningCampaignLink.value = true
+    viewModelScope.launch {
+      try {
+        val attemptKey =
+          "${task.id.ifBlank { cleanCampaignId }.take(40)}_${UUID.randomUUID().toString().replace("-", "").take(12)}"
+            .replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        val result = repository.createCampaignClick(
+          campaignId = cleanCampaignId,
+          taskId = task.id,
+          devicePlatform = "ANDROID",
+          idempotencyKey = attemptKey
+        )
+        result
+          .onSuccess { issued ->
+            if (!isValidTaskUrl(issued.trackingUrl)) {
+              _bannerMessage.value = "Server returned an unsafe tracking URL."
+            } else {
+              confirmTaskInstallation(task)
+              onTrackingUrlReady(issued.trackingUrl)
+            }
+          }
+          .onFailure { err ->
+            _bannerMessage.value =
+              err.localizedMessage ?: "Unable to start tracked campaign right now."
+          }
+      } finally {
+        _isOpeningCampaignLink.value = false
+      }
     }
   }
 

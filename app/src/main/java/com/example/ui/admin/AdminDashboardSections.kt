@@ -142,8 +142,8 @@ internal val AdminBlueTint = Color(0xFFEFF6FF)
 internal val AdminTextDark = Color(0xFF0F172A)
 internal val AdminTextSecondary = Color(0xFF334155)
 internal val AdminTextMuted = Color(0xFF64748B)
-internal val AdminGreenSuccess = Color(0xFF059669)
-internal val AdminGreenTint = Color(0xFFECFDF5)
+internal val AdminGreenSuccess = Color(0xFFB45309)
+internal val AdminGreenTint = Color(0xFFFBF6E9)
 internal val AdminAmberWarning = Color(0xFFD97706)
 internal val AdminAmberTint = Color(0xFFFFFBEB)
 internal val AdminRedDanger = Color(0xFFDC2626)
@@ -383,7 +383,7 @@ fun AdminControlCenterHomeScreen(
                   text = "Admin Control Center",
                   style = MaterialTheme.typography.titleMedium,
                   color = AdminTextDark,
-                  fontWeight = FontWeight.Bold,
+                  fontWeight = FontWeight.SemiBold,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
                 )
@@ -486,7 +486,7 @@ fun AdminControlCenterHomeScreen(
           text = "Management Sections",
           style = MaterialTheme.typography.titleMedium,
           color = AdminTextDark,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
         Surface(
           shape = RoundedCornerShape(8.dp),
@@ -557,7 +557,7 @@ private fun HomeStatMiniCard(
           text = label,
           style = MaterialTheme.typography.labelSmall,
           color = AdminTextMuted,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
@@ -572,7 +572,7 @@ private fun HomeStatMiniCard(
         text = value,
         style = MaterialTheme.typography.titleMedium,
         color = AdminTextDark,
-        fontWeight = FontWeight.ExtraBold
+        fontWeight = FontWeight.SemiBold
       )
       Text(
         text = subtitle,
@@ -664,7 +664,7 @@ private fun AdminSquareManagementCard(
                 text = badgeCount.toString(),
                 style = MaterialTheme.typography.labelSmall,
                 color = AdminAmberWarning,
-                fontWeight = FontWeight.ExtraBold,
+                fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
               )
             }
@@ -691,7 +691,7 @@ private fun AdminSquareManagementCard(
           text = item.label,
           style = MaterialTheme.typography.titleMedium,
           color = AdminTextDark,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
@@ -773,7 +773,7 @@ fun AdminDedicatedPageHeader(
             text = sectionMeta.label,
             style = MaterialTheme.typography.titleSmall,
             color = AdminTextDark,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
           )
@@ -813,7 +813,7 @@ fun AdminDedicatedPageHeader(
             text = "Dashboard",
             style = MaterialTheme.typography.labelSmall,
             color = AdminBlueDark,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             softWrap = false
           )
@@ -862,7 +862,7 @@ fun AdminSectionNavigationBar(
           ) {
             Text(
               text = item.label,
-              fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+              fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
             )
             if (badgeCount > 0) {
               Surface(
@@ -873,7 +873,7 @@ fun AdminSectionNavigationBar(
                   text = badgeCount.toString(),
                   style = MaterialTheme.typography.labelSmall,
                   color = if (isSelected) AdminBluePrimary else AdminAmberWarning,
-                  fontWeight = FontWeight.Bold,
+                  fontWeight = FontWeight.SemiBold,
                   modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
                 )
               }
@@ -1028,7 +1028,7 @@ fun AdminOverviewSection(
                 text = "Live Operational Metrics",
                 style = MaterialTheme.typography.titleMedium,
                 color = AdminTextDark,
-                fontWeight = FontWeight.ExtraBold
+                fontWeight = FontWeight.SemiBold
               )
               Text(
                 text = "Real-time counts synchronized with Firebase Firestore",
@@ -1190,7 +1190,7 @@ fun AdminOverviewSection(
             text = "Financial & Budget Overview",
             style = MaterialTheme.typography.titleMedium,
             color = AdminTextDark,
-            fontWeight = FontWeight.ExtraBold
+            fontWeight = FontWeight.SemiBold
           )
           Text(
             text = "Conversion Standard: $COINS_PER_RUPEE Coins = ₹1.00 INR (All figures derived from live Firestore data)",
@@ -1247,7 +1247,7 @@ fun AdminOverviewSection(
               text = "Recent Activities (${recentActivities.size})",
               style = MaterialTheme.typography.titleMedium,
               color = AdminTextDark,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
             OutlinedButton(
               onClick = { onNavigateTab(AdminTab.ACTIVITY_LOGS) },
@@ -1320,7 +1320,7 @@ private fun FinancialSummaryRow(label: String, value: String) {
       text = value,
       style = MaterialTheme.typography.bodySmall,
       color = AdminTextDark,
-      fontWeight = FontWeight.Bold
+      fontWeight = FontWeight.SemiBold
     )
   }
 }
@@ -1370,7 +1370,7 @@ internal fun OverviewMetricTile(
         text = value,
         style = MaterialTheme.typography.titleLarge,
         color = AdminTextDark,
-        fontWeight = FontWeight.ExtraBold,
+        fontWeight = FontWeight.SemiBold,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis
       )
@@ -1503,7 +1503,7 @@ fun AdminCoinsRewardsSection(
             Text(
               text = "Coins & INR Conversion Standard",
               style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               color = AdminTextDark
             )
           }
@@ -1575,7 +1575,7 @@ fun AdminCoinsRewardsSection(
             text = "User Coin & Rupee Balances (${users.size})",
             style = MaterialTheme.typography.titleMedium,
             color = AdminTextDark,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           val sortedUsers =
             remember(users) { users.sortedByDescending { it.getEffectiveBalanceCoins() } }
@@ -1610,7 +1610,7 @@ fun AdminCoinsRewardsSection(
                 Text(
                   text = "${formatCoins(userCoins)} (${formatRewardInr(userCents)})",
                   style = MaterialTheme.typography.bodyMedium,
-                  fontWeight = FontWeight.Bold,
+                  fontWeight = FontWeight.SemiBold,
                   color = AdminBluePrimary
                 )
               }
@@ -1627,7 +1627,7 @@ fun AdminCoinsRewardsSection(
         text = "Reward Transactions & Approval Ledger (${creditTransactions.size})",
         style = MaterialTheme.typography.titleMedium,
         color = AdminTextDark,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.SemiBold
       )
     }
 
@@ -1682,7 +1682,7 @@ fun AdminCoinsRewardsSection(
                 text = tx.title.ifBlank { "Task Reward Credit" },
                 style = MaterialTheme.typography.bodyMedium,
                 color = AdminTextDark,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               Text(
                 text = "Member: ${tx.userName.ifBlank { "Verified User" }}",
@@ -1698,7 +1698,7 @@ fun AdminCoinsRewardsSection(
             Text(
               text = "+${formatCoins(txCoins)} (${formatRewardInr(txCents)})",
               style = MaterialTheme.typography.bodyMedium,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               color = AdminGreenSuccess
             )
           }
@@ -1753,7 +1753,7 @@ fun AdminTelegramJoinManagementCard(
           Text(
             text = "Telegram Join Tasks (${telegramTasks.size})",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = AdminTextDark
           )
         }
@@ -1764,7 +1764,7 @@ fun AdminTelegramJoinManagementCard(
           Text(
             text = if (isActive) "Active" else "Inactive",
             style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = if (isActive) AdminGreenSuccess else AdminTextMuted
           )
           Switch(
@@ -1869,7 +1869,7 @@ fun AdminTelegramJoinManagementCard(
       ) {
         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
-        Text("Create Telegram Task", fontWeight = FontWeight.Bold)
+        Text("Create Telegram Task", fontWeight = FontWeight.SemiBold)
       }
 
       if (telegramTasks.isNotEmpty()) {
@@ -1877,7 +1877,7 @@ fun AdminTelegramJoinManagementCard(
         Text(
           text = "Uploaded Telegram Tasks (${telegramTasks.size})",
           style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           color = AdminTextDark
         )
         telegramTasks.forEach { task ->
@@ -1901,7 +1901,7 @@ fun AdminTelegramJoinManagementCard(
                   Text(
                     text = task.title.ifBlank { "Telegram Join Task" },
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     color = AdminTextDark,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -1913,7 +1913,7 @@ fun AdminTelegramJoinManagementCard(
                     Text(
                       text = if (task.isActive) "ACTIVE" else "INACTIVE",
                       style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.Bold,
+                      fontWeight = FontWeight.SemiBold,
                       color = if (task.isActive) AdminGreenSuccess else AdminTextMuted,
                       modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                     )
@@ -1947,7 +1947,7 @@ fun AdminTelegramJoinManagementCard(
                 Text(
                   text = if (task.isActive) "Deactivate" else "Activate",
                   style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
               }
             }
@@ -1960,7 +1960,7 @@ fun AdminTelegramJoinManagementCard(
         Text(
           text = "Recent Telegram Claims (${telegramClaims.size})",
           style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           color = AdminTextDark
         )
         telegramClaims.take(8).forEach { claim ->
@@ -1989,7 +1989,7 @@ fun AdminTelegramJoinManagementCard(
             Text(
               text = "+${formatCoins(claim.rewardCoins)}",
               style = MaterialTheme.typography.bodySmall,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               color = AdminGreenSuccess
             )
           }
@@ -2059,7 +2059,7 @@ fun AdminPromoCodeManagerCard(
           Text(
             text = "Promo Code Manager (${promoCodes.size})",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = AdminTextDark
           )
         }
@@ -2228,11 +2228,11 @@ fun AdminPromoCodeManagerCard(
             color = Color.White
           )
           Spacer(modifier = Modifier.width(8.dp))
-          Text("Creating...", fontWeight = FontWeight.Bold)
+          Text("Creating...", fontWeight = FontWeight.SemiBold)
         } else {
           Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
           Spacer(modifier = Modifier.width(6.dp))
-          Text("Create Promo Code", fontWeight = FontWeight.Bold)
+          Text("Create Promo Code", fontWeight = FontWeight.SemiBold)
         }
       }
 
@@ -2266,7 +2266,7 @@ fun AdminPromoCodeManagerCard(
                   Text(
                     text = promo.code,
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.SemiBold,
                     color = AdminTextDark
                   )
                   Surface(
@@ -2276,7 +2276,7 @@ fun AdminPromoCodeManagerCard(
                     Text(
                       text = effStatus,
                       style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.Bold,
+                      fontWeight = FontWeight.SemiBold,
                       color = statusColor,
                       modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                     )
@@ -2309,7 +2309,7 @@ fun AdminPromoCodeManagerCard(
                 Text(
                   text = if (promo.isActive) "Deactivate" else "Activate",
                   style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
               }
             }
@@ -2380,7 +2380,7 @@ fun AdminManualBonusCreditCard(
         Text(
           text = "Manual Bonus Credit",
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           color = AdminTextDark
         )
       }
@@ -2437,7 +2437,7 @@ fun AdminManualBonusCreditCard(
                   Text(
                     text = user.displayName.ifBlank { "TaskFlow User" },
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     color = AdminTextDark
                   )
                   Text(
@@ -2451,7 +2451,7 @@ fun AdminManualBonusCreditCard(
                 Text(
                   text = formatCoins(user.getEffectiveBalanceCoins()),
                   style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Bold,
+                  fontWeight = FontWeight.SemiBold,
                   color = AdminBluePrimary
                 )
               }
@@ -2465,7 +2465,7 @@ fun AdminManualBonusCreditCard(
           text = "Selected: ${selectedUser.displayName} (Current Wallet: ${formatCoins(selectedUser.getEffectiveBalanceCoins())})",
           style = MaterialTheme.typography.labelMedium,
           color = AdminGreenSuccess,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           modifier = Modifier.testTag("admin_manual_bonus_selected_user_label")
         )
       }
@@ -2528,7 +2528,7 @@ fun AdminManualBonusCreditCard(
         colors = ButtonDefaults.buttonColors(containerColor = AdminGreenSuccess),
         modifier = Modifier.fillMaxWidth().testTag("admin_manual_bonus_submit_button")
       ) {
-        Text("Credit Manual Bonus", fontWeight = FontWeight.Bold)
+        Text("Credit Manual Bonus", fontWeight = FontWeight.SemiBold)
       }
 
       if (manualBonuses.isNotEmpty()) {
@@ -2536,7 +2536,7 @@ fun AdminManualBonusCreditCard(
         Text(
           text = "Recent Manual Bonus Credits (${manualBonuses.size})",
           style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           color = AdminTextDark
         )
         manualBonuses.take(5).forEach { bonus ->
@@ -2561,7 +2561,7 @@ fun AdminManualBonusCreditCard(
             Text(
               text = "+${formatCoins(bonus.amountCoins)}",
               style = MaterialTheme.typography.bodySmall,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               color = AdminGreenSuccess
             )
           }
@@ -2839,7 +2839,7 @@ private fun AnalyticsTrendCard(
         text = title,
         style = MaterialTheme.typography.titleMedium,
         color = AdminTextDark,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.SemiBold
       )
       Text(
         text = subtitle,
@@ -2920,7 +2920,7 @@ private fun AnalyticsTrendCard(
       Text(
         text = progressLabel,
         style = MaterialTheme.typography.labelMedium,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.SemiBold,
         color = AdminBlueDark
       )
       HorizontalDivider(color = AdminBorderColor)
@@ -2947,7 +2947,7 @@ private fun AnalyticsTrendCard(
                     text = mVal,
                     style = MaterialTheme.typography.titleSmall,
                     color = AdminTextDark,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.SemiBold
                   )
                 }
               }
@@ -3040,7 +3040,7 @@ fun AdminVerificationFraudSection(
                 text = "Verification & Fraud Control",
                 style = MaterialTheme.typography.titleSmall,
                 color = AdminTextDark,
-                fontWeight = FontWeight.ExtraBold
+                fontWeight = FontWeight.SemiBold
               )
               Text(
                 text = "Proofs: $pendingCount Pending, $approvedCount Appr, $rejectedCount Rej • Users: ${pendingUsers.size} Pending",
@@ -3056,7 +3056,7 @@ fun AdminVerificationFraudSection(
             text = "Alert: $duplicateCount submission(s) share identical proof text/URLs across multiple entries.",
             style = MaterialTheme.typography.labelSmall,
             color = AdminRedDanger,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
         }
 
@@ -3180,7 +3180,7 @@ fun AdminVerificationFraudSection(
                       text = user.displayName.ifBlank { "TaskFlow User" },
                       style = MaterialTheme.typography.titleSmall,
                       color = AdminTextDark,
-                      fontWeight = FontWeight.Bold
+                      fontWeight = FontWeight.SemiBold
                     )
                     Text(
                       text = formatVisibleUserEmail(user.email, user.role),
@@ -3196,7 +3196,7 @@ fun AdminVerificationFraudSection(
                       text = user.approvalStatus.uppercase(Locale.US),
                       style = MaterialTheme.typography.labelSmall,
                       color = AdminBlueDark,
-                      fontWeight = FontWeight.Bold,
+                      fontWeight = FontWeight.SemiBold,
                       modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                   }
@@ -3282,7 +3282,7 @@ fun AdminAppSettingsSection(
             text = "Appearance & Theme Mode",
             style = MaterialTheme.typography.titleMedium,
             color = AdminTextDark,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           Text(
             text = "Select the active appearance mode for this device.",
@@ -3337,7 +3337,7 @@ fun AdminAppSettingsSection(
             text = "Reward & Task/Campaign Limit Rules",
             style = MaterialTheme.typography.titleMedium,
             color = AdminTextDark,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           FinancialSummaryRow("Coin Conversion Standard", "$COINS_PER_RUPEE Coins = ₹1.00 INR")
           FinancialSummaryRow("Daily Check-In Reward", "30-Day Schedule (25–1,000 Coins)")
@@ -3371,7 +3371,7 @@ fun AdminAppSettingsSection(
               text = "Notification Preferences",
               style = MaterialTheme.typography.titleMedium,
               color = AdminTextDark,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
           }
           Row(
@@ -3448,7 +3448,7 @@ fun AdminAppSettingsSection(
             text = "Application Build & Remote Update",
             style = MaterialTheme.typography.titleMedium,
             color = AdminTextDark,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           Text(
             text = "Package ID: ${BuildConfig.APPLICATION_ID}",
@@ -3495,7 +3495,7 @@ fun AdminAppSettingsSection(
               text = "Firebase & Zero-Trust Security Config",
               style = MaterialTheme.typography.titleMedium,
               color = AdminTextDark,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
           }
           Text(
@@ -3632,7 +3632,7 @@ fun AdminActivityLogsSection(
                     text = entry.category,
                     style = MaterialTheme.typography.labelSmall,
                     color = AdminBlueDark,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                   )
                 }
@@ -3640,7 +3640,7 @@ fun AdminActivityLogsSection(
                   text = entry.title,
                   style = MaterialTheme.typography.bodyMedium,
                   color = AdminTextDark,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
               }
               Text(
@@ -3869,7 +3869,7 @@ fun AdminSupportManagementSection(
                 Text(
                   text = "User Help & Support Requests",
                   style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.Bold,
+                  fontWeight = FontWeight.SemiBold,
                   color = AdminTextDark
                 )
                 Text(
@@ -3980,7 +3980,7 @@ fun AdminSupportManagementSection(
                       Text(
                         text = "NEW",
                         style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                         color = AdminBluePrimary,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                       )
@@ -3989,7 +3989,7 @@ fun AdminSupportManagementSection(
                   Text(
                     text = ticket.subject.ifBlank { "Support Inquiry" },
                     style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     color = AdminTextDark,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -4018,7 +4018,7 @@ fun AdminSupportManagementSection(
                 Text(
                   text = normalizedStatus.replace('_', ' '),
                   style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.Bold,
+                  fontWeight = FontWeight.SemiBold,
                   color = statusColor,
                   modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                 )
@@ -4050,7 +4050,7 @@ fun AdminSupportManagementSection(
                   Text(
                     text = "Account Details",
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     color = AdminTextDark
                   )
                   Text(
@@ -4087,7 +4087,7 @@ fun AdminSupportManagementSection(
                           Text(
                             text = if (isAdminMsg) "Admin (${msg.senderName.ifBlank { "Support" }})" else msg.senderName.ifBlank { "User" },
                             style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                             color = if (isAdminMsg) AdminBluePrimary else AdminTextDark
                           )
                           if (msg.createdAtMillis > 0L) {
@@ -4127,7 +4127,7 @@ fun AdminSupportManagementSection(
                       Text(
                         text = "Previous Admin Reply",
                         style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                         color = AdminBluePrimary
                       )
                       Text(
@@ -4144,7 +4144,7 @@ fun AdminSupportManagementSection(
               Text(
                 text = "Update Ticket Status",
                 style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.SemiBold,
                 color = AdminTextDark
               )
               Row(

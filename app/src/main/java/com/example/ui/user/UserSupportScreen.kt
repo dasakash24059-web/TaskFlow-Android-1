@@ -69,6 +69,7 @@ import com.example.data.model.SupportTicket
 import com.example.data.model.SupportTicketStatus
 import com.example.data.model.TaskFlowFaqData
 import com.example.data.model.TaskFlowFaqItem
+import com.example.ui.theme.taskFlowColors
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -116,7 +117,7 @@ fun UserSupportScreen(
           Text(
             text = "Help & Support",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface
           )
           Text(
@@ -180,6 +181,7 @@ private fun ContactSupportTicketView(
   supportTickets: List<SupportTicket>,
   onReplyToTicket: ((String, String, (Boolean) -> Unit) -> Unit)?
 ) {
+  val tfColors = taskFlowColors()
   var subject by rememberSaveable { mutableStateOf("") }
   var category by rememberSaveable { mutableStateOf("Task Issue") }
   var message by rememberSaveable { mutableStateOf("") }
@@ -215,7 +217,7 @@ private fun ContactSupportTicketView(
         Text(
           text = "New Support Request",
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           color = MaterialTheme.colorScheme.onSurface
         )
         Text(
@@ -291,7 +293,7 @@ private fun ContactSupportTicketView(
                 text = "Inquiry Submitted!",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               Text(
                 text = "Your support request has been submitted. You can track its status and replies below.",
@@ -357,7 +359,7 @@ private fun ContactSupportTicketView(
           Text(
             text = "My Support Requests (${supportTickets.size})",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface
           )
         }
@@ -375,8 +377,8 @@ private fun ContactSupportTicketView(
             val normalizedStatus = SupportTicketStatus.normalize(ticket.status)
             val statusColor =
               when (normalizedStatus) {
-                SupportTicketStatus.RESOLVED -> Color(0xFF059669)
-                SupportTicketStatus.IN_PROGRESS -> Color(0xFFD97706)
+                SupportTicketStatus.RESOLVED -> tfColors.goldText
+                SupportTicketStatus.IN_PROGRESS -> tfColors.goldAccent
                 else -> MaterialTheme.colorScheme.primary
               }
             val createdLabel =
@@ -433,7 +435,7 @@ private fun ContactSupportTicketView(
                           Text(
                             text = "New Reply",
                             style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                           )
@@ -455,7 +457,7 @@ private fun ContactSupportTicketView(
                     Text(
                       text = normalizedStatus.replace('_', ' '),
                       style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.Bold,
+                      fontWeight = FontWeight.SemiBold,
                       color = statusColor,
                       modifier =
                         Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -521,7 +523,7 @@ private fun ContactSupportTicketView(
                               Text(
                                 text = if (isAdminMsg) "Support Team" else msg.senderName.ifBlank { "You" },
                                 style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.SemiBold,
                                 color =
                                   if (isAdminMsg) {
                                     MaterialTheme.colorScheme.primary
@@ -570,7 +572,7 @@ private fun ContactSupportTicketView(
                           Text(
                             text = "Support Team",
                             style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.primary
                           )
                           Text(

@@ -502,7 +502,7 @@ fun AdminDashboardScreen(
                   text = "TaskFlow Admin",
                   style = MaterialTheme.typography.titleMedium,
                   color = Color.White,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
                 Text(
                   text = "Mobile Control Center",
@@ -885,7 +885,7 @@ private fun AdminMetricCard(
         text = value,
         style = MaterialTheme.typography.titleMedium,
         color = AdminTextDark,
-        fontWeight = FontWeight.ExtraBold
+        fontWeight = FontWeight.SemiBold
       )
     }
   }
@@ -929,7 +929,7 @@ private fun AdminTasksTabContent(
         Text(
           text = "Delete Task?",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
       },
       text = {
@@ -999,7 +999,7 @@ private fun AdminTasksTabContent(
             text = "Pending Proofs: $pendingReviewCount",
             style = MaterialTheme.typography.labelSmall,
             color = AdminAmberWarning,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
           )
         }
@@ -1087,7 +1087,7 @@ private fun AdminTasksTabContent(
                       } else {
                         MaterialTheme.colorScheme.onErrorContainer
                       },
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                   )
                 }
@@ -1139,7 +1139,7 @@ private fun AdminTasksTabContent(
                     text = "STEP-BY-STEP INSTRUCTIONS",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.SemiBold
                   )
                   Spacer(modifier = Modifier.height(4.dp))
                   Text(
@@ -1163,7 +1163,7 @@ private fun AdminTasksTabContent(
                     text = "REQUIRED PROOF",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.secondary,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.SemiBold
                   )
                   Spacer(modifier = Modifier.height(2.dp))
                   Text(
@@ -1214,7 +1214,7 @@ private fun AdminTasksTabContent(
                   Text(
                     text = if (task.isActive) "Deactivate" else "Activate",
                     style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.SemiBold
                   )
                 }
                 IconButton(
@@ -1352,7 +1352,7 @@ private fun SubmissionReviewCard(
         Text(
           text = "Submission Technical Details",
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
       },
       text = {
@@ -1400,7 +1400,7 @@ private fun SubmissionReviewCard(
                 text = "Duplicate / Flagged",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onErrorContainer,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
               )
             }
@@ -1503,7 +1503,7 @@ private fun SubmissionReviewCard(
             text = "1. WRITTEN TEXT PROOF",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           Spacer(modifier = Modifier.height(6.dp))
           Text(
@@ -1542,7 +1542,7 @@ private fun SubmissionReviewCard(
                 text = "2. UPLOADED PHOTO / SCREENSHOT PROOF",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
             }
           }
@@ -1712,7 +1712,7 @@ private fun AdminUsersTabContent(
         Text(
           text = "Confirm Status Change",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
       },
       text = {
@@ -1792,7 +1792,7 @@ private fun AdminUsersTabContent(
             Text(
               text = user.displayName.ifBlank { "User Profile" },
               style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
             Text(
               text = formatVisibleUserEmail(user.email, user.role),
@@ -1815,7 +1815,7 @@ private fun AdminUsersTabContent(
               Text(
                 text = "Edit Display Name",
                 style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               OutlinedTextField(
                 value = editedNameInput,
@@ -1907,7 +1907,7 @@ private fun AdminUsersTabContent(
                 text = "USER TASK HISTORY (${userTaskHistory.size})",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               if (userTaskHistory.isEmpty()) {
                 Text(
@@ -1943,7 +1943,7 @@ private fun AdminUsersTabContent(
                 text = "USER REWARD HISTORY (${userRewardHistory.size})",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               if (userRewardHistory.isEmpty()) {
                 Text(
@@ -1974,7 +1974,7 @@ private fun AdminUsersTabContent(
           Text(
             text = "Status Actions:",
             style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
 
           Row(
@@ -2094,7 +2094,7 @@ private fun AdminUsersTabContent(
             Text(
               text = if (searchQuery.isNotBlank()) "No users match '$searchQuery'" else "No users in this category",
               style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               textAlign = TextAlign.Center
             )
             Text(
@@ -2116,7 +2116,7 @@ private fun AdminUsersTabContent(
         val uid = user.userId.ifBlank { user.id }
         val statusUpper = user.approvalStatus.uppercase(Locale.US)
         val statusColor = when (user.approvalStatus.lowercase(Locale.US)) {
-          "approved" -> androidx.compose.ui.graphics.Color(0xFF16A34A)
+          "approved" -> AdminGreenSuccess
           "suspended" -> MaterialTheme.colorScheme.error
           else -> androidx.compose.ui.graphics.Color(0xFFD97706)
         }
@@ -2160,7 +2160,7 @@ private fun AdminUsersTabContent(
                   Text(
                     text = user.displayName.ifBlank { "User" },
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.SemiBold
                   )
                   Text(
                     text = formatVisibleUserEmail(user.email, user.role),
@@ -2191,7 +2191,7 @@ private fun AdminUsersTabContent(
                     text = statusUpper,
                     style = MaterialTheme.typography.labelSmall,
                     color = statusColor,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                   )
                 }
@@ -2203,7 +2203,7 @@ private fun AdminUsersTabContent(
                     text = user.role.uppercase(Locale.US),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                   )
                 }
@@ -2443,7 +2443,7 @@ private fun TaskEditorDialog(
         Text(
           text = if (existingTask == null) "Unified Task & Campaign Form" else "Edit Task / Campaign",
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           modifier = Modifier.weight(1f)
         )
         OutlinedButton(
@@ -2455,7 +2455,7 @@ private fun TaskEditorDialog(
           Text(
             text = if (showUserPreview) "Back to Form" else "Preview",
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
         }
       }
@@ -2475,7 +2475,7 @@ private fun TaskEditorDialog(
               text = "LIVE USER PREVIEW — How users see this task before you publish",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onPrimaryContainer,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               modifier = Modifier.padding(10.dp)
             )
           }
@@ -2494,7 +2494,7 @@ private fun TaskEditorDialog(
                   size = 44.dp
                 )
                 Column(modifier = Modifier.weight(1f)) {
-                  Text(title.ifBlank { "Untitled Task" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                  Text(title.ifBlank { "Untitled Task" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                   Text("${appName.ifBlank { category }} • $category", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
                 RewardBadge(rewardCents = rewardCoinsStr.toLongOrNull() ?: 500L)
@@ -2504,7 +2504,7 @@ private fun TaskEditorDialog(
                 Text("Install Guide: $installationInstructions", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
               }
               HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-              Text("UNIFIED STEP-BY-STEP INSTRUCTIONS", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+              Text("UNIFIED STEP-BY-STEP INSTRUCTIONS", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
               if (dynamicSteps.isNotEmpty()) {
                 dynamicSteps.forEachIndexed { idx, step ->
                   Text("${idx + 1}. ${step.title}: ${step.instructions}", style = MaterialTheme.typography.bodySmall)
@@ -2532,7 +2532,7 @@ private fun TaskEditorDialog(
             text = "1. Basic Task & Campaign Identity",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
 
           // 1. Task Title
@@ -2642,7 +2642,7 @@ private fun TaskEditorDialog(
             text = "2. Reward, Link & Overview",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
 
           // 5. Reward Amount (Coins)
@@ -2694,7 +2694,7 @@ private fun TaskEditorDialog(
             text = "3. Installation & Step-by-Step Instructions",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
 
           OutlinedTextField(
@@ -2736,7 +2736,7 @@ private fun TaskEditorDialog(
               Text(
                 text = "Dynamic Structured Steps (${dynamicSteps.size}) — Add / Reorder / Delete",
                 style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               dynamicSteps.forEachIndexed { idx, step ->
                 Row(
@@ -2856,7 +2856,7 @@ private fun TaskEditorDialog(
             text = "4. Proof & Sample Screenshot Requirements",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
 
           // 9. Required Proof Description
@@ -2914,7 +2914,7 @@ private fun TaskEditorDialog(
             text = "5. Campaign Quota, Dates, Eligibility & Availability",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
 
           Row(
@@ -2964,7 +2964,7 @@ private fun TaskEditorDialog(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
           ) {
-            Text("Task Availability:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            Text("Task Availability:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
             FilterChip(
               selected = isTaskActive,
               onClick = { isTaskActive = true },
@@ -3222,7 +3222,7 @@ fun AdminCampaignsTabContent(
                 text = "Campaign Management & Quotas",
                 style = MaterialTheme.typography.titleMedium,
                 color = AdminTextDark,
-                fontWeight = FontWeight.ExtraBold
+                fontWeight = FontWeight.SemiBold
               )
               Text(
                 text = "Total: $totalCampaignsCount • Active: $activeCampaignsCount • Paused: $pausedCampaignsCount • Completed: $completedCampaignsCount",
@@ -3263,7 +3263,7 @@ fun AdminCampaignsTabContent(
                   text = "${formatRewardInr(totalBudgetCents)} / ${formatRewardInr(usedBudgetCents)}",
                   style = MaterialTheme.typography.bodyMedium,
                   color = AdminTextDark,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
                 Text(
                   text = "Remaining: ${formatRewardInr(remainingBudgetCents)}",
@@ -3284,7 +3284,7 @@ fun AdminCampaignsTabContent(
                   text = "$totalParticipation / $totalTargetQuota Submissions",
                   style = MaterialTheme.typography.bodyMedium,
                   color = AdminTextDark,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
                 Text(
                   text = "Completion Rate: $conversionRatePct%",
@@ -3319,7 +3319,7 @@ fun AdminCampaignsTabContent(
             Text(
               text = "No Active Campaigns",
               style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
@@ -3371,7 +3371,7 @@ fun CampaignCardItem(
           Text(
             text = campaign.title,
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
           )
@@ -3410,7 +3410,7 @@ fun CampaignCardItem(
           Text(
             text = if (campaign.isQuotaExhausted) "QUOTA CLOSED" else campaign.status.uppercase(Locale.US),
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             color = when (campaign.status.uppercase(Locale.US)) {
               "ACTIVE" -> MaterialTheme.colorScheme.onPrimaryContainer
@@ -3550,7 +3550,7 @@ fun CampaignEditorDialog(
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text(if (existingCampaign == null) "Launch Partner Campaign" else "Edit Campaign", fontWeight = FontWeight.Bold) },
+    title = { Text(if (existingCampaign == null) "Launch Partner Campaign" else "Edit Campaign", fontWeight = FontWeight.SemiBold) },
     text = {
       Column(
         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -3737,7 +3737,7 @@ fun AdminAppsTabContent(
             Text(
               text = "App Management",
               style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
             Text(
               text = "Create and organize apps for task publishing.",
@@ -3782,7 +3782,7 @@ fun AdminAppsTabContent(
             Text(
               text = "No Apps Created Yet",
               style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
@@ -3838,7 +3838,7 @@ fun AppCardItem(
         Text(
           text = app.name,
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.height(2.dp))
         Surface(
@@ -3895,7 +3895,7 @@ fun AppEditorDialog(
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text(if (existingApp == null) "Create New App" else "Edit App", fontWeight = FontWeight.Bold) },
+    title = { Text(if (existingApp == null) "Create New App" else "Edit App", fontWeight = FontWeight.SemiBold) },
     text = {
       Column(
         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),

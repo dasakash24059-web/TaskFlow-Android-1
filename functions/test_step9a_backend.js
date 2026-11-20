@@ -550,7 +550,7 @@ test("Part B2: Full secure Telegram verification -> webhook linking -> getChatMe
   assert.equal(secondVerify.verified, true);
   assert.equal(db.read("users/u_alice/telegram_task_states/tg_task_1").isMembershipVerified, true);
 
-  // Step 5: If user leaves before clicking CLAIM, live re-verification blocks claim!
+  // Step 5: If user leaves before clicking CLAIM, live re-verification blocks claim AND resets isMembershipVerified = false!
   await expectHttpsError(
     handleClaimTelegramTaskReward(
       { auth: { uid: "u_alice" }, data: { taskId: "tg_task_1" } },
@@ -561,6 +561,31 @@ test("Part B2: Full secure Telegram verification -> webhook linking -> getChatMe
     ),
     "permission-denied"
   );
+  assert.equal(db.read("users/u_alice/telegram_task_states/tg_task_1").isMembershipVerified, false);
+
+  // Attempting to claim again without re-verifying MUST fail with failed-precondition
+  await expectHttpsError(
+    handleClaimTelegramTaskReward(
+      { auth: { uid: "u_alice" }, data: { taskId: "tg_task_1" } },
+      makeDeps(db, {
+        botToken: "test-bot-token",
+        getChatMember: async () => ({ ok: true, result: { status: "member" } })
+      })
+    ),
+    "failed-precondition",
+    "VERIFY before claiming"
+  );
+
+  // User re-joins and re-verifies -> state transitions back to verified
+  const reVerify = await handleVerifyTelegramTaskMembership(
+    { auth: { uid: "u_alice" }, data: { taskId: "tg_task_1" } },
+    makeDeps(db, {
+      botToken: "test-bot-token",
+      getChatMember: async () => ({ ok: true, result: { status: "member" } })
+    })
+  );
+  assert.equal(reVerify.verified, true);
+  assert.equal(db.read("users/u_alice/telegram_task_states/tg_task_1").isMembershipVerified, true);
 
   // Step 6: User stays member and calls CLAIM -> atomic wallet credit + ledger + notification + claim history + leaderboard sync
   const claimRes = await handleClaimTelegramTaskReward(
@@ -589,7 +614,7 @@ test("Part B2: Full secure Telegram verification -> webhook linking -> getChatMe
   assert.ok(notif.body && notif.message);
   assert.equal(db.read("leaderboard/u_alice").balanceCoins, 1450);
 
-  // Duplicate claim MUST be blocked
+  // Duplicate claim MUST be blocked (even when still member)
   await expectHttpsError(
     handleClaimTelegramTaskReward(
       { auth: { uid: "u_alice" }, data: { taskId: "tg_task_1" } },
@@ -600,6 +625,20 @@ test("Part B2: Full secure Telegram verification -> webhook linking -> getChatMe
     ),
     "already-exists"
   );
+
+  // Even if user leaves AFTER claiming, a late claim call must NOT corrupt isClaimed or overwrite verified state of claimed doc
+  await expectHttpsError(
+    handleClaimTelegramTaskReward(
+      { auth: { uid: "u_alice" }, data: { taskId: "tg_task_1" } },
+      makeDeps(db, {
+        botToken: "test-bot-token",
+        getChatMember: async () => ({ ok: true, result: { status: "left" } })
+      })
+    ),
+    "permission-denied"
+  );
+  assert.equal(db.read("users/u_alice/telegram_task_states/tg_task_1").isClaimed, true);
+  assert.equal(db.read("users/u_alice/telegram_task_states/tg_task_1").isMembershipVerified, true);
 
   // Bob trying to link the same Telegram account 555001 via getUpdates fallback MUST fail with TELEGRAM_ALREADY_BOUND
   const bobLinkPrompt = await handleVerifyTelegramTaskMembership(
@@ -634,4 +673,101 @@ test("Part B2: Full secure Telegram verification -> webhook linking -> getChatMe
     "already-exists",
     "already linked to another TaskFlow user"
   );
+});
+
+test("Part B3: Telegram webhook fails safely when TELEGRAM_WEBHOOK_SECRET is missing or mismatched, and accepts valid secret", async () => {
+  const db = createMockFirestore();
+  const prevEnvSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  delete process.env.TELEGRAM_WEBHOOK_SECRET;
+
+  try {
+    db.seed("telegram_link_tokens/tok_webhook_test_1", {
+      token: "tok_webhook_test_1",
+      userId: "u_webhook_user",
+      taskId: "tg_task_1",
+      status: "PENDING",
+      expiresAtMillis: 1_760_000_900_000
+    });
+
+    const createMockRes = () => ({
+      statusCode: 200,
+      body: null,
+      status(c) {
+        this.statusCode = c;
+        return this;
+      },
+      json(b) {
+        this.body = b;
+        return this;
+      },
+      send(b) {
+        this.body = b;
+        return this;
+      }
+    });
+
+    const payload = {
+      update_id: 101,
+      message: {
+        text: "/start tok_webhook_test_1",
+        from: { id: 777001, is_bot: false, username: "wh_user" }
+      }
+    };
+
+    // 1. Missing configured TELEGRAM_WEBHOOK_SECRET -> fails safely with HTTP 500, does NOT link account
+    const missingSecretRes = createMockRes();
+    await handleTelegramBotWebhook(
+      { method: "POST", headers: {}, body: payload },
+      missingSecretRes,
+      makeDeps(db, { webhookSecret: "" })
+    );
+    assert.equal(missingSecretRes.statusCode, 500);
+    assert.equal(missingSecretRes.body.ok, false);
+    assert.equal(db.read("telegram_accounts/u_webhook_user"), null);
+    assert.equal(db.read("telegram_link_tokens/tok_webhook_test_1").status, "PENDING");
+
+    // 2. Configured secret present, but header missing -> HTTP 401
+    const missingHeaderRes = createMockRes();
+    await handleTelegramBotWebhook(
+      { method: "POST", headers: {}, body: payload },
+      missingHeaderRes,
+      makeDeps(db, { webhookSecret: "prod_webhook_secret_xyz" })
+    );
+    assert.equal(missingHeaderRes.statusCode, 401);
+    assert.equal(db.read("telegram_accounts/u_webhook_user"), null);
+
+    // 3. Configured secret present, wrong header -> HTTP 401
+    const wrongHeaderRes = createMockRes();
+    await handleTelegramBotWebhook(
+      {
+        method: "POST",
+        headers: { "x-telegram-bot-api-secret-token": "wrong_secret" },
+        body: payload
+      },
+      wrongHeaderRes,
+      makeDeps(db, { webhookSecret: "prod_webhook_secret_xyz" })
+    );
+    assert.equal(wrongHeaderRes.statusCode, 401);
+    assert.equal(db.read("telegram_accounts/u_webhook_user"), null);
+
+    // 4. Configured secret present, valid header -> HTTP 200 and account is linked
+    const validRes = createMockRes();
+    await handleTelegramBotWebhook(
+      {
+        method: "POST",
+        headers: { "x-telegram-bot-api-secret-token": "prod_webhook_secret_xyz" },
+        body: payload
+      },
+      validRes,
+      makeDeps(db, { webhookSecret: "prod_webhook_secret_xyz" })
+    );
+    assert.equal(validRes.statusCode, 200);
+    assert.equal(validRes.body.ok, true);
+    assert.equal(db.read("telegram_accounts/u_webhook_user").telegramUserId, "777001");
+    assert.equal(db.read("telegram_link_tokens/tok_webhook_test_1").status, "USED");
+  } finally {
+    if (prevEnvSecret !== undefined) {
+      process.env.TELEGRAM_WEBHOOK_SECRET = prevEnvSecret;
+    }
+  }
 });

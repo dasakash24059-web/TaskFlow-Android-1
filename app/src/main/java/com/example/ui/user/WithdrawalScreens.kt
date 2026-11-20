@@ -75,6 +75,7 @@ import com.example.data.model.WithdrawalStatus
 import com.example.data.model.formatCoins
 import com.example.ui.components.NeonBackgroundBox
 import com.example.ui.components.NeonCoinBadge
+import com.example.ui.theme.taskFlowColors
 import com.example.ui.viewmodel.WithdrawalScreenRoute
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -104,6 +105,7 @@ fun WithdrawalMainScreen(
   onBack: () -> Unit
 ) {
   BackHandler { onBack() }
+  val tfColors = taskFlowColors()
 
   val options =
     remember {
@@ -177,21 +179,21 @@ fun WithdrawalMainScreen(
           Text(
             text = "Withdraw",
             style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground
           )
         }
 
         Surface(
           shape = RoundedCornerShape(50),
-          color = Color(0xFFFEF3C7),
-          border = BorderStroke(1.dp, Color(0xFFF59E0B))
+          color = tfColors.rewardBadgeBg,
+          border = BorderStroke(1.dp, tfColors.rewardBadgeBorder)
         ) {
           Text(
             text = formatCoins(totalBalanceCoins),
             style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFFB45309),
+            fontWeight = FontWeight.SemiBold,
+            color = tfColors.rewardBadgeText,
             modifier =
               Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                 .testTag("withdrawal_main_balance_text")
@@ -425,7 +427,7 @@ fun UpiRedemptionScreen(
           Text(
             text = "UPI Withdrawal",
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
           )
@@ -450,7 +452,7 @@ fun UpiRedemptionScreen(
             denomination = denom,
             selected = selectedRupees == denom.amountRupees,
             available = available,
-            accentColor = Color(0xFF1E3A8A),
+            accentColor = MaterialTheme.colorScheme.primary,
             onClick = {
               if (available) {
                 selectedRupees = denom.amountRupees
@@ -531,14 +533,14 @@ fun UpiRedemptionScreen(
         shape = RoundedCornerShape(14.dp),
         colors =
           ButtonDefaults.buttonColors(
-            containerColor = Color(0xFF1E3A8A),
-            contentColor = Color.White
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary
           ),
         modifier = Modifier.fillMaxWidth().height(52.dp).testTag("upi_submit_button")
       ) {
         if (isBusy) {
           CircularProgressIndicator(
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onPrimary,
             strokeWidth = 2.dp,
             modifier = Modifier.size(20.dp)
           )
@@ -577,7 +579,7 @@ fun GiftCardRedemptionScreen(
 
   val denominations = WithdrawalCatalog.GIFT_CARD_DENOMINATIONS
   val methodTitle = WithdrawalMethodType.displayLabel(method)
-  val accentColor = Color(0xFF1E3A8A)
+  val accentColor = MaterialTheme.colorScheme.primary
 
   var selectedRupees by rememberSaveable(method) {
     mutableStateOf(
@@ -629,7 +631,7 @@ fun GiftCardRedemptionScreen(
           Text(
             text = methodTitle,
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
           )
@@ -711,13 +713,13 @@ fun GiftCardRedemptionScreen(
         colors =
           ButtonDefaults.buttonColors(
             containerColor = accentColor,
-            contentColor = Color.White
+            contentColor = MaterialTheme.colorScheme.onPrimary
           ),
         modifier = Modifier.fillMaxWidth().height(52.dp).testTag("gift_card_submit_button")
       ) {
         if (isBusy) {
           CircularProgressIndicator(
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onPrimary,
             strokeWidth = 2.dp,
             modifier = Modifier.size(20.dp)
           )
@@ -770,7 +772,7 @@ private fun DenominationCard(
         Text(
           text = "₹${denomination.amountRupees}",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           color =
             if (available) MaterialTheme.colorScheme.onSurface
             else MaterialTheme.colorScheme.onSurfaceVariant
@@ -859,6 +861,7 @@ fun WithdrawalConfirmationScreen(
   onDone: () -> Unit
 ) {
   BackHandler { onDone() }
+  val tfColors = taskFlowColors()
 
   NeonBackgroundBox {
     Column(
@@ -872,14 +875,15 @@ fun WithdrawalConfirmationScreen(
     ) {
       Surface(
         shape = CircleShape,
-        color = Color(0xFFDCFCE7),
+        color = tfColors.statusConfirmedBg,
+        border = BorderStroke(1.dp, tfColors.statusConfirmedBorder),
         modifier = Modifier.size(80.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.CheckCircle,
             contentDescription = "Success",
-            tint = Color(0xFF16A34A),
+            tint = tfColors.goldAccent,
             modifier = Modifier.size(44.dp)
           )
         }
@@ -890,7 +894,7 @@ fun WithdrawalConfirmationScreen(
       Text(
         text = "Request Submitted Successfully!",
         style = MaterialTheme.typography.headlineSmall,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.SemiBold,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onBackground
       )
@@ -983,6 +987,7 @@ fun WithdrawalHistoryScreen(
   onBack: () -> Unit
 ) {
   BackHandler { onBack() }
+  val tfColors = taskFlowColors()
 
   val clipboardManager = LocalClipboardManager.current
   var filterKey by rememberSaveable { mutableStateOf("ALL") }
@@ -1024,7 +1029,7 @@ fun WithdrawalHistoryScreen(
         Text(
           text = "Withdrawal History",
           style = MaterialTheme.typography.headlineSmall,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
       }
 
@@ -1091,11 +1096,13 @@ fun WithdrawalHistoryScreen(
               } ?: "Just now"
             val (badgeBg, badgeFg) =
               when (displayStatus) {
-                "Completed" -> Color(0xFFDCFCE7) to Color(0xFF15803D)
-                "Rejected" -> Color(0xFFFEE2E2) to Color(0xFFB91C1C)
-                "Delayed" -> Color(0xFFFFEDD5) to Color(0xFFC2410C)
-                "Processing", "Under Review" -> Color(0xFFDBEAFE) to Color(0xFF1E3A8A)
-                else -> Color(0xFFFEF3C7) to Color(0xFFB45309)
+                "Completed" -> tfColors.statusConfirmedBg to tfColors.statusConfirmedFg
+                "Rejected" ->
+                  MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+                "Delayed" -> tfColors.rewardBadgeBg to tfColors.rewardBadgeText
+                "Processing", "Under Review" ->
+                  MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
+                else -> tfColors.neutralSurfaceBg to tfColors.neutralSurfaceFg
               }
 
             Card(
@@ -1163,7 +1170,7 @@ fun WithdrawalHistoryScreen(
                     text = "Payment Ref / UTR: ${req.paymentReference}",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF15803D)
+                    color = tfColors.goldText
                   )
                 }
 
@@ -1189,8 +1196,8 @@ fun WithdrawalHistoryScreen(
                   Text(
                     text = "Coins Refunded: +${formatCoins(req.getEffectiveAmountCoins())}",
                     style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF15803D)
+                    fontWeight = FontWeight.SemiBold,
+                    color = tfColors.goldText
                   )
                 }
 
@@ -1200,8 +1207,8 @@ fun WithdrawalHistoryScreen(
                 ) {
                   Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = Color(0xFFECFDF5),
-                    border = BorderStroke(1.dp, Color(0xFF6EE7B7)),
+                    color = tfColors.rewardBadgeBg,
+                    border = BorderStroke(1.dp, tfColors.rewardBadgeBorder),
                     modifier = Modifier.fillMaxWidth()
                   ) {
                     Row(
@@ -1213,24 +1220,24 @@ fun WithdrawalHistoryScreen(
                         Text(
                           text = "YOUR GIFT CODE",
                           style = MaterialTheme.typography.labelSmall,
-                          color = Color(0xFF065F46),
-                          fontWeight = FontWeight.Bold
+                          color = tfColors.rewardBadgeText,
+                          fontWeight = FontWeight.SemiBold
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                           text = req.giftCode,
                           style = MaterialTheme.typography.titleMedium,
                           fontFamily = FontFamily.Monospace,
-                          fontWeight = FontWeight.ExtraBold,
-                          color = Color(0xFF047857),
+                          fontWeight = FontWeight.SemiBold,
+                          color = tfColors.goldText,
                           modifier = Modifier.testTag("withdrawal_gift_code_$reqId")
                         )
                         if (copiedRequestId == reqId) {
                           Text(
                             text = "Code copied!",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFF047857),
-                            fontWeight = FontWeight.Bold
+                            color = tfColors.goldText,
+                            fontWeight = FontWeight.SemiBold
                           )
                         }
                       }
@@ -1243,8 +1250,8 @@ fun WithdrawalHistoryScreen(
                         shape = RoundedCornerShape(10.dp),
                         colors =
                           ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF059669),
-                            contentColor = Color.White
+                            containerColor = tfColors.charcoalContainer,
+                            contentColor = tfColors.charcoalContent
                           ),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         modifier = Modifier.height(48.dp).testTag("withdrawal_copy_code_$reqId")
@@ -1255,7 +1262,7 @@ fun WithdrawalHistoryScreen(
                           modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Copy Code", fontWeight = FontWeight.Bold)
+                        Text("Copy Code", fontWeight = FontWeight.SemiBold)
                       }
                     }
                   }

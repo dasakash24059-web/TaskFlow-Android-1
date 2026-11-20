@@ -451,6 +451,7 @@ private fun AuthenticatedWorkspace(
   val leaderboardTransactions by viewModel.leaderboardCreditedTransactionsState.collectAsStateWithLifecycle()
   val userSupportTickets by viewModel.userSupportTicketsState.collectAsStateWithLifecycle()
   val adminSupportTickets by viewModel.adminSupportTicketsState.collectAsStateWithLifecycle()
+  val isOpeningCampaignLink by viewModel.isOpeningCampaignLink.collectAsStateWithLifecycle()
 
   BackHandler(
     enabled =
@@ -795,6 +796,14 @@ private fun AuthenticatedWorkspace(
               onConfirmInstallation = { viewModel.confirmTaskInstallation(selectedTask) },
               onToggleStepCompleted = { stepNum, totalSteps ->
                 viewModel.toggleTaskStepCompleted(selectedTask, stepNum, totalSteps)
+              },
+              isLaunchingTaskLink = isOpeningCampaignLink,
+              onOpenTaskUrl = { targetUrl, onReady ->
+                viewModel.openCampaignTaskLink(
+                  task = selectedTask,
+                  overrideUrl = targetUrl,
+                  onTrackingUrlReady = onReady
+                )
               }
             )
           } else {
@@ -1474,7 +1483,7 @@ fun NotificationListDialog(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
       ) {
         Icon(Icons.Default.Notifications, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-        Text("Notifications", fontWeight = FontWeight.Bold)
+        Text("Notifications", fontWeight = FontWeight.SemiBold)
       }
     },
     text = {
@@ -1555,7 +1564,7 @@ fun NotificationListDialog(
                     Text(
                       text = item.title,
                       style = MaterialTheme.typography.titleSmall,
-                      fontWeight = FontWeight.Bold
+                      fontWeight = FontWeight.SemiBold
                     )
                   }
                   if (item.rewardCoins > 0L) {

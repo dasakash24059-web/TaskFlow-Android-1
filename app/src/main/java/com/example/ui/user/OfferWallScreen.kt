@@ -58,6 +58,7 @@ import com.example.ui.components.NeonBackgroundBox
 import com.example.ui.components.NeonCoinBadge
 import com.example.ui.components.NeonGlassCard
 import com.example.ui.components.resolveAppOrWebsiteLabel
+import com.example.ui.theme.taskFlowColors
 
 @Composable
 fun OfferWallScreen(
@@ -66,6 +67,7 @@ fun OfferWallScreen(
   onSelectOffer: (String) -> Unit = {}
 ) {
   BackHandler(onBack = onBack)
+  val tfColors = taskFlowColors()
 
   var selectedCategory by rememberSaveable { mutableStateOf("All") }
   val categories = listOf("All", "App Install", "Web Signups", "Surveys", "Quizzes")
@@ -110,14 +112,14 @@ fun OfferWallScreen(
             Icon(
               imageVector = Icons.Default.Campaign,
               contentDescription = null,
-              tint = Color(0xFF059669),
+              tint = tfColors.goldAccent,
               modifier = Modifier.size(24.dp)
             )
             Text(
               text = "TaskFlow Offer Wall",
               style = MaterialTheme.typography.titleLarge,
               color = MaterialTheme.colorScheme.onBackground,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
           }
           Spacer(modifier = Modifier.width(36.dp))
@@ -128,7 +130,7 @@ fun OfferWallScreen(
       item {
         NeonGlassCard(
           modifier = Modifier.fillMaxWidth(),
-          borderColor = Color(0xFFCBD5E1),
+          borderColor = MaterialTheme.colorScheme.outlineVariant,
           backgroundColor = MaterialTheme.colorScheme.surface
         ) {
           Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
@@ -136,7 +138,7 @@ fun OfferWallScreen(
               text = "High-Paying Partner Offers",
               style = MaterialTheme.typography.titleLarge,
               color = MaterialTheme.colorScheme.onSurface,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
@@ -160,14 +162,14 @@ fun OfferWallScreen(
               onClick = { selectedCategory = cat },
               label = { Text(cat, fontWeight = FontWeight.SemiBold) },
               colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = Color(0xFF1E3A8A),
-                selectedLabelColor = Color.White,
+                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
                 containerColor = MaterialTheme.colorScheme.surface,
                 labelColor = MaterialTheme.colorScheme.onSurfaceVariant
               ),
               border = FilterChipDefaults.filterChipBorder(
                 borderColor = MaterialTheme.colorScheme.outlineVariant,
-                selectedBorderColor = Color(0xFF1E3A8A),
+                selectedBorderColor = MaterialTheme.colorScheme.primary,
                 enabled = true,
                 selected = selectedCategory == cat
               )
@@ -182,7 +184,7 @@ fun OfferWallScreen(
           text = "Available Offers (${availableOffers.size})",
           style = MaterialTheme.typography.titleMedium,
           color = MaterialTheme.colorScheme.onBackground,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
       }
 
@@ -201,7 +203,7 @@ fun OfferWallScreen(
                 text = "No offers found in this category",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               Spacer(modifier = Modifier.height(6.dp))
               Text(
@@ -243,7 +245,7 @@ fun OfferWallScreen(
                     text = offer.title,
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                   )
@@ -251,7 +253,7 @@ fun OfferWallScreen(
                   Text(
                     text = appOrSiteLabel,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF1E3A8A),
+                    color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold
                   )
                 }
@@ -274,13 +276,13 @@ fun OfferWallScreen(
               ) {
                 Surface(
                   shape = RoundedCornerShape(50),
-                  color = Color(0xFFF1F5F9),
-                  border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFCBD5E1))
+                  color = tfColors.neutralSurfaceBg,
+                  border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.neutralSurfaceBorder)
                 ) {
                   Text(
                     text = offer.category.ifBlank { "Verified Offer" },
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF334155),
+                    color = tfColors.neutralSurfaceFg,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                   )
@@ -290,11 +292,11 @@ fun OfferWallScreen(
                   onClick = { onSelectOffer(offer.id) },
                   shape = RoundedCornerShape(12.dp),
                   colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF1E3A8A),
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                   )
                 ) {
-                  Text("Start Offer", fontWeight = FontWeight.Bold)
+                  Text("Start Offer", fontWeight = FontWeight.SemiBold)
                   Spacer(modifier = Modifier.width(4.dp))
                   Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowForward,

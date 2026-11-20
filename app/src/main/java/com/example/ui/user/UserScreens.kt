@@ -145,6 +145,7 @@ import com.example.ui.components.TaskItemCard
 import com.example.ui.components.VerifiedBadge
 import com.example.ui.components.openExternalTaskUrl
 import com.example.ui.components.resolveAppOrWebsiteLabel
+import com.example.ui.theme.taskFlowColors
 import com.example.ui.viewmodel.UiState
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -223,6 +224,7 @@ fun UserHomeScreen(
     }
 
   val displayName = profile?.displayName?.ifBlank { "TaskFlow Member" } ?: "TaskFlow Member"
+  val tfColors = taskFlowColors()
 
   if (showWatchAdDialog) {
     WatchAdInfoDialog(
@@ -307,7 +309,7 @@ fun UserHomeScreen(
                     text = displayName,
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false).testTag("home_welcome_message")
@@ -359,14 +361,14 @@ fun UserHomeScreen(
                 text = "Explore Rewards",
                 style = MaterialTheme.typography.titleLarge,
                 fontSize = 20.sp,
-                color = Color(0xFF0F172A),
-                fontWeight = FontWeight.ExtraBold
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold
               )
             }
             Surface(
               shape = RoundedCornerShape(50),
-              color = Color(0xFFF3E8FF),
-              border = BorderStroke(1.dp, Color(0xFFD8B4FE)),
+              color = tfColors.neutralSurfaceBg,
+              border = BorderStroke(1.dp, tfColors.neutralSurfaceBorder),
               modifier = Modifier.clip(RoundedCornerShape(50)).clickable { onNavigateToOfferWall() }
             ) {
               Row(
@@ -378,13 +380,13 @@ fun UserHomeScreen(
                   text = "View All",
                   style = MaterialTheme.typography.labelLarge,
                   fontSize = 12.sp,
-                  fontWeight = FontWeight.Bold,
-                  color = Color(0xFF4C1D95)
+                  fontWeight = FontWeight.Medium,
+                  color = MaterialTheme.colorScheme.onSurface
                 )
                 Icon(
                   imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                   contentDescription = null,
-                  tint = Color(0xFF4C1D95),
+                  tint = MaterialTheme.colorScheme.onSurface,
                   modifier = Modifier.size(14.dp)
                 )
               }
@@ -599,23 +601,47 @@ private fun ExploreRewardPastelCard(
   modifier: Modifier = Modifier,
   iconContent: @Composable () -> Unit
 ) {
+  val tfColors = taskFlowColors()
   val shape = RoundedCornerShape(18.dp)
+  val cardBgBrush =
+    if (tfColors.isDark) {
+      Brush.horizontalGradient(
+        colors = listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceVariant)
+      )
+    } else {
+      Brush.horizontalGradient(colors = listOf(bgStart, bgEnd))
+    }
+  val effectiveBorderColor = if (tfColors.isDark) borderColor.copy(alpha = 0.28f) else borderColor
+  val effectiveWaveStart = if (tfColors.isDark) waveStart.copy(alpha = 0.35f) else waveStart
+  val effectiveWaveEnd = if (tfColors.isDark) waveEnd.copy(alpha = 0.35f) else waveEnd
+  val titleColor = if (tfColors.isDark) MaterialTheme.colorScheme.onSurface else Color(0xFF0F172A)
+  val subtitleColor = if (tfColors.isDark) MaterialTheme.colorScheme.onSurfaceVariant else Color(0xFF475569)
+  val arrowBrush =
+    if (tfColors.isDark) {
+      Brush.radialGradient(
+        colors = listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.outlineVariant)
+      )
+    } else {
+      Brush.radialGradient(colors = listOf(arrowBgStart, arrowBgEnd))
+    }
+  val arrowTint = if (tfColors.isDark) MaterialTheme.colorScheme.onSurface else Color(0xFF0F172A)
+
   Box(
     modifier =
       modifier
         .shadow(
-          elevation = 4.dp,
+          elevation = if (tfColors.isDark) 0.dp else 2.dp,
           shape = shape,
-          ambientColor = borderColor.copy(alpha = 0.45f),
-          spotColor = borderColor.copy(alpha = 0.45f)
+          ambientColor = effectiveBorderColor.copy(alpha = 0.35f),
+          spotColor = effectiveBorderColor.copy(alpha = 0.35f)
         )
         .testTag(cardTag)
         .clip(shape)
-        .background(Brush.horizontalGradient(colors = listOf(bgStart, bgEnd)))
-        .border(1.dp, borderColor, shape)
+        .background(cardBgBrush)
+        .border(1.dp, effectiveBorderColor, shape)
         .clickable(onClick = onClick)
   ) {
-    // Bottom-left curved accent ribbon matching reference image
+    // Bottom-left curved accent ribbon
     Canvas(modifier = Modifier.fillMaxSize()) {
       val wavePath = Path().apply {
         moveTo(0f, size.height * 0.68f)
@@ -632,7 +658,7 @@ private fun ExploreRewardPastelCard(
       }
       drawPath(
         path = wavePath,
-        brush = Brush.horizontalGradient(colors = listOf(waveStart, waveEnd))
+        brush = Brush.horizontalGradient(colors = listOf(effectiveWaveStart, effectiveWaveEnd))
       )
     }
 
@@ -656,8 +682,8 @@ private fun ExploreRewardPastelCard(
           text = title,
           style = MaterialTheme.typography.titleSmall,
           fontSize = 13.5.sp,
-          fontWeight = FontWeight.ExtraBold,
-          color = Color(0xFF0F172A),
+          fontWeight = FontWeight.SemiBold,
+          color = titleColor,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
           lineHeight = 16.sp
@@ -668,7 +694,7 @@ private fun ExploreRewardPastelCard(
           style = MaterialTheme.typography.bodySmall,
           fontSize = 11.sp,
           fontWeight = FontWeight.Medium,
-          color = Color(0xFF475569),
+          color = subtitleColor,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
           lineHeight = 14.sp,
@@ -687,15 +713,13 @@ private fun ExploreRewardPastelCard(
             .size(22.dp)
             .let { mod -> if (arrowTag != null) mod.testTag(arrowTag).clickable { onClick() } else mod }
             .clip(CircleShape)
-            .background(
-              Brush.radialGradient(colors = listOf(arrowBgStart, arrowBgEnd))
-            ),
+            .background(arrowBrush),
         contentAlignment = Alignment.Center
       ) {
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
           contentDescription = null,
-          tint = Color(0xFF0F172A),
+          tint = arrowTint,
           modifier = Modifier.size(15.dp)
         )
       }
@@ -723,13 +747,13 @@ private fun DailyCheckInCard(
     title = "Daily Check-in",
     subtitle = subtitleText,
     cardTag = "home_daily_checkin_card",
-    bgStart = Color(0xFFECFDF5),
-    bgEnd = Color(0xFFE6FAEE),
-    borderColor = Color(0xFFA7F3D0),
-    waveStart = Color(0xFF059669),
-    waveEnd = Color(0xFF10B981),
-    arrowBgStart = Color(0xFFD1FAE5),
-    arrowBgEnd = Color(0xFF6EE7B7),
+    bgStart = Color(0xFFFBF6E9),
+    bgEnd = Color(0xFFF7EED7),
+    borderColor = Color(0xFFE7D3A3),
+    waveStart = Color(0xFFB45309),
+    waveEnd = Color(0xFFD97706),
+    arrowBgStart = Color(0xFFF3E6C8),
+    arrowBgEnd = Color(0xFFE7D3A3),
     onClick = {
       onClaimDailyCheckIn()
       onOpenCalendar()
@@ -739,7 +763,7 @@ private fun DailyCheckInCard(
     Canvas(modifier = Modifier.size(44.dp)) {
       val r = size.minDimension / 2f
       drawCircle(
-        brush = Brush.verticalGradient(listOf(Color(0xFF10B981), Color(0xFF047857))),
+        brush = Brush.verticalGradient(listOf(Color(0xFF334155), Color(0xFF1E293B))),
         radius = r
       )
       val w = size.width
@@ -820,6 +844,7 @@ private fun WatchAdInfoDialog(
   onClaimVerifiedReward: () -> Unit = {},
   onDismiss: () -> Unit
 ) {
+  val tfColors = taskFlowColors()
   val isLimitReached = watchStats.videosWatched >= 25L
   val isLoadingAd = watchEarnUiState.isLoadingAd
   val isReadyToClaim = watchEarnUiState.isReadyToClaim
@@ -841,11 +866,14 @@ private fun WatchAdInfoDialog(
       ) {
         Surface(
           shape = RoundedCornerShape(14.dp),
-          color = if (isReadyToClaim || isClaimed) Color(0xFFDCFCE7) else Color(0xFFDBEAFE),
+          color =
+            if (isReadyToClaim || isClaimed) tfColors.rewardBadgeBg
+            else MaterialTheme.colorScheme.primaryContainer,
           border =
             androidx.compose.foundation.BorderStroke(
               1.dp,
-              if (isReadyToClaim || isClaimed) Color(0xFF86EFAC) else Color(0xFF93C5FD)
+              if (isReadyToClaim || isClaimed) tfColors.rewardBadgeBorder
+              else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
             ),
           modifier = Modifier.size(44.dp)
         ) {
@@ -855,7 +883,9 @@ private fun WatchAdInfoDialog(
                 if (isReadyToClaim || isClaimed) Icons.Default.CheckCircle
                 else Icons.Default.PlayArrow,
               contentDescription = null,
-              tint = if (isReadyToClaim || isClaimed) Color(0xFF16A34A) else Color(0xFF1E3A8A),
+              tint =
+                if (isReadyToClaim || isClaimed) tfColors.goldAccent
+                else MaterialTheme.colorScheme.onPrimaryContainer,
               modifier = Modifier.size(24.dp)
             )
           }
@@ -864,13 +894,13 @@ private fun WatchAdInfoDialog(
           Text(
             text = "Watch & Earn Coins",
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface
           )
           Surface(
             shape = RoundedCornerShape(50),
-            color = Color(0xFFFEF3C7),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B))
+            color = tfColors.rewardBadgeBg,
+            border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.rewardBadgeBorder)
           ) {
             Text(
               text =
@@ -881,7 +911,7 @@ private fun WatchAdInfoDialog(
                 },
               style = MaterialTheme.typography.labelSmall,
               fontWeight = FontWeight.SemiBold,
-              color = Color(0xFF92400E),
+              color = tfColors.rewardBadgeText,
               modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
             )
           }
@@ -896,8 +926,8 @@ private fun WatchAdInfoDialog(
         // Daily Progress Card
         Surface(
           shape = RoundedCornerShape(14.dp),
-          color = Color(0xFFF8FAFC),
-          border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
+          color = tfColors.neutralSurfaceBg,
+          border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.neutralSurfaceBorder),
           modifier = Modifier.fillMaxWidth()
         ) {
           Row(
@@ -909,13 +939,13 @@ private fun WatchAdInfoDialog(
               text = "Today's Progress",
               style = MaterialTheme.typography.labelLarge,
               fontWeight = FontWeight.SemiBold,
-              color = Color(0xFF334155)
+              color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
               text = "Videos Watched: ${watchStats.videosWatched} / 25",
               style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.Bold,
-              color = Color(0xFF1E3A8A)
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.primary
             )
           }
         }
@@ -924,8 +954,8 @@ private fun WatchAdInfoDialog(
         if (isLoadingAd || isClaiming) {
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color(0xFFEFF6FF),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF93C5FD)),
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = if (tfColors.isDark) 0.45f else 0.55f),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
             modifier = Modifier.fillMaxWidth().testTag("watch_earn_loading_banner")
           ) {
             Row(
@@ -936,7 +966,7 @@ private fun WatchAdInfoDialog(
               CircularProgressIndicator(
                 modifier = Modifier.size(20.dp),
                 strokeWidth = 2.5.dp,
-                color = Color(0xFF1E3A8A)
+                color = MaterialTheme.colorScheme.onPrimaryContainer
               )
               Text(
                 text =
@@ -952,8 +982,8 @@ private fun WatchAdInfoDialog(
                     }
                   },
                 style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF1E3A8A)
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
               )
             }
           }
@@ -963,8 +993,8 @@ private fun WatchAdInfoDialog(
         if (isReadyToClaim) {
           Surface(
             shape = RoundedCornerShape(18.dp),
-            color = Color(0xFFF8FAFC),
-            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF59E0B)),
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(1.25.dp, tfColors.rewardBadgeBorder),
             modifier =
               Modifier.fillMaxWidth()
                 .testTag("watch_earn_ready_to_claim_banner")
@@ -976,15 +1006,15 @@ private fun WatchAdInfoDialog(
             ) {
               Surface(
                 shape = CircleShape,
-                color = Color(0xFFFEF3C7),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF59E0B)),
+                color = tfColors.rewardBadgeBg,
+                border = androidx.compose.foundation.BorderStroke(1.25.dp, tfColors.rewardBadgeBorder),
                 modifier = Modifier.size(56.dp)
               ) {
                 Box(contentAlignment = Alignment.Center) {
                   Icon(
                     imageVector = Icons.Default.EmojiEvents,
                     contentDescription = null,
-                    tint = Color(0xFFD97706),
+                    tint = tfColors.goldAccent,
                     modifier = Modifier.size(30.dp)
                   )
                 }
@@ -993,15 +1023,15 @@ private fun WatchAdInfoDialog(
               Text(
                 text = "Reward Ready",
                 style = MaterialTheme.typography.titleMedium,
-                color = Color(0xFF0F172A),
-                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center
               )
 
               Surface(
                 shape = RoundedCornerShape(14.dp),
-                color = Color(0xFFFFFBEB),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFDE68A)),
+                color = tfColors.rewardBadgeBg,
+                border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.rewardBadgeBorder),
                 modifier = Modifier.fillMaxWidth()
               ) {
                 Column(
@@ -1011,8 +1041,8 @@ private fun WatchAdInfoDialog(
                   Text(
                     text = "YOU WON",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF92400E),
-                    fontWeight = FontWeight.Bold
+                    color = tfColors.rewardBadgeText,
+                    fontWeight = FontWeight.SemiBold
                   )
                   Spacer(modifier = Modifier.height(2.dp))
                   Text(
@@ -1020,8 +1050,8 @@ private fun WatchAdInfoDialog(
                       if (displayedRewardCoins > 0L) "+${formatCoins(displayedRewardCoins)}"
                       else "Server Reward",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = Color(0xFFB45309),
-                    fontWeight = FontWeight.Bold,
+                    color = tfColors.goldText,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.testTag("watch_earn_reward_coins_text")
                   )
                 }
@@ -1032,7 +1062,7 @@ private fun WatchAdInfoDialog(
                   text = watchEarnUiState.errorMessage,
                   style = MaterialTheme.typography.bodySmall,
                   fontWeight = FontWeight.SemiBold,
-                  color = Color(0xFFDC2626),
+                  color = MaterialTheme.colorScheme.error,
                   textAlign = TextAlign.Center
                 )
               }
@@ -1043,21 +1073,21 @@ private fun WatchAdInfoDialog(
                 shape = RoundedCornerShape(14.dp),
                 colors =
                   ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF16A34A),
-                    contentColor = Color.White
+                    containerColor = tfColors.claimContainer,
+                    contentColor = tfColors.claimContent
                   ),
                 modifier =
                   Modifier.fillMaxWidth()
                     .height(48.dp)
                     .testTag("claim_watch_reward_button")
               ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = tfColors.claimContent)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                   text =
                     if (displayedRewardCoins > 0L) "Claim +${formatCoins(displayedRewardCoins)}"
                     else "Watch Video 2 to Claim",
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
               }
             }
@@ -1068,8 +1098,8 @@ private fun WatchAdInfoDialog(
         if (isClaimed) {
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color(0xFFDCFCE7),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF86EFAC)),
+            color = tfColors.statusConfirmedBg,
+            border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.statusConfirmedBorder),
             modifier = Modifier.fillMaxWidth().testTag("watch_earn_claimed_banner")
           ) {
             Text(
@@ -1082,8 +1112,8 @@ private fun WatchAdInfoDialog(
                   }
                 },
               style = MaterialTheme.typography.bodySmall,
-              fontWeight = FontWeight.SemiBold,
-              color = Color(0xFF166534),
+              fontWeight = FontWeight.Medium,
+              color = tfColors.statusConfirmedFg,
               modifier = Modifier.padding(14.dp)
             )
           }
@@ -1093,8 +1123,8 @@ private fun WatchAdInfoDialog(
         if (hasError && !watchEarnUiState.errorMessage.isNullOrBlank()) {
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color(0xFFFEE2E2),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFCA5A5)),
+            color = MaterialTheme.colorScheme.errorContainer,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
             modifier = Modifier.fillMaxWidth().testTag("watch_earn_error_banner")
           ) {
             Column(
@@ -1114,8 +1144,8 @@ private fun WatchAdInfoDialog(
               Text(
                 text = formattedErr,
                 style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF991B1B)
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onErrorContainer
               )
               if (!isLimitReached && !isLoadingAd && !isClaiming) {
                 OutlinedButton(
@@ -1126,15 +1156,15 @@ private fun WatchAdInfoDialog(
                   Icon(
                     Icons.Default.Refresh,
                     contentDescription = "Retry loading video",
-                    tint = Color(0xFFDC2626),
+                    tint = MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(16.dp)
                   )
                   Spacer(modifier = Modifier.width(6.dp))
                   Text(
                     text = "Try Again",
                     style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFFDC2626)
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.error
                   )
                 }
               }
@@ -1148,10 +1178,14 @@ private fun WatchAdInfoDialog(
             onClick = onStartWatchVideo,
             enabled = !isLimitReached && !isLoadingAd && !isClaiming,
             shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E3A8A)),
+            colors =
+              ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary
+              ),
             modifier = Modifier.fillMaxWidth().height(48.dp).testTag("watch_ad_action_button")
           ) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
+            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary)
             Spacer(modifier = Modifier.width(8.dp))
             Text(
               text =
@@ -1160,8 +1194,8 @@ private fun WatchAdInfoDialog(
                   isLoadingAd -> "Loading Video..."
                   else -> "Watch Video"
                 },
-              fontWeight = FontWeight.Bold,
-              color = Color.White
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onPrimary
             )
           }
         }
@@ -1251,13 +1285,13 @@ private fun OfferWallCard(
     title = "Offer Wall",
     subtitle = "High Paying Tasks",
     cardTag = "home_offer_wall_card",
-    bgStart = Color(0xFFECFEFF),
-    bgEnd = Color(0xFFE0F7FA),
-    borderColor = Color(0xFFA5F3FC),
-    waveStart = Color(0xFF0D9488),
-    waveEnd = Color(0xFF06B6D4),
-    arrowBgStart = Color(0xFFCCFBF1),
-    arrowBgEnd = Color(0xFF5EEAD4),
+    bgStart = Color(0xFFF8FAFC),
+    bgEnd = Color(0xFFF1F5F9),
+    borderColor = Color(0xFFCBD5E1),
+    waveStart = Color(0xFF334155),
+    waveEnd = Color(0xFF475569),
+    arrowBgStart = Color(0xFFE2E8F0),
+    arrowBgEnd = Color(0xFFCBD5E1),
     onClick = onClick,
     modifier = modifier
   ) {
@@ -1267,7 +1301,7 @@ private fun OfferWallCard(
           .size(44.dp)
           .clip(CircleShape)
           .background(
-            Brush.verticalGradient(listOf(Color(0xFF38BDF8), Color(0xFF0891B2), Color(0xFF0D9488)))
+            Brush.verticalGradient(listOf(Color(0xFF475569), Color(0xFF1E293B)))
           ),
       contentAlignment = Alignment.Center
     ) {
@@ -1890,6 +1924,7 @@ private fun LeaderboardDialog(
 private fun RecentTransactionsCard(
   transactions: List<TransactionRecord>
 ) {
+  val tfColors = taskFlowColors()
   val recent = remember(transactions) { transactions.take(3) }
 
   Card(
@@ -1915,7 +1950,7 @@ private fun RecentTransactionsCard(
         Text(
           text = "Recent Transactions",
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
       }
 
@@ -1963,12 +1998,8 @@ private fun RecentTransactionsCard(
               Text(
                 text = if (isDebit) "-$coinsText" else "+$coinsText",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = if (isDebit) {
-                  Color(0xFFDC2626)
-                } else {
-                  Color(0xFF16A34A)
-                }
+                fontWeight = FontWeight.SemiBold,
+                color = if (isDebit) tfColors.debitText else tfColors.goldText
               )
             }
           }
@@ -1988,8 +2019,8 @@ private fun QuickStatChip(
 ) {
   Surface(
     shape = RoundedCornerShape(12.dp),
-    color = Color(0xFFF8FAFC),
-    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
+    color = MaterialTheme.colorScheme.surfaceVariant,
+    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     modifier = modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
   ) {
     Column(
@@ -2000,12 +2031,12 @@ private fun QuickStatChip(
         text = count.toString(),
         style = MaterialTheme.typography.titleLarge,
         color = color,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.SemiBold
       )
       Text(
         text = label,
         style = MaterialTheme.typography.labelSmall,
-        color = Color(0xFF0F172A)
+        color = MaterialTheme.colorScheme.onSurface
       )
     }
   }
@@ -2102,11 +2133,14 @@ fun UserTaskDetailScreen(
   initialShowSubmitProofModal: Boolean = false,
   taskProgress: com.example.data.model.UserTaskProgress? = null,
   onConfirmInstallation: () -> Unit = {},
-  onToggleStepCompleted: (Int, Int) -> Unit = { _, _ -> }
+  onToggleStepCompleted: (Int, Int) -> Unit = { _, _ -> },
+  isLaunchingTaskLink: Boolean = false,
+  onOpenTaskUrl: ((String, (String) -> Unit) -> Unit)? = null
 ) {
   BackHandler(onBack = onBack)
 
   val context = LocalContext.current
+  val tfColors = taskFlowColors()
   val isUserActive = userApprovalStatus == "approved"
   val isTaskAvailable = task.isActive && task.status == TaskStatus.PENDING && !task.isQuotaExhausted
   val isTaskOwnerOrUnspecified = currentUserId.isBlank() || task.assignedUserId == currentUserId
@@ -2130,6 +2164,22 @@ fun UserTaskDetailScreen(
     }
     if (taskProgress.completedSteps.isNotEmpty() && localCompletedSteps.isEmpty()) {
       localCompletedSteps = taskProgress.completedSteps
+    }
+  }
+
+  val launchTaskDestination: (String) -> Unit = { targetUrl ->
+    val cleanTarget = targetUrl.trim()
+    if (cleanTarget.isNotEmpty()) {
+      if (task.campaignId.isNotBlank()) {
+        onOpenTaskUrl?.invoke(cleanTarget) { resolvedTrackingUrl ->
+          localInstallConfirmed = true
+          openExternalTaskUrl(context, resolvedTrackingUrl)
+        }
+      } else {
+        localInstallConfirmed = true
+        onConfirmInstallation()
+        openExternalTaskUrl(context, cleanTarget)
+      }
     }
   }
 
@@ -2243,7 +2293,7 @@ fun UserTaskDetailScreen(
         Text(
           text = "Task Details",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
         Text(
           text = "Complete numbered steps in order and submit verified proof",
@@ -2274,7 +2324,7 @@ fun UserTaskDetailScreen(
             text = "TASK COMPLETION STATUS FLOW",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           Surface(
             shape = RoundedCornerShape(50),
@@ -2291,7 +2341,7 @@ fun UserTaskDetailScreen(
                 ),
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onPrimaryContainer,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
             )
           }
@@ -2307,13 +2357,13 @@ fun UserTaskDetailScreen(
             val isCurrentStage = flowStageIndex == idx && flowStageIndex < 4
             val pillBg =
               when {
-                isCompletedStage -> Color(0xFF10B981).copy(alpha = 0.16f)
+                isCompletedStage -> tfColors.statusConfirmedBg
                 isCurrentStage -> MaterialTheme.colorScheme.primaryContainer
                 else -> MaterialTheme.colorScheme.surfaceVariant
               }
             val pillFg =
               when {
-                isCompletedStage -> Color(0xFF059669)
+                isCompletedStage -> tfColors.statusConfirmedFg
                 isCurrentStage -> MaterialTheme.colorScheme.primary
                 else -> MaterialTheme.colorScheme.onSurfaceVariant
               }
@@ -2321,9 +2371,13 @@ fun UserTaskDetailScreen(
               shape = RoundedCornerShape(10.dp),
               color = pillBg,
               border =
-                if (isCurrentStage) {
-                  androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
-                } else null
+                when {
+                  isCurrentStage ->
+                    androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                  isCompletedStage ->
+                    androidx.compose.foundation.BorderStroke(1.dp, tfColors.statusConfirmedBorder)
+                  else -> null
+                }
             ) {
               Row(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -2334,13 +2388,13 @@ fun UserTaskDetailScreen(
                   text = if (isCompletedStage) "✓" else "${idx + 1}.",
                   style = MaterialTheme.typography.labelSmall,
                   color = pillFg,
-                  fontWeight = FontWeight.ExtraBold
+                  fontWeight = FontWeight.SemiBold
                 )
                 Text(
                   text = stageLabel,
                   style = MaterialTheme.typography.labelSmall,
                   color = pillFg,
-                  fontWeight = if (isCurrentStage || isCompletedStage) FontWeight.Bold else FontWeight.Medium
+                  fontWeight = if (isCurrentStage || isCompletedStage) FontWeight.SemiBold else FontWeight.Medium
                 )
               }
             }
@@ -2373,7 +2427,8 @@ fun UserTaskDetailScreen(
           StatusBadge(status = task.status, isActive = task.isActive)
           Surface(
             shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.primaryContainer,
+            color = tfColors.rewardBadgeBg,
+            border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.rewardBadgeBorder),
             modifier = Modifier.testTag("task_detail_reward_section")
           ) {
             Row(
@@ -2384,14 +2439,14 @@ fun UserTaskDetailScreen(
               Text(
                 text = "${formatCoins(task.getEffectiveRewardCoins())} •",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                fontWeight = FontWeight.Bold
+                color = tfColors.rewardBadgeText,
+                fontWeight = FontWeight.SemiBold
               )
               Text(
                 text = formatRewardInr(task.rewardCents),
                 style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                fontWeight = FontWeight.ExtraBold
+                color = tfColors.goldText,
+                fontWeight = FontWeight.SemiBold
               )
             }
           }
@@ -2418,14 +2473,14 @@ fun UserTaskDetailScreen(
               text = task.category.uppercase(Locale.US),
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.secondary,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               modifier = Modifier.testTag("task_detail_category")
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
               text = task.title,
               style = MaterialTheme.typography.headlineMedium,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               modifier = Modifier.testTag("task_detail_title")
             )
             Spacer(modifier = Modifier.height(4.dp))
@@ -2466,7 +2521,7 @@ fun UserTaskDetailScreen(
               text = "1. TASK OVERVIEW",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.primary,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
@@ -2505,13 +2560,13 @@ fun UserTaskDetailScreen(
                 text = "2. STEP-BY-STEP INSTRUCTIONS",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               Text(
                 text = "${localCompletedSteps.size}/${unifiedSteps.size} Steps Done",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.secondary,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
             }
 
@@ -2533,7 +2588,7 @@ fun UserTaskDetailScreen(
                     text = "INSTALLATION INSTRUCTIONS",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.SemiBold
                   )
                   Spacer(modifier = Modifier.height(2.dp))
                   Text(
@@ -2579,7 +2634,7 @@ fun UserTaskDetailScreen(
                 val rowBg =
                   when {
                     isCurrentStep -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                    isStepDone -> Color(0xFF10B981).copy(alpha = 0.08f)
+                    isStepDone -> tfColors.statusConfirmedBg
                     else -> Color.Transparent
                   }
 
@@ -2606,7 +2661,7 @@ fun UserTaskDetailScreen(
                     shape = CircleShape,
                     color =
                       when {
-                        isStepDone -> Color(0xFF059669)
+                        isStepDone -> tfColors.goldAccent
                         isCurrentStep -> MaterialTheme.colorScheme.primary
                         else -> MaterialTheme.colorScheme.surfaceVariant
                       },
@@ -2617,9 +2672,12 @@ fun UserTaskDetailScreen(
                         text = if (isStepDone) "✓" else "$stepNum",
                         style = MaterialTheme.typography.labelSmall,
                         color =
-                          if (isStepDone || isCurrentStep) Color.White
-                          else MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.Bold
+                          when {
+                            isStepDone -> tfColors.claimContent
+                            isCurrentStep -> MaterialTheme.colorScheme.onPrimary
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                          },
+                        fontWeight = FontWeight.SemiBold
                       )
                     }
                   }
@@ -2633,7 +2691,7 @@ fun UserTaskDetailScreen(
                         Text(
                           text = step.title,
                           style = MaterialTheme.typography.labelLarge,
-                          fontWeight = FontWeight.Bold,
+                          fontWeight = FontWeight.SemiBold,
                           color = MaterialTheme.colorScheme.onSurface
                         )
                       }
@@ -2647,7 +2705,7 @@ fun UserTaskDetailScreen(
                             style = MaterialTheme.typography.labelSmall,
                             fontSize = 9.sp,
                             color = MaterialTheme.colorScheme.onPrimary,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                           )
                         }
@@ -2661,11 +2719,8 @@ fun UserTaskDetailScreen(
                     if (step.destinationUrl.isNotBlank()) {
                       Spacer(modifier = Modifier.height(4.dp))
                       TextButton(
-                        onClick = {
-                          localInstallConfirmed = true
-                          onConfirmInstallation()
-                          openExternalTaskUrl(context, step.destinationUrl)
-                        },
+                        onClick = { launchTaskDestination(step.destinationUrl) },
+                        enabled = !isLaunchingTaskLink,
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                       ) {
                         Icon(
@@ -2718,7 +2773,7 @@ fun UserTaskDetailScreen(
                 text = "3. REQUIRED PROOF INFORMATION",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.secondary,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
             }
             Spacer(modifier = Modifier.height(6.dp))
@@ -2737,20 +2792,23 @@ fun UserTaskDetailScreen(
           ClickableTaskLinkCard(
             url = task.taskLink,
             label = "4. WEBSITE OR PLAY STORE LINK (TAP TO OPEN)",
-            testTag = "task_detail_clickable_link"
+            testTag = "task_detail_clickable_link",
+            onCustomClick =
+              if (task.campaignId.isNotBlank()) {
+                { if (!isLaunchingTaskLink) launchTaskDestination(task.taskLink) }
+              } else {
+                null
+              }
           )
         }
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        // Action Button 1: "Start Task / Open Link" (confirms installation & opens link)
+        // Action Button 1: "Start Task / Open Link" (requests tracked click if linked campaign, then opens link)
         if (task.taskLink.isNotBlank()) {
           Button(
-            onClick = {
-              localInstallConfirmed = true
-              onConfirmInstallation()
-              openExternalTaskUrl(context, task.taskLink)
-            },
+            onClick = { launchTaskDestination(task.taskLink) },
+            enabled = !isLaunchingTaskLink,
             shape = RoundedCornerShape(14.dp),
             colors =
               ButtonDefaults.buttonColors(
@@ -2770,9 +2828,12 @@ fun UserTaskDetailScreen(
             Spacer(modifier = Modifier.width(8.dp))
             Text(
               text =
-                if (localInstallConfirmed) "Installation Confirmed • Open Link Again"
-                else "Start Task / Open Link",
-              fontWeight = FontWeight.Bold
+                when {
+                  isLaunchingTaskLink -> "Preparing Tracking Link..."
+                  localInstallConfirmed -> "Installation Confirmed • Open Link Again"
+                  else -> "Start Task / Open Link"
+                },
+              fontWeight = FontWeight.SemiBold
             )
           }
 
@@ -2804,7 +2865,7 @@ fun UserTaskDetailScreen(
             Text(
               text = "Submit Proof",
               style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.SemiBold
             )
           }
         } else if ((!task.isActive || task.isQuotaExhausted) && task.status == TaskStatus.PENDING) {
@@ -2845,7 +2906,7 @@ fun UserTaskDetailScreen(
           Text(
             text = "Your Submitted Proof (${TaskStatus.label(task.status, task.isActive)})",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           if (task.proofText.isNotBlank()) {
             Surface(
@@ -2858,7 +2919,7 @@ fun UserTaskDetailScreen(
                   text = "WRITTEN PROOF",
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.primary,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -2919,7 +2980,7 @@ fun UserTaskDetailScreen(
                   text = "ADMIN FEEDBACK",
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.secondary,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -2989,7 +3050,7 @@ fun SubmitProofModalDialog(
         Text(
           text = "Submit Task Proof",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
@@ -3033,18 +3094,18 @@ fun SubmitProofModalDialog(
         if (task.referenceImages.isNotEmpty()) {
           Surface(
             shape = RoundedCornerShape(16.dp),
-            color = Color(0xFFF1F5F9),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1D4ED8).copy(alpha = 0.35f)),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
             modifier = Modifier.fillMaxWidth().testTag("reference_image_example_section")
           ) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
               Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF1E3A8A), modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                 Text(
                   text = "ADMIN REFERENCE EXAMPLE (COMPARE WITH YOUR PROOF)",
                   style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFF1E3A8A),
-                  fontWeight = FontWeight.Bold
+                  color = MaterialTheme.colorScheme.primary,
+                  fontWeight = FontWeight.SemiBold
                 )
               }
               Row(
@@ -3057,7 +3118,7 @@ fun SubmitProofModalDialog(
                       .size(100.dp)
                       .clip(RoundedCornerShape(12.dp))
                       .background(MaterialTheme.colorScheme.surface)
-                      .border(1.dp, Color(0xFF1D4ED8).copy(alpha = 0.45f), RoundedCornerShape(12.dp)),
+                      .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f), RoundedCornerShape(12.dp)),
                     contentAlignment = Alignment.Center
                   ) {
                     AsyncImage(
@@ -3109,7 +3170,7 @@ fun SubmitProofModalDialog(
                 text = "SELECTED SCREENSHOT PREVIEW",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               Spacer(modifier = Modifier.height(8.dp))
               Box(
@@ -3388,7 +3449,7 @@ fun UserTrackingScreen(
     Text(
       text = "Available Tasks",
       style = MaterialTheme.typography.headlineMedium,
-      fontWeight = FontWeight.Bold
+      fontWeight = FontWeight.SemiBold
     )
     Spacer(modifier = Modifier.height(4.dp))
     Text(
@@ -3520,6 +3581,7 @@ fun TelegramJoinTaskCard(
   onVerify: () -> Unit,
   onClaim: () -> Unit
 ) {
+  val tfColors = taskFlowColors()
   val hasClickedJoin = taskState?.hasClickedJoin == true
   val isVerified = taskState?.isMembershipVerified == true
   val isClaimed = taskState?.isClaimed == true
@@ -3570,6 +3632,10 @@ fun TelegramJoinTaskCard(
     actionLabel = actionLabel,
     onActionClick = onActionClick,
     actionEnabled = actionEnabled,
+    actionContainerColor =
+      if (isVerified && !isClaimed) tfColors.claimContainer else MaterialTheme.colorScheme.primary,
+    actionContentColor =
+      if (isVerified && !isClaimed) tfColors.claimContent else MaterialTheme.colorScheme.onPrimary,
     showActionChevron = showChevron,
     modifier = Modifier.testTag("user_telegram_task_card"),
     rewardBadgeModifier = Modifier.testTag("user_telegram_reward_badge"),

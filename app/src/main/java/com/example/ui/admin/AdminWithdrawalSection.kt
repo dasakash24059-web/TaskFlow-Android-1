@@ -261,7 +261,7 @@ fun AdminWithdrawalRequestsSection(
                 text = "${unreadAdminNotifications.size} New Withdrawal Alert(s)",
                 style = MaterialTheme.typography.titleSmall,
                 color = AdminTextDark,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
             }
             unreadAdminNotifications.take(3).forEach { notif ->
@@ -275,7 +275,7 @@ fun AdminWithdrawalRequestsSection(
                     text = notif.title,
                     style = MaterialTheme.typography.labelMedium,
                     color = AdminTextDark,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.SemiBold
                   )
                   Text(
                     text = notif.body,
@@ -289,7 +289,7 @@ fun AdminWithdrawalRequestsSection(
                   onClick = { onMarkAdminNotificationRead(notif.id) },
                   modifier = Modifier.testTag("admin_notif_mark_read_${notif.id}")
                 ) {
-                  Text("Dismiss", fontWeight = FontWeight.Bold)
+                  Text("Dismiss", fontWeight = FontWeight.SemiBold)
                 }
               }
             }
@@ -308,7 +308,7 @@ fun AdminWithdrawalRequestsSection(
             text = "Withdrawals & Gift Cards (${withdrawalRequests.size})",
             style = MaterialTheme.typography.titleMedium,
             color = AdminTextDark,
-            fontWeight = FontWeight.ExtraBold
+            fontWeight = FontWeight.SemiBold
           )
           Text(
             text = "Tap any request to review, fulfill manually, or reject & refund",
@@ -329,7 +329,7 @@ fun AdminWithdrawalRequestsSection(
             modifier = Modifier.size(16.dp)
           )
           Spacer(modifier = Modifier.width(6.dp))
-          Text("Availability", color = AdminBluePrimary, fontWeight = FontWeight.Bold)
+          Text("Availability", color = AdminBluePrimary, fontWeight = FontWeight.SemiBold)
         }
       }
 
@@ -350,7 +350,7 @@ fun AdminWithdrawalRequestsSection(
               text = formatRewardInr(totalRequestedCents),
               style = MaterialTheme.typography.titleSmall,
               color = AdminTextDark,
-              fontWeight = FontWeight.ExtraBold
+              fontWeight = FontWeight.SemiBold
             )
             Text(
               text = "$activeCount Active • $delayedCount Delayed",
@@ -371,7 +371,7 @@ fun AdminWithdrawalRequestsSection(
               text = formatRewardInr(totalCompletedCents),
               style = MaterialTheme.typography.titleSmall,
               color = AdminGreenSuccess,
-              fontWeight = FontWeight.ExtraBold
+              fontWeight = FontWeight.SemiBold
             )
             Text(
               text = "$completedCount Completed • $rejectedCount Rejected",
@@ -542,7 +542,7 @@ fun AdminWithdrawalRequestsSection(
                           text = "Refunded",
                           style = MaterialTheme.typography.labelSmall,
                           color = AdminBlueDark,
-                          fontWeight = FontWeight.Bold,
+                          fontWeight = FontWeight.SemiBold,
                           modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                         )
                       }
@@ -554,7 +554,7 @@ fun AdminWithdrawalRequestsSection(
                 text = amountDisplay,
                 style = MaterialTheme.typography.titleLarge,
                 color = AdminBluePrimary,
-                fontWeight = FontWeight.ExtraBold,
+                fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.testTag("admin_withdrawal_amount_$reqId")
               )
             }
@@ -605,13 +605,13 @@ private fun AdminWithdrawalDetailDialog(
           Text(
             text = "${request.getEffectiveMethodLabel()} • ₹${request.getEffectiveAmountRupees()}",
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.ExtraBold
+            fontWeight = FontWeight.SemiBold
           )
           Text(
             text = "Status: ${request.getDisplayStatus()}",
             style = MaterialTheme.typography.labelMedium,
             color = AdminBluePrimary,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
         }
         IconButton(onClick = onDismiss) {
@@ -671,7 +671,7 @@ private fun AdminWithdrawalDetailDialog(
                 text = "COIN LEDGER AUDIT (${relatedTransactions.size})",
                 style = MaterialTheme.typography.labelSmall,
                 color = AdminBlueDark,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
               )
               relatedTransactions.forEach { tx ->
                 Text(
@@ -749,7 +749,7 @@ private fun AdminWithdrawalDetailDialog(
             Text(
               text = "Manual Gift Card Code Delivery",
               style = MaterialTheme.typography.titleSmall,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               color = AdminTextDark
             )
             OutlinedTextField(
@@ -768,13 +768,13 @@ private fun AdminWithdrawalDetailDialog(
             ) {
               Icon(Icons.Default.CardGiftcard, contentDescription = null, modifier = Modifier.size(18.dp))
               Spacer(modifier = Modifier.width(6.dp))
-              Text("Send Gift Code", fontWeight = FontWeight.Bold)
+              Text("Send Gift Code", fontWeight = FontWeight.SemiBold)
             }
           } else if (isUpi) {
             Text(
               text = "Manual UPI Payout Confirmation",
               style = MaterialTheme.typography.titleSmall,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               color = AdminTextDark
             )
             OutlinedTextField(
@@ -811,7 +811,7 @@ private fun AdminWithdrawalDetailDialog(
             ) {
               Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
               Spacer(modifier = Modifier.width(6.dp))
-              Text("Mark Payment Completed", fontWeight = FontWeight.Bold)
+              Text("Mark Payment Completed", fontWeight = FontWeight.SemiBold)
             }
           }
 
@@ -820,7 +820,7 @@ private fun AdminWithdrawalDetailDialog(
           Text(
             text = "Reject & Atomic Single Refund",
             style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = AdminRedDanger
           )
           OutlinedTextField(
@@ -838,7 +838,7 @@ private fun AdminWithdrawalDetailDialog(
           ) {
             Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(6.dp))
-            Text("Reject & Refund Coins", fontWeight = FontWeight.Bold)
+            Text("Reject & Refund Coins", fontWeight = FontWeight.SemiBold)
           }
         }
       }
@@ -902,7 +902,7 @@ private fun WithdrawalAvailabilityDialog(
       Text(
         text = "Withdrawal Availability Controls",
         style = MaterialTheme.typography.titleLarge,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.SemiBold
       )
     },
     text = {
@@ -1000,7 +1000,7 @@ private fun AvailabilityMethodGroup(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
         Switch(
           checked = enabled,
           onCheckedChange = onToggleMethod,

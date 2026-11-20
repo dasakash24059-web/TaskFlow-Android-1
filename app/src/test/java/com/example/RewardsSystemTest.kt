@@ -1802,6 +1802,41 @@ class RewardsSystemTest {
     }
 
   @Test
+  fun phase1_telegramVerifyAndClaim_failClosedWithoutLocalFallback() =
+    kotlinx.coroutines.runBlocking {
+      val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+      if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
+        com.google.firebase.FirebaseApp.initializeApp(
+          context,
+          com.google.firebase.FirebaseOptions.Builder()
+            .setApplicationId("com.aistudio.taskflow.kxmpzq")
+            .setProjectId("taskflow-8852d")
+            .setApiKey("fake-api-key")
+            .build()
+        )
+      }
+      val failingClient =
+        FirebaseRewardCloudFunctionsClient(
+          firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance(),
+          rewardCallableInvoker = { name, _ ->
+            throw IllegalStateException("NOT_FOUND: $name unavailable")
+          }
+        )
+      val userRepo =
+        TaskFlowRepository(
+          firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance(),
+          rewardFunctionsClient = failingClient,
+          authenticatedUidProvider = { "user_uid_1" }
+        )
+
+      val verifyResult = userRepo.verifyTelegramTaskMembership("user_uid_1", "tg_task_101")
+      assertTrue("verifyTelegramTaskMembership must fail closed when backend errors", verifyResult.isFailure)
+
+      val claimResult = userRepo.claimTelegramTaskReward("user_uid_1", "tg_task_101")
+      assertTrue("claimTelegramTaskReward must fail closed when backend errors", claimResult.isFailure)
+    }
+
+  @Test
   fun admin_selfManualBonus_and_documentWithIdField_doesNotCrashOnLoginOrDashboardLoad() {
     val adminEmail = "dasakash24059@gmail.com"
     val adminUid = "admin_dasakash_uid"

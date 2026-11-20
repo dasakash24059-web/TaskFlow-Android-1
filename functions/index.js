@@ -1,7 +1,19 @@
 const crypto = require("crypto");
+const {
+  CAMPAIGN_TRACKING_COLLECTIONS,
+  generateSecureClickId,
+  toMillisValue,
+  validateDestinationUrl,
+  isValidVerificationMode,
+  resolveCountryTrustContext,
+  resolveDeviceTrustContext,
+  buildSafeTrackingUrl,
+  CampaignNetworkAdapterRegistry
+} = require("./campaign_tracking");
 
 let onRequest;
 let onCall;
+let onSchedule;
 let HttpsError;
 let defineSecret;
 let admin;
@@ -13,6 +25,11 @@ const databaseId =
 
 try {
   ({ onRequest, onCall, HttpsError } = require("firebase-functions/v2/https"));
+  try {
+    ({ onSchedule } = require("firebase-functions/v2/scheduler"));
+  } catch (_) {
+    onSchedule = null;
+  }
   ({ defineSecret } = require("firebase-functions/params"));
   admin = require("firebase-admin");
   if (!admin.apps.length) {
@@ -32,6 +49,7 @@ try {
   };
   onRequest = (_opts, handler) => handler || _opts;
   onCall = (_opts, handler) => handler || _opts;
+  onSchedule = null;
   defineSecret = (name) => ({
     value: () => process.env[name] || ""
   });
@@ -1888,15 +1906,28 @@ async function handleTelegramBotWebhook(req, res, deps = {}) {
     }
 
     const expectedSecret = resolveTelegramWebhookSecret(deps);
-    if (expectedSecret) {
-      const headerSecret = String(
-        req.headers?.["x-telegram-bot-api-secret-token"] ||
-          (typeof req.get === "function" ? req.get("X-Telegram-Bot-Api-Secret-Token") : "") ||
-          ""
-      ).trim();
-      if (!headerSecret || headerSecret !== expectedSecret) {
-        return res.status(401).json({ ok: false, error: "Invalid webhook secret" });
-      }
+    if (!expectedSecret) {
+      console.error(
+        "CRITICAL: TELEGRAM_WEBHOOK_SECRET is not configured. Rejecting Telegram webhook request."
+      );
+      return res.status(500).json({
+        ok: false,
+        error: "Server configuration error: TELEGRAM_WEBHOOK_SECRET is mandatory"
+      });
+    }
+
+    const headerSecret = String(
+      req.headers?.["x-telegram-bot-api-secret-token"] ||
+        (typeof req.get === "function" ? req.get("X-Telegram-Bot-Api-Secret-Token") : "") ||
+        ""
+    ).trim();
+    const expectedBuf = Buffer.from(expectedSecret, "utf8");
+    const headerBuf = Buffer.from(headerSecret, "utf8");
+    const secretsMatch =
+      headerBuf.length === expectedBuf.length &&
+      crypto.timingSafeEqual(headerBuf, expectedBuf);
+    if (!headerSecret || !secretsMatch) {
+      return res.status(401).json({ ok: false, error: "Invalid webhook secret" });
     }
 
     const firestoreDb = deps.db || db;
@@ -2376,7 +2407,30 @@ async function handleClaimTelegramTaskReward(request, deps = {}) {
   } catch (err) {
     throw new HttpsError("unavailable", `Failed to verify Telegram membership: ${err.message}`);
   }
+  const ts = getDefaultServerTimestamp(deps);
   if (!parseTelegramChatMemberStatus(tgRes)) {
+    // Safely reset isMembershipVerified = false in an isolated transaction only if the task
+    // has not already been claimed, ensuring concurrent or stale requests never corrupt claim integrity.
+    await firestoreDb.runTransaction(async (resetTx) => {
+      const [latestStateSnap, latestClaimSnap] = await Promise.all([
+        resetTx.get(stateRef),
+        resetTx.get(claimRef)
+      ]);
+      const alreadyClaimed =
+        latestClaimSnap.exists || latestStateSnap.data()?.isClaimed === true;
+      if (!alreadyClaimed) {
+        resetTx.set(
+          stateRef,
+          {
+            taskId,
+            userId,
+            isMembershipVerified: false,
+            updatedAt: ts
+          },
+          { merge: true }
+        );
+      }
+    });
     throw new HttpsError(
       "permission-denied",
       "Channel membership check failed. Please remain in the channel and tap VERIFY again."
@@ -2389,7 +2443,6 @@ async function handleClaimTelegramTaskReward(request, deps = {}) {
   const txId = `tg_task_${taskId}_${userId}`;
   const txRef = firestoreDb.collection("transactions").doc(txId);
   const notifRef = userRef.collection("notifications").doc(`notif_${txId}`);
-  const ts = getDefaultServerTimestamp(deps);
 
   return await firestoreDb.runTransaction(async (transaction) => {
     const [taskSnap, userSnap, stateSnap, claimSnap, tgUserClaimSnap, txSnap] = await Promise.all([
@@ -3854,4 +3907,792 @@ exports._manualBonusHandlers = {
   handleCreditManualBonus,
   verifyAdminAccess
 };
+
+// =========================================================================
+// UNIVERSAL CAMPAIGN TRACKING ENGINE — PHASE 3B: SECURE CLICK ISSUANCE
+// =========================================================================
+
+const CAMPAIGN_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
+const CLICK_IDEMPOTENCY_REGEX = /^[a-zA-Z0-9_-]{6,128}$/;
+const DEFAULT_CLICK_COOLDOWN_MS = 30 * 1000;
+const CLICK_HOURLY_WINDOW_MS = 60 * 60 * 1000;
+const DEFAULT_MAX_CLICKS_PER_USER_PER_HOUR = 5;
+const GLOBAL_USER_RATE_WINDOW_MS = 60 * 1000;
+const DEFAULT_MAX_USER_CLICKS_PER_MINUTE = 20;
+const DEFAULT_ATTRIBUTION_WINDOW_HOURS = 72;
+
+async function handleCreateCampaignClick(request, deps = {}) {
+  if (!request.auth || !request.auth.uid) {
+    throw new HttpsError("unauthenticated", "User must be signed in to start a campaign.");
+  }
+
+  const firestoreDb = deps.db || db;
+  const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+  const userId = String(request.auth.uid).trim();
+  const data = request.data || {};
+
+  // Strictly derive userId from Firebase Auth; reject spoofed userId fields.
+  if (
+    data.userId !== undefined &&
+    data.userId !== null &&
+    String(data.userId).trim() !== "" &&
+    String(data.userId).trim() !== userId
+  ) {
+    throw new HttpsError(
+      "permission-denied",
+      "Authenticated user identity mismatch."
+    );
+  }
+
+  const campaignId = String(data.campaignId || "").trim();
+  if (!CAMPAIGN_ID_REGEX.test(campaignId)) {
+    throw new HttpsError("invalid-argument", "A valid campaignId is required.");
+  }
+
+  const taskId = String(data.taskId || "").trim();
+  if (taskId && !CAMPAIGN_ID_REGEX.test(taskId)) {
+    throw new HttpsError("invalid-argument", "Invalid taskId format.");
+  }
+
+  const idempotencyKey = String(data.idempotencyKey || "").trim();
+  if (idempotencyKey && !CLICK_IDEMPOTENCY_REGEX.test(idempotencyKey)) {
+    throw new HttpsError("invalid-argument", "Invalid idempotencyKey format.");
+  }
+
+  const rawHeaders = request.rawRequest?.headers || deps.headers || {};
+  const countryContext = resolveCountryTrustContext(rawHeaders, {
+    trustCloudflareHeaders:
+      deps.trustCloudflareHeaders ?? process.env.TRUST_CLOUDFLARE_HEADERS === "true"
+  });
+  const appCheckToken = request.app || deps.appCheck || null;
+  const deviceContext = resolveDeviceTrustContext(data, appCheckToken);
+  if (!deviceContext.platform) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Unsupported devicePlatform. Allowed values: ANDROID, IOS, WEB."
+    );
+  }
+  const devicePlatform = deviceContext.platform;
+
+  const ts = getDefaultServerTimestamp(deps);
+  const registry = deps.adapterRegistry || new CampaignNetworkAdapterRegistry();
+
+  const userRef = firestoreDb.collection("users").doc(userId);
+  const configRef = firestoreDb
+    .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS)
+    .doc(campaignId);
+  const campaignRef = firestoreDb.collection("campaigns").doc(campaignId);
+  const guardRef = firestoreDb
+    .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICK_GUARDS)
+    .doc(`${userId}__${campaignId}`);
+  const userRateRef = firestoreDb
+    .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICK_GUARDS)
+    .doc(`rate_${userId}`);
+  const ownReservationRef =
+    typeof configRef.collection === "function"
+      ? configRef.collection("active_reservations").doc(userId)
+      : null;
+
+  return await firestoreDb.runTransaction(async (transaction) => {
+    // All primary reads BEFORE any writes
+    const primaryReads = [
+      transaction.get(userRef),
+      transaction.get(configRef),
+      transaction.get(campaignRef),
+      transaction.get(guardRef),
+      transaction.get(userRateRef)
+    ];
+    if (ownReservationRef) {
+      primaryReads.push(transaction.get(ownReservationRef));
+    }
+    const [
+      userSnap,
+      configSnap,
+      campaignSnap,
+      guardSnap,
+      userRateSnap,
+      ownReservationSnap = null
+    ] = await Promise.all(primaryReads);
+
+    if (!userSnap.exists) {
+      throw new HttpsError("not-found", "User profile not found.");
+    }
+    const userData = userSnap.data() || {};
+    if (userData.approvalStatus !== "approved") {
+      throw new HttpsError(
+        "permission-denied",
+        "Your account must be approved by an administrator before participating in campaigns."
+      );
+    }
+
+    if (!configSnap.exists) {
+      throw new HttpsError(
+        "not-found",
+        "Campaign tracking configuration not found."
+      );
+    }
+    const configData = configSnap.data() || {};
+
+    if (configData.isActive !== true) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This campaign is currently inactive."
+      );
+    }
+
+    if (campaignSnap.exists) {
+      const campStatus = String(campaignSnap.data()?.status || "ACTIVE")
+        .trim()
+        .toUpperCase();
+      if (campStatus !== "ACTIVE") {
+        throw new HttpsError(
+          "failed-precondition",
+          `This campaign is currently ${campStatus.toLowerCase()}.`
+        );
+      }
+    }
+
+    // Time window enforcement using authoritative server clock
+    const startAtMillis = Math.max(
+      Number(configData.startAtMillis || 0),
+      toMillisValue(configData.startAt)
+    );
+    const expiresAtMillis = Math.max(
+      Number(configData.expiresAtMillis || 0),
+      toMillisValue(configData.expiresAt)
+    );
+    if (startAtMillis > 0 && nowMillis < startAtMillis) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This campaign has not started yet."
+      );
+    }
+    if (expiresAtMillis > 0 && nowMillis > expiresAtMillis) {
+      throw new HttpsError("failed-precondition", "This campaign has expired.");
+    }
+
+    const verificationMode = String(configData.verificationMode || "").trim();
+    if (!isValidVerificationMode(verificationMode)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Campaign has an invalid verification mode."
+      );
+    }
+
+    const networkId = String(configData.networkId || "").trim();
+    if (!CAMPAIGN_ID_REGEX.test(networkId)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Campaign network reference is invalid."
+      );
+    }
+
+    const networkRef = firestoreDb
+      .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS)
+      .doc(networkId);
+    const networkSnap = await transaction.get(networkRef);
+    if (!networkSnap.exists) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Configured tracking network was not found."
+      );
+    }
+    const networkData = networkSnap.data() || {};
+    if (networkData.isActive !== true) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Configured tracking network is currently inactive."
+      );
+    }
+    if (networkData.capabilities?.supportsIncentivizedTraffic !== true) {
+      throw new HttpsError(
+        "permission-denied",
+        "Configured tracking network does not permit incentivized traffic."
+      );
+    }
+
+    // Strict Country & Device Trust Enforcement (Fail-closed when strict verification cannot be verified)
+    const allowedCountries = Array.isArray(configData.allowedCountries)
+      ? configData.allowedCountries.map((c) => String(c || "").trim().toUpperCase())
+      : [];
+    const allowsAllCountries = allowedCountries.length === 0 || allowedCountries.includes("ALL");
+    if (!allowsAllCountries) {
+      if (!countryContext.countryCode) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Verified country signal is unavailable for this geo-restricted campaign."
+        );
+      }
+      if (!allowedCountries.includes(countryContext.countryCode)) {
+        throw new HttpsError(
+          "permission-denied",
+          `This campaign is not available in your country (${countryContext.countryCode}).`
+        );
+      }
+    }
+    const resolvedCountryCode = countryContext.countryCode || "UNVERIFIED";
+
+    if (
+      configData.requireDeviceAttestation === true &&
+      deviceContext.trustLevel !== "APP_CHECK_VERIFIED"
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Device attestation (App Check) is required for this campaign."
+      );
+    }
+
+    const allowedPlatforms = Array.isArray(configData.allowedPlatforms)
+      ? configData.allowedPlatforms.map((p) => String(p || "").trim().toUpperCase())
+      : [];
+    if (
+      allowedPlatforms.length > 0 &&
+      !allowedPlatforms.includes("ALL") &&
+      !allowedPlatforms.includes(devicePlatform)
+    ) {
+      throw new HttpsError(
+        "permission-denied",
+        `This campaign is not supported on ${devicePlatform}.`
+      );
+    }
+
+    // Read guard + existing active click (still strictly before any writes)
+    const guardData = guardSnap.exists ? guardSnap.data() || {} : {};
+    const allowMultiple =
+      configData.conversionRequirements?.allowMultipleConversions === true;
+    if (guardData.hasCompletedConversion === true && !allowMultiple) {
+      throw new HttpsError(
+        "already-exists",
+        "You have already completed this campaign."
+      );
+    }
+
+    const cooldownMs = Math.max(
+      0,
+      Number(configData.clickCooldownMs ?? DEFAULT_CLICK_COOLDOWN_MS)
+    );
+    const activeClickId = String(guardData.activeClickId || "").trim();
+    const activeClickExpiresAtMillis = Number(guardData.activeClickExpiresAtMillis || 0);
+    const isUnexpiredActiveClick =
+      Boolean(activeClickId) && activeClickExpiresAtMillis > nowMillis;
+    const lastIssuedAtMillis = Number(guardData.lastIssuedAtMillis || 0);
+    const isWithinCooldown =
+      lastIssuedAtMillis > 0 && nowMillis - lastIssuedAtMillis < cooldownMs;
+    const isSameIdempotencyKey =
+      Boolean(idempotencyKey) && guardData.lastIdempotencyKey === idempotencyKey;
+
+    if (isUnexpiredActiveClick && (isWithinCooldown || isSameIdempotencyKey)) {
+      const existingClickRef = firestoreDb
+        .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS)
+        .doc(activeClickId);
+      const existingClickSnap = await transaction.get(existingClickRef);
+      if (existingClickSnap.exists) {
+        const existingClick = existingClickSnap.data() || {};
+        if (
+          existingClick.status === "ISSUED" &&
+          Number(existingClick.expiresAtMillis || 0) > nowMillis &&
+          typeof existingClick.trackingUrl === "string" &&
+          validateDestinationUrl(existingClick.trackingUrl).valid
+        ) {
+          return {
+            success: true,
+            clickId: existingClick.clickId,
+            campaignId: existingClick.campaignId,
+            networkId: existingClick.networkId,
+            verificationMode: existingClick.verificationMode,
+            trackingUrl: existingClick.trackingUrl,
+            expiresAtMillis: existingClick.expiresAtMillis,
+            deduplicated: true
+          };
+        }
+      }
+    }
+
+    // Per-user-per-campaign hourly rate limit & global burst abuse guard
+    const maxClicksPerHour = Math.max(
+      1,
+      Number(configData.maxClicksPerUserPerHour || DEFAULT_MAX_CLICKS_PER_USER_PER_HOUR)
+    );
+    const windowStart = Number(guardData.windowStartedAtMillis || 0);
+    const inCampaignWindow =
+      windowStart > 0 && nowMillis - windowStart < CLICK_HOURLY_WINDOW_MS;
+    const campaignWindowClicks = inCampaignWindow
+      ? Number(guardData.windowClickCount || 0)
+      : 0;
+    if (campaignWindowClicks >= maxClicksPerHour) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "Too many click attempts on this campaign. Please try again later."
+      );
+    }
+
+    const rateData = userRateSnap.exists ? userRateSnap.data() || {} : {};
+    const userRateWindowStart = Number(rateData.windowStartedAtMillis || 0);
+    const inUserRateWindow =
+      userRateWindowStart > 0 && nowMillis - userRateWindowStart < GLOBAL_USER_RATE_WINDOW_MS;
+    const userMinuteClicks = inUserRateWindow
+      ? Number(rateData.windowClickCount || 0)
+      : 0;
+    const maxPerMinute = Math.max(
+      1,
+      Number(deps.maxUserClicksPerMinute || DEFAULT_MAX_USER_CLICKS_PER_MINUTE)
+    );
+    if (userMinuteClicks >= maxPerMinute) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "Click rate limit exceeded. Please wait a moment and try again."
+      );
+    }
+
+    // Lazy expiration read phase (strictly BEFORE any writes) to release expired reservedClickSlots
+    const reservedClickSlots = Math.max(0, Number(configData.reservedClickSlots || 0));
+    const activeReservationsCol =
+      typeof configRef.collection === "function"
+        ? configRef.collection("active_reservations")
+        : null;
+    const expiredReservationsByClickId = new Map();
+
+    if (
+      ownReservationSnap &&
+      ownReservationSnap.exists &&
+      Number(ownReservationSnap.data()?.expiresAtMillis || 0) <= nowMillis
+    ) {
+      const ownResData = ownReservationSnap.data() || {};
+      const ownClickId = String(ownResData.clickId || activeClickId || "").trim();
+      if (ownClickId) {
+        expiredReservationsByClickId.set(ownClickId, {
+          userId,
+          clickId: ownClickId,
+          resRef: ownReservationRef
+        });
+      }
+    } else if (
+      guardData.hasActiveReservation === true &&
+      activeClickId &&
+      activeClickExpiresAtMillis <= nowMillis
+    ) {
+      expiredReservationsByClickId.set(activeClickId, {
+        userId,
+        clickId: activeClickId,
+        resRef: ownReservationRef
+      });
+    }
+
+    if (
+      reservedClickSlots > 0 &&
+      activeReservationsCol &&
+      typeof activeReservationsCol.where === "function"
+    ) {
+      const expiredQuery = activeReservationsCol
+        .where("expiresAtMillis", "<=", nowMillis)
+        .limit(25);
+      const expiredQuerySnap = await transaction.get(expiredQuery);
+      const docs = expiredQuerySnap?.docs || [];
+      for (const docSnap of docs) {
+        const resData = typeof docSnap.data === "function" ? docSnap.data() || {} : {};
+        const expClickId = String(resData.clickId || "").trim();
+        const expUserId = String(resData.userId || docSnap.id || "").trim();
+        if (expClickId && !expiredReservationsByClickId.has(expClickId)) {
+          expiredReservationsByClickId.set(expClickId, {
+            userId: expUserId,
+            clickId: expClickId,
+            resRef: activeReservationsCol.doc(expUserId)
+          });
+        }
+      }
+    }
+
+    const expiredReleaseCandidates = [];
+    if (expiredReservationsByClickId.size > 0) {
+      const entries = Array.from(expiredReservationsByClickId.values());
+      const clickSnaps = await Promise.all(
+        entries.map((entry) =>
+          transaction.get(
+            firestoreDb
+              .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS)
+              .doc(entry.clickId)
+          )
+        )
+      );
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+        const clickSnap = clickSnaps[i];
+        const clickData = clickSnap.exists ? clickSnap.data() || {} : null;
+        const clickExpires = Number(clickData?.expiresAtMillis || 0);
+        const isExpiredIssuedClick =
+          clickData && clickData.status === "ISSUED" && clickExpires <= nowMillis;
+        expiredReleaseCandidates.push({
+          ...entry,
+          clickRef: firestoreDb
+            .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS)
+            .doc(entry.clickId),
+          isExpiredIssuedClick: Boolean(isExpiredIssuedClick),
+          shouldDeleteStaleRes: Boolean(entry.resRef)
+        });
+      }
+    }
+
+    const reclaimedSlotsCount = expiredReleaseCandidates.filter(
+      (item) => item.isExpiredIssuedClick
+    ).length;
+    const effectiveReservedSlots = Math.max(0, reservedClickSlots - reclaimedSlotsCount);
+
+    // Atomic budget & slot checks (always using server-side rewardTf and post-reclamation reservedClickSlots)
+    const rewardTf = Number(configData.rewardTf || 0);
+    if (!Number.isInteger(rewardTf) || rewardTf <= 0) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Campaign tracking configuration has an invalid TF reward."
+      );
+    }
+    const submissionBudget = Number(configData.submissionBudget || 0);
+    const usedSubmissions = Number(configData.usedSubmissions || 0);
+    const clickOverbookingBuffer = Math.max(0, Number(configData.clickOverbookingBuffer || 0));
+    const rewardBudgetTf = Number(configData.rewardBudgetTf || 0);
+    const spentBudgetTf = Number(configData.spentBudgetTf || 0);
+
+    if (submissionBudget > 0 && usedSubmissions >= submissionBudget) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "This campaign has reached its maximum submission budget."
+      );
+    }
+    if (rewardBudgetTf > 0 && spentBudgetTf + rewardTf > rewardBudgetTf) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "This campaign's TF reward budget has been exhausted."
+      );
+    }
+
+    const userAlreadyReservedSlot =
+      guardData.hasActiveReservation === true && activeClickExpiresAtMillis > nowMillis;
+    if (
+      submissionBudget > 0 &&
+      !userAlreadyReservedSlot &&
+      usedSubmissions + effectiveReservedSlots >= submissionBudget + clickOverbookingBuffer
+    ) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "This campaign has reached its active participation limit."
+      );
+    }
+    if (
+      rewardBudgetTf > 0 &&
+      !userAlreadyReservedSlot &&
+      spentBudgetTf + (effectiveReservedSlots * rewardTf) + rewardTf >
+        rewardBudgetTf + (clickOverbookingBuffer * rewardTf)
+    ) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "This campaign's active TF reward budget has reached capacity."
+      );
+    }
+
+    // Build & validate destination URL strictly from server config + network adapter
+    const rawBaseUrl = String(
+      configData.trackingBaseUrl ||
+        (campaignSnap.exists ? campaignSnap.data()?.taskLink : "") ||
+        ""
+    ).trim();
+    if (!rawBaseUrl) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Campaign destination tracking URL is missing."
+      );
+    }
+
+    const clickId =
+      typeof deps.clickIdGenerator === "function"
+        ? String(deps.clickIdGenerator()).trim()
+        : generateSecureClickId();
+    if (!CAMPAIGN_ID_REGEX.test(clickId) || clickId.length < 16) {
+      throw new HttpsError("internal", "Generated invalid click identifier.");
+    }
+
+    let builtTracking;
+    try {
+      builtTracking = buildSafeTrackingUrl(
+        rawBaseUrl,
+        { ...configData, verificationMode },
+        { ...networkData, networkId },
+        {
+          clickId,
+          userId,
+          campaignId,
+          countryCode: resolvedCountryCode,
+          devicePlatform
+        },
+        registry
+      );
+    } catch (urlErr) {
+      throw new HttpsError(
+        "failed-precondition",
+        urlErr?.message || "Invalid campaign tracking URL."
+      );
+    }
+
+    const attributionWindowHours = Math.min(
+      2160,
+      Math.max(
+        1,
+        Number(
+          configData.conversionRequirements?.attributionWindowHours ||
+            DEFAULT_ATTRIBUTION_WINDOW_HOURS
+        )
+      )
+    );
+    const clickExpiresAtMillis =
+      expiresAtMillis > 0
+        ? Math.min(expiresAtMillis, nowMillis + attributionWindowHours * 60 * 60 * 1000)
+        : nowMillis + attributionWindowHours * 60 * 60 * 1000;
+    const clickExpiresAt = makeTimestampFromMillis(clickExpiresAtMillis, deps);
+    const trackingNetworkRef = String(
+      configData.trackingNetworkRef ||
+        `${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS}/${networkId}`
+    );
+
+    const clickRef = firestoreDb
+      .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS)
+      .doc(clickId);
+
+    // Atomic writes: release expired reservations, store click, update user guard/rate limits, update config click reservation
+    for (const candidate of expiredReleaseCandidates) {
+      if (candidate.isExpiredIssuedClick) {
+        transaction.update(candidate.clickRef, {
+          status: "EXPIRED",
+          expiredAt: ts,
+          expiredReason: "RESERVATION_TIMEOUT"
+        });
+      }
+      if (candidate.shouldDeleteStaleRes && candidate.userId !== userId && typeof transaction.delete === "function") {
+        transaction.delete(candidate.resRef);
+      }
+      if (candidate.userId && candidate.userId !== userId) {
+        const otherGuardRef = firestoreDb
+          .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICK_GUARDS)
+          .doc(`${candidate.userId}__${campaignId}`);
+        transaction.set(
+          otherGuardRef,
+          {
+            hasActiveReservation: false,
+            updatedAt: ts
+          },
+          { merge: true }
+        );
+      }
+    }
+
+    transaction.set(clickRef, {
+      clickId,
+      userId,
+      campaignId,
+      ...(taskId ? { taskId } : {}),
+      networkId,
+      trackingNetworkRef,
+      verificationMode,
+      countryCode: resolvedCountryCode,
+      countryTrustLevel: countryContext.trustLevel,
+      countrySource: countryContext.source,
+      devicePlatform,
+      deviceTrustLevel: deviceContext.trustLevel,
+      resolvedParameters: builtTracking.resolvedParameters,
+      trackingUrl: builtTracking.trackingUrl,
+      status: "ISSUED",
+      expiresAtMillis: clickExpiresAtMillis,
+      expiresAt: clickExpiresAt,
+      createdAt: ts
+    });
+
+    if (ownReservationRef) {
+      transaction.set(ownReservationRef, {
+        userId,
+        campaignId,
+        clickId,
+        expiresAtMillis: clickExpiresAtMillis,
+        createdAt: ts,
+        updatedAt: ts
+      });
+    }
+
+    transaction.set(
+      guardRef,
+      {
+        userId,
+        campaignId,
+        activeClickId: clickId,
+        activeClickExpiresAtMillis: clickExpiresAtMillis,
+        hasActiveReservation: true,
+        hasCompletedConversion: Boolean(guardData.hasCompletedConversion),
+        lastIssuedAtMillis: nowMillis,
+        lastIdempotencyKey: idempotencyKey || "",
+        windowStartedAtMillis: inCampaignWindow ? windowStart : nowMillis,
+        windowClickCount: campaignWindowClicks + 1,
+        updatedAt: ts
+      },
+      { merge: true }
+    );
+
+    transaction.set(
+      userRateRef,
+      {
+        userId,
+        windowStartedAtMillis: inUserRateWindow ? userRateWindowStart : nowMillis,
+        windowClickCount: userMinuteClicks + 1,
+        updatedAt: ts
+      },
+      { merge: true }
+    );
+
+    const nextReservedSlots =
+      effectiveReservedSlots + (userAlreadyReservedSlot ? 0 : 1);
+    transaction.update(configRef, {
+      issuedClicksCount: Number(configData.issuedClicksCount || 0) + 1,
+      reservedClickSlots: nextReservedSlots,
+      lastClickIssuedAt: ts,
+      updatedAt: ts
+    });
+
+    return {
+      success: true,
+      clickId,
+      campaignId,
+      networkId,
+      verificationMode,
+      trackingUrl: builtTracking.trackingUrl,
+      expiresAtMillis: clickExpiresAtMillis,
+      deduplicated: false
+    };
+  });
+}
+
+/**
+ * Scheduled/sweep handler to release expired ISSUED campaign clicks and restore
+ * `reservedClickSlots` atomically per campaign without requiring composite indexes.
+ */
+async function handleReleaseExpiredCampaignClickReservations(deps = {}) {
+  const firestoreDb = deps.db || db;
+  const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+  const batchLimit = Math.min(500, Math.max(1, Number(deps.batchLimit || 100)));
+  const ts = getDefaultServerTimestamp(deps);
+
+  const clicksCol = firestoreDb.collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS);
+  const querySnap = await clicksCol
+    .where("expiresAtMillis", "<=", nowMillis)
+    .limit(batchLimit)
+    .get();
+
+  const expiredByCampaign = new Map();
+  for (const docSnap of querySnap?.docs || []) {
+    const clickData = typeof docSnap.data === "function" ? docSnap.data() || {} : {};
+    if (clickData.status !== "ISSUED") continue;
+    const cId = String(clickData.campaignId || "").trim();
+    const clkId = String(clickData.clickId || docSnap.id || "").trim();
+    const uId = String(clickData.userId || "").trim();
+    if (!cId || !clkId) continue;
+    if (!expiredByCampaign.has(cId)) {
+      expiredByCampaign.set(cId, []);
+    }
+    expiredByCampaign.get(cId).push({ clickId: clkId, userId: uId });
+  }
+
+  let totalReleased = 0;
+  for (const [campaignId, items] of expiredByCampaign.entries()) {
+    const configRef = firestoreDb
+      .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS)
+      .doc(campaignId);
+
+    const releasedForCampaign = await firestoreDb.runTransaction(async (transaction) => {
+      const configSnap = await transaction.get(configRef);
+      if (!configSnap.exists) return 0;
+      const configData = configSnap.data() || {};
+
+      const itemReads = await Promise.all(
+        items.map(async (item) => {
+          const clickRef = clicksCol.doc(item.clickId);
+          const guardRef = item.userId
+            ? firestoreDb
+                .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICK_GUARDS)
+                .doc(`${item.userId}__${campaignId}`)
+            : null;
+          const resRef =
+            item.userId && typeof configRef.collection === "function"
+              ? configRef.collection("active_reservations").doc(item.userId)
+              : null;
+
+          const [clickSnap, guardSnap, resSnap] = await Promise.all([
+            transaction.get(clickRef),
+            guardRef ? transaction.get(guardRef) : Promise.resolve(null),
+            resRef ? transaction.get(resRef) : Promise.resolve(null)
+          ]);
+          return { item, clickRef, guardRef, resRef, clickSnap, guardSnap, resSnap };
+        })
+      );
+
+      let transitioned = 0;
+      for (const rec of itemReads) {
+        if (!rec.clickSnap.exists) continue;
+        const clickData = rec.clickSnap.data() || {};
+        if (clickData.status !== "ISSUED" || Number(clickData.expiresAtMillis || 0) > nowMillis) {
+          continue;
+        }
+        transitioned += 1;
+        transaction.update(rec.clickRef, {
+          status: "EXPIRED",
+          expiredAt: ts,
+          expiredReason: "SCHEDULED_EXPIRATION_SWEEP"
+        });
+        if (
+          rec.resRef &&
+          rec.resSnap &&
+          rec.resSnap.exists &&
+          rec.resSnap.data()?.clickId === rec.item.clickId &&
+          typeof transaction.delete === "function"
+        ) {
+          transaction.delete(rec.resRef);
+        }
+        if (
+          rec.guardRef &&
+          rec.guardSnap &&
+          rec.guardSnap.exists &&
+          rec.guardSnap.data()?.activeClickId === rec.item.clickId
+        ) {
+          transaction.set(
+            rec.guardRef,
+            { hasActiveReservation: false, updatedAt: ts },
+            { merge: true }
+          );
+        }
+      }
+
+      if (transitioned > 0) {
+        const currentReserved = Math.max(0, Number(configData.reservedClickSlots || 0));
+        transaction.update(configRef, {
+          reservedClickSlots: Math.max(0, currentReserved - transitioned),
+          updatedAt: ts
+        });
+      }
+      return transitioned;
+    });
+
+    totalReleased += releasedForCampaign;
+  }
+
+  return { success: true, releasedClicks: totalReleased };
+}
+
+exports.createCampaignClick = onCall(async (request) =>
+  handleCreateCampaignClick(request)
+);
+if (typeof onSchedule === "function") {
+  exports.releaseExpiredCampaignClickReservations = onSchedule(
+    "every 15 minutes",
+    async () => handleReleaseExpiredCampaignClickReservations()
+  );
+}
+exports._campaignTrackingHandlers = {
+  handleCreateCampaignClick,
+  handleReleaseExpiredCampaignClickReservations
+};
+
+
 

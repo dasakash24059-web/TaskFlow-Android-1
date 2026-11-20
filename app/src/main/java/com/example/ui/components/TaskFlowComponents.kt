@@ -93,6 +93,7 @@ import com.example.data.model.TaskItem
 import com.example.data.model.TaskStatus
 import com.example.data.model.formatRewardInr
 import com.example.data.model.isValidTaskUrl
+import com.example.ui.theme.taskFlowColors
 import java.net.URI
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -187,8 +188,8 @@ fun VerifiedBadge(
 
   Surface(
     shape = RoundedCornerShape(50),
-    color = Color(0xFFE0F2FE),
-    border = BorderStroke(1.dp, Color(0xFF38BDF8)),
+    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
     modifier = modifier
   ) {
     Row(
@@ -199,14 +200,14 @@ fun VerifiedBadge(
       Icon(
         imageVector = Icons.Default.Verified,
         contentDescription = "Verified Account",
-        tint = Color(0xFF0284C7),
+        tint = MaterialTheme.colorScheme.primary,
         modifier = Modifier.size(14.dp)
       )
       Text(
         text = label,
         style = MaterialTheme.typography.labelSmall,
-        color = Color(0xFF0369A1),
-        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
+        fontWeight = FontWeight.SemiBold,
         fontSize = 11.sp
       )
     }
@@ -461,12 +462,13 @@ fun TFRewardBadge(
   fontSize: Int = 12,
   textTestTag: String? = null
 ) {
+  val tfColors = taskFlowColors()
   val formatted = com.example.data.model.formatTf(coins)
   val displayText = if (prefix.isNotEmpty() && coins >= 0) "$prefix$formatted" else formatted
   Surface(
     shape = RoundedCornerShape(50),
-    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    color = tfColors.rewardBadgeBg,
+    border = BorderStroke(1.dp, tfColors.rewardBadgeBorder),
     modifier = modifier
   ) {
     Row(
@@ -478,7 +480,7 @@ fun TFRewardBadge(
       Text(
         text = displayText,
         style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurface,
+        color = tfColors.rewardBadgeText,
         fontWeight = FontWeight.SemiBold,
         fontSize = fontSize.sp,
         maxLines = 1,
@@ -932,7 +934,7 @@ fun AppIconThumbnail(
           text = initial.toString(),
           style = MaterialTheme.typography.titleLarge,
           color = MaterialTheme.colorScheme.primary,
-          fontWeight = FontWeight.ExtraBold
+          fontWeight = FontWeight.SemiBold
         )
       } else {
         Icon(
@@ -952,6 +954,7 @@ fun ClickableTaskLinkCard(
   modifier: Modifier = Modifier,
   label: String = "DOWNLOAD / WEBSITE LINK",
   testTag: String = "clickable_task_link",
+  onCustomClick: (() -> Unit)? = null,
   onLinkOpened: ((String) -> Unit)? = null
 ) {
   val trimmed = url.trim()
@@ -971,8 +974,12 @@ fun ClickableTaskLinkCard(
           shape = RoundedCornerShape(14.dp)
         )
         .clickable {
-          openExternalTaskUrl(context, trimmed)
-          onLinkOpened?.invoke(trimmed)
+          if (onCustomClick != null) {
+            onCustomClick()
+          } else {
+            openExternalTaskUrl(context, trimmed)
+            onLinkOpened?.invoke(trimmed)
+          }
         }
         .testTag(testTag)
   ) {
@@ -1005,7 +1012,7 @@ fun ClickableTaskLinkCard(
             text = label,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           Spacer(modifier = Modifier.height(2.dp))
           Text(
@@ -1110,38 +1117,39 @@ fun StatusBadge(
   modifier: Modifier = Modifier,
   isActive: Boolean = true
 ) {
+  val tfColors = taskFlowColors()
   val isDeactivated = !isActive && status.lowercase(Locale.US) == TaskStatus.PENDING
   val (bgColor, fgColor, icon) =
     if (isDeactivated) {
       Triple(
-        Color(0xFF64748B).copy(alpha = 0.18f),
-        Color(0xFF475569),
+        tfColors.neutralSurfaceBg,
+        tfColors.neutralSurfaceFg,
         Icons.Default.Cancel
       )
     } else {
       when (status.lowercase(Locale.US)) {
         TaskStatus.PENDING ->
           Triple(
-            Color(0xFFF59E0B).copy(alpha = 0.16f),
-            Color(0xFFD97706),
+            tfColors.rewardBadgeBg,
+            tfColors.goldText,
             Icons.Default.HourglassEmpty
           )
         TaskStatus.SUBMITTED ->
           Triple(
-            Color(0xFF0EA5E9).copy(alpha = 0.16f),
-            Color(0xFF0284C7),
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+            MaterialTheme.colorScheme.onPrimaryContainer,
             Icons.AutoMirrored.Filled.Send
           )
         TaskStatus.APPROVED ->
           Triple(
-            Color(0xFF10B981).copy(alpha = 0.18f),
-            Color(0xFF059669),
+            tfColors.statusConfirmedBg,
+            tfColors.statusConfirmedFg,
             Icons.Default.CheckCircle
           )
         TaskStatus.REJECTED ->
           Triple(
-            Color(0xFFF43F5E).copy(alpha = 0.16f),
-            Color(0xFFE11D48),
+            MaterialTheme.colorScheme.errorContainer,
+            MaterialTheme.colorScheme.onErrorContainer,
             Icons.Default.Cancel
           )
         else ->
@@ -1156,7 +1164,7 @@ fun StatusBadge(
   Surface(
     shape = RoundedCornerShape(50),
     color = bgColor,
-    modifier = modifier.border(1.dp, fgColor.copy(alpha = 0.4f), RoundedCornerShape(50))
+    modifier = modifier.border(1.dp, fgColor.copy(alpha = 0.3f), RoundedCornerShape(50))
   ) {
     Row(
       modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -1173,7 +1181,7 @@ fun StatusBadge(
         text = TaskStatus.label(status, isActive),
         style = MaterialTheme.typography.labelSmall,
         color = fgColor,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.SemiBold
       )
     }
   }
@@ -1181,16 +1189,18 @@ fun StatusBadge(
 
 @Composable
 fun RewardBadge(rewardCents: Long, modifier: Modifier = Modifier) {
+  val tfColors = taskFlowColors()
   Surface(
     shape = RoundedCornerShape(10.dp),
-    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+    color = tfColors.rewardBadgeBg,
+    border = BorderStroke(1.dp, tfColors.rewardBadgeBorder),
     modifier = modifier
   ) {
     Text(
       text = formatRewardInr(rewardCents),
       style = MaterialTheme.typography.labelMedium,
-      color = MaterialTheme.colorScheme.onPrimaryContainer,
-      fontWeight = FontWeight.ExtraBold,
+      color = tfColors.rewardBadgeText,
+      fontWeight = FontWeight.SemiBold,
       modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
     )
   }
@@ -1269,6 +1279,7 @@ fun UnifiedTaskCard(
   actionEnabled: Boolean = true,
   showActionChevron: Boolean = true,
   actionContainerColor: Color = MaterialTheme.colorScheme.primary,
+  actionContentColor: Color = MaterialTheme.colorScheme.onPrimary,
   actionButtonModifier: Modifier = Modifier,
   rewardBadgeModifier: Modifier = Modifier,
   titleLeadingBadge: (@Composable () -> Unit)? = null,
@@ -1361,6 +1372,7 @@ fun UnifiedTaskCard(
             enabled = actionEnabled,
             showChevron = showActionChevron,
             containerColor = actionContainerColor,
+            contentColor = actionContentColor,
             modifier = actionButtonModifier
           )
         }
@@ -1542,6 +1554,7 @@ fun AppUpdateDialog(
   onOpenSettings: (() -> Unit)? = null,
   onReopenApp: (() -> Unit)? = null
 ) {
+  val tfColors = taskFlowColors()
   val isChecking = downloadProgress?.isChecking == true
   val isDownloading = downloadProgress?.isDownloading == true
   val isVerifying = downloadProgress?.isVerifying == true
@@ -1580,10 +1593,10 @@ fun AppUpdateDialog(
           },
           contentDescription = "Update Status",
           tint = when {
-            isUpdateCompleted -> Color(0xFF059669)
+            isUpdateCompleted -> tfColors.goldAccent
             hasFailed -> MaterialTheme.colorScheme.error
             isInstallationStarted || isWaitingForInstallConfirmation -> MaterialTheme.colorScheme.primary
-            isDownloadCompleted || isReadyToInstall -> Color(0xFF059669)
+            isDownloadCompleted || isReadyToInstall -> tfColors.goldAccent
             isDownloading || isVerifying || isChecking -> MaterialTheme.colorScheme.primary
             else -> MaterialTheme.colorScheme.primary
           }
@@ -1614,8 +1627,8 @@ fun AppUpdateDialog(
         if (isUpdateCompleted) {
           Surface(
             shape = RoundedCornerShape(16.dp),
-            color = Color(0xFFECFDF5),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA7F3D0)),
+            color = tfColors.statusConfirmedBg,
+            border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.statusConfirmedBorder),
             modifier = Modifier.fillMaxWidth()
           ) {
             Column(
@@ -1626,21 +1639,21 @@ fun AppUpdateDialog(
               Icon(
                 imageVector = Icons.Default.CheckCircle,
                 contentDescription = null,
-                tint = Color(0xFF059669),
+                tint = tfColors.goldAccent,
                 modifier = Modifier.size(48.dp)
               )
               Text(
                 text = "Installation Confirmed ✓",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF065F46)
+                fontWeight = FontWeight.SemiBold,
+                color = tfColors.statusConfirmedFg
               )
               Text(
                 text = downloadProgress?.statusMessage?.ifBlank {
                   "TaskFlow has been updated successfully with all latest features and UI enhancements."
                 } ?: "TaskFlow has been updated successfully.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFF047857),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
               )
             }
@@ -1649,7 +1662,7 @@ fun AppUpdateDialog(
           Text(
             text = "Version ${versionInfo.versionName} (Code: ${versionInfo.versionCode}) is available.",
             style = MaterialTheme.typography.bodyLarge,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface
           )
 
@@ -1671,10 +1684,10 @@ fun AppUpdateDialog(
             Surface(
               shape = RoundedCornerShape(16.dp),
               color = when {
-                hasFailed -> Color(0xFFFEF2F2)
-                isDownloadCompleted || isReadyToInstall -> Color(0xFFECFDF5)
-                isPermissionRequired -> Color(0xFFFFFBEB)
-                isInstallationStarted || isWaitingForInstallConfirmation -> Color(0xFFEFF6FF)
+                hasFailed -> MaterialTheme.colorScheme.errorContainer
+                isDownloadCompleted || isReadyToInstall -> tfColors.statusConfirmedBg
+                isPermissionRequired -> tfColors.rewardBadgeBg
+                isInstallationStarted || isWaitingForInstallConfirmation -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
                 else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
               },
               modifier = Modifier.fillMaxWidth()
@@ -1692,7 +1705,7 @@ fun AppUpdateDialog(
                     Text(
                       text = "${downloadProgress.progressPercent}%",
                       style = MaterialTheme.typography.titleMedium,
-                      fontWeight = FontWeight.Bold,
+                      fontWeight = FontWeight.SemiBold,
                       color = MaterialTheme.colorScheme.primary
                     )
                     val formattedSize = downloadProgress.getFormattedSize()
@@ -1722,10 +1735,10 @@ fun AppUpdateDialog(
                   },
                   style = MaterialTheme.typography.bodySmall,
                   color = when {
-                    hasFailed -> MaterialTheme.colorScheme.error
-                    isDownloadCompleted || isReadyToInstall -> Color(0xFF047857)
-                    isPermissionRequired -> Color(0xFFB45309)
-                    isInstallationStarted || isWaitingForInstallConfirmation -> Color(0xFF1D4ED8)
+                    hasFailed -> MaterialTheme.colorScheme.onErrorContainer
+                    isDownloadCompleted || isReadyToInstall -> tfColors.statusConfirmedFg
+                    isPermissionRequired -> tfColors.rewardBadgeText
+                    isInstallationStarted || isWaitingForInstallConfirmation -> MaterialTheme.colorScheme.onPrimaryContainer
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                   },
                   fontWeight = if (hasFailed || isReadyToInstall || isDownloadCompleted) FontWeight.SemiBold else FontWeight.Normal
@@ -1735,7 +1748,7 @@ fun AppUpdateDialog(
                   Text(
                     text = "Android requires explicit authorization to allow TaskFlow to install updates. Tap 'Grant Permission in Settings' below, enable 'Allow from this source', and return here to automatically resume installation.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF78350F)
+                    color = tfColors.rewardBadgeText
                   )
                 }
 
@@ -1743,7 +1756,7 @@ fun AppUpdateDialog(
                   Text(
                     text = "The Android Package Installer has been launched. Please review the installation prompt and tap 'Update' in the system dialog to complete full APK replacement.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF1E40AF)
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
                   )
                 }
               }
@@ -1772,36 +1785,48 @@ fun AppUpdateDialog(
               }
             },
             modifier = Modifier.fillMaxWidth().testTag("reopen_app_button"),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
+            colors = ButtonDefaults.buttonColors(
+              containerColor = tfColors.charcoalContainer,
+              contentColor = tfColors.charcoalContent
+            )
           ) {
-            Text("Reopen App", fontWeight = FontWeight.Bold)
+            Text("Reopen App", fontWeight = FontWeight.SemiBold)
           }
         }
         isInstallationStarted || isWaitingForInstallConfirmation -> {
           Button(
             onClick = { onInstallNow?.invoke() },
             modifier = Modifier.fillMaxWidth().testTag("install_now_button"),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB))
+            colors = ButtonDefaults.buttonColors(
+              containerColor = MaterialTheme.colorScheme.primary,
+              contentColor = MaterialTheme.colorScheme.onPrimary
+            )
           ) {
-            Text("Launch Installer Again", fontWeight = FontWeight.Bold)
+            Text("Launch Installer Again", fontWeight = FontWeight.SemiBold)
           }
         }
         isDownloadCompleted || isReadyToInstall -> {
           Button(
             onClick = { onInstallNow?.invoke() },
             modifier = Modifier.fillMaxWidth().testTag("install_now_button"),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
+            colors = ButtonDefaults.buttonColors(
+              containerColor = tfColors.charcoalContainer,
+              contentColor = tfColors.charcoalContent
+            )
           ) {
-            Text("Install Now", fontWeight = FontWeight.Bold)
+            Text("Install Now", fontWeight = FontWeight.SemiBold)
           }
         }
         isPermissionRequired -> {
           Button(
             onClick = { onOpenSettings?.invoke() },
             modifier = Modifier.fillMaxWidth().testTag("grant_permission_button"),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706))
+            colors = ButtonDefaults.buttonColors(
+              containerColor = tfColors.claimContainer,
+              contentColor = tfColors.claimContent
+            )
           ) {
-            Text("Grant Permission in Settings", fontWeight = FontWeight.Bold)
+            Text("Grant Permission in Settings", fontWeight = FontWeight.SemiBold)
           }
         }
         isDownloading || isVerifying || isChecking -> {
@@ -1837,18 +1862,24 @@ fun AppUpdateDialog(
           Button(
             onClick = onUpdateNow,
             modifier = Modifier.fillMaxWidth().testTag("update_now_button"),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            colors = ButtonDefaults.buttonColors(
+              containerColor = MaterialTheme.colorScheme.primary,
+              contentColor = MaterialTheme.colorScheme.onPrimary
+            )
           ) {
-            Text("Retry Update", fontWeight = FontWeight.Bold)
+            Text("Retry Update", fontWeight = FontWeight.SemiBold)
           }
         }
         else -> {
           Button(
             onClick = onUpdateNow,
             modifier = Modifier.fillMaxWidth().testTag("update_now_button"),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            colors = ButtonDefaults.buttonColors(
+              containerColor = MaterialTheme.colorScheme.primary,
+              contentColor = MaterialTheme.colorScheme.onPrimary
+            )
           ) {
-            Text("Update Now", fontWeight = FontWeight.Bold)
+            Text("Update Now", fontWeight = FontWeight.SemiBold)
           }
         }
       }

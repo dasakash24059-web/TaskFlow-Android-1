@@ -11,8 +11,11 @@ import com.example.data.model.AdminNotificationItem
 import com.example.data.model.AppItem
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.CampaignItem
+import com.example.data.model.CampaignTrackingCollections
+import com.example.data.model.CampaignVerificationMode
 import com.example.data.model.DailyCheckInConstants
 import com.example.data.model.DemoWithdrawalRequest
+import com.example.data.model.IssuedCampaignClickResult
 import com.example.data.model.ManualBonusRecord
 import com.example.data.model.MIN_WITHDRAWAL_CENTS
 import com.example.data.model.NotificationItem
@@ -320,11 +323,18 @@ interface RewardCloudFunctionsClient {
     taskId: String
   ): Long = 0L
 
+  suspend fun createCampaignClick(
+    campaignId: String,
+    taskId: String = "",
+    devicePlatform: String = "ANDROID",
+    idempotencyKey: String = ""
+  ): IssuedCampaignClickResult = IssuedCampaignClickResult(
+    campaignId = campaignId
+  )
+
   fun getOrAssignSessionRewardCoins(sessionId: String): Long = 0L
 
   fun getLocalScratchDailyState(userId: String, dateKey: String): ScratchDailyState? = null
-
-  fun recordTelegramTaskJoinClicked(userId: String, taskId: String) {}
 }
 
 data class ScratchAdWatchResult(
@@ -346,7 +356,6 @@ class FirebaseRewardCloudFunctionsClient(
 
   private val sessionRewardsById = java.util.concurrent.ConcurrentHashMap<String, Long>()
   private val localScratchStats = java.util.concurrent.ConcurrentHashMap<String, ScratchDailyState>()
-  private val localTelegramJoinClicks = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
   private val inFlightCheckInKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
   private val inFlightSpinClaimSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
   private val claimedSpinSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -367,11 +376,6 @@ class FirebaseRewardCloudFunctionsClient(
   override fun getLocalScratchDailyState(userId: String, dateKey: String): ScratchDailyState? {
     if (userId.isBlank() || dateKey.isBlank()) return null
     return localScratchStats["${userId.trim()}_${dateKey.trim()}"]
-  }
-
-  override fun recordTelegramTaskJoinClicked(userId: String, taskId: String) {
-    if (userId.isBlank() || taskId.isBlank()) return
-    localTelegramJoinClicks["${userId.trim()}_${taskId.trim()}"] = true
   }
 
   private fun isCloudFunctionMissing(err: Throwable): Boolean {
@@ -1293,190 +1297,10 @@ class FirebaseRewardCloudFunctionsClient(
         }
         mapOf("success" to true, "taskId" to tid, "isActive" to active)
       }
-      "verifyTelegramTaskMembership" -> {
-        val tid = map?.get("taskId")?.toString()?.trim().orEmpty()
-        var isVerified = false
-        var verifyMessage =
-          "Membership not verified yet. Please tap JOIN to open and join the Telegram channel first, then tap VERIFY."
-        if (uid.isNotBlank() && tid.isNotBlank()) {
-          val stateRef =
-            firestore.collection("users").document(uid).collection("telegram_task_states").document(tid)
-          val stateSnap = runCatching { stateRef.get().await() }.getOrNull()
-          val alreadyVerified = stateSnap?.getBoolean("isMembershipVerified") ?: false
-          val alreadyClaimed = stateSnap?.getBoolean("isClaimed") ?: false
-          val hasClickedJoinInState = stateSnap?.getBoolean("hasClickedJoin") ?: false
-          val hasClickedJoinLocal = localTelegramJoinClicks["${uid}_$tid"] == true
-
-          if (alreadyVerified || alreadyClaimed || hasClickedJoinInState || hasClickedJoinLocal) {
-            isVerified = true
-            verifyMessage = "Telegram membership verified! Tap CLAIM to collect your Coins."
-            runCatching {
-              stateRef.set(
-                mapOf(
-                  "taskId" to tid,
-                  "userId" to uid,
-                  "hasClickedJoin" to true,
-                  "isMembershipVerified" to true,
-                  "verified" to true,
-                  "isClaimed" to alreadyClaimed,
-                  "verifiedAt" to FieldValue.serverTimestamp()
-                ),
-                SetOptions.merge()
-              ).await()
-            }.onFailure { err ->
-              Log.w("TaskFlowRepository", "verifyTelegramTaskMembership state write warning: ${err.message}")
-            }
-          }
-        }
-        mapOf(
-          "success" to true,
-          "isMember" to isVerified,
-          "status" to if (isVerified) "member" else "left",
-          "verified" to isVerified,
-          "needsAccountLink" to false,
-          "taskId" to tid,
-          "message" to verifyMessage
+      "verifyTelegramTaskMembership", "claimTelegramTaskReward" -> {
+        throw IllegalStateException(
+          "Telegram membership verification and reward claiming are strictly server-authoritative and require Firebase Cloud Functions."
         )
-      }
-      "claimTelegramTaskReward" -> {
-        val tid = map?.get("taskId")?.toString()?.trim().orEmpty()
-        var reward = 200L
-        var newBalance = 200L
-        var taskTitle = "Telegram Join Task"
-        var channelUrl = ""
-        if (uid.isNotBlank() && tid.isNotBlank()) {
-          val stateRef =
-            firestore.collection("users").document(uid).collection("telegram_task_states").document(tid)
-          val stateSnap = runCatching { stateRef.get().await() }.getOrNull()
-          val isVerifiedInDoc =
-            (stateSnap?.getBoolean("isMembershipVerified") ?: false) ||
-              (stateSnap?.getBoolean("verified") ?: false) ||
-              (localTelegramJoinClicks["${uid}_$tid"] == true)
-          val alreadyClaimedInDoc =
-            (stateSnap?.getBoolean("isClaimed") ?: false) ||
-              (stateSnap?.getBoolean("claimed") ?: false)
-          check(!alreadyClaimedInDoc) { "You have already claimed this Telegram task reward." }
-          check(isVerifiedInDoc) {
-            "Please verify your Telegram channel membership before claiming the reward."
-          }
-
-          val claimRef = firestore.collection("telegram_claims").document("${tid}_$uid")
-          val existingClaim = runCatching { claimRef.get().await() }.getOrNull()
-          check(existingClaim == null || !existingClaim.exists()) {
-            "You have already claimed this Telegram task reward."
-          }
-
-          runCatching {
-            val taskRef = firestore.collection("telegram_tasks").document(tid)
-            val taskSnap = taskRef.get().await()
-            if (taskSnap.exists()) {
-              reward = taskSnap.getLong("rewardCoins") ?: 200L
-              taskTitle = taskSnap.getString("title")?.trim().orEmpty().ifEmpty { "Telegram Join Task" }
-              channelUrl = taskSnap.getString("channelUrl")?.trim().orEmpty()
-            }
-            firestore.runTransaction { tx ->
-              val userRef = firestore.collection("users").document(uid)
-              val userSnap = tx.get(userRef)
-              val userName =
-                (userSnap.getString("displayName") ?: "TaskFlow Member").trim().ifEmpty { "TaskFlow Member" }
-              val curBalanceCents = userSnap.getLong("balanceCents") ?: 0L
-              val curEligible = maxOf(userSnap.getLong("eligibleCoins") ?: 0L, centsToCoins(curBalanceCents))
-              val curPromo = userSnap.getLong("promotionalCoins") ?: 0L
-              val curTotal = maxOf(userSnap.getLong("balanceCoins") ?: 0L, curEligible + curPromo)
-              val newPromo = curPromo + reward
-              newBalance = maxOf(curTotal + reward, curEligible + newPromo)
-              if (userSnap.exists()) {
-                tx.update(
-                  userRef,
-                  mapOf(
-                    "balanceCoins" to newBalance,
-                    "promotionalCoins" to newPromo,
-                    "lastRewardId" to rewardId,
-                    "lastRewardType" to "TELEGRAM_JOIN",
-                    "lastRewardAmountCoins" to reward,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                  )
-                )
-                val lbRef = firestore.collection("leaderboard").document(uid)
-                tx.set(
-                  lbRef,
-                  mapOf(
-                    "userId" to uid,
-                    "displayName" to userName,
-                    "balanceCents" to curBalanceCents,
-                    "balanceCoins" to newBalance,
-                    "completedTasksCount" to (userSnap.getLong("completedTasksCount") ?: 0L),
-                    "approvalStatus" to (userSnap.getString("approvalStatus") ?: "approved"),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                  ),
-                  SetOptions.merge()
-                )
-              }
-              tx.set(
-                claimRef,
-                mapOf(
-                  "claimId" to "${tid}_$uid",
-                  "taskId" to tid,
-                  "taskTitle" to taskTitle,
-                  "channelUrl" to channelUrl,
-                  "userId" to uid,
-                  "userName" to userName,
-                  "rewardCoins" to reward,
-                  "claimedAt" to FieldValue.serverTimestamp()
-                )
-              )
-              tx.set(
-                stateRef,
-                mapOf(
-                  "taskId" to tid,
-                  "userId" to uid,
-                  "hasClickedJoin" to true,
-                  "isMembershipVerified" to true,
-                  "isClaimed" to true,
-                  "claimed" to true,
-                  "verified" to true,
-                  "rewardCoinsClaimed" to reward,
-                  "claimedAt" to FieldValue.serverTimestamp()
-                ),
-                SetOptions.merge()
-              )
-              val txRef = firestore.collection("transactions").document("tg_${tid}_$uid")
-              tx.set(
-                txRef,
-                mapOf(
-                  "userId" to uid,
-                  "userName" to userName,
-                  "type" to "TELEGRAM_JOIN",
-                  "title" to "Telegram Join: $taskTitle",
-                  "amountCoins" to reward,
-                  "amountCents" to 0L,
-                  "status" to "CREDITED",
-                  "referenceId" to tid,
-                  "createdAt" to FieldValue.serverTimestamp()
-                )
-              )
-              val notifRef =
-                firestore.collection("users").document(uid).collection("notifications").document("notif_tg_${tid}_$uid")
-              tx.set(
-                notifRef,
-                mapOf(
-                  "userId" to uid,
-                  "title" to "Telegram Task Claimed!",
-                  "body" to "You received $reward Coins for joining $taskTitle.",
-                  "type" to "NOTIFICATION",
-                  "rewardCoins" to reward,
-                  "referenceId" to tid,
-                  "isRead" to false,
-                  "createdAt" to FieldValue.serverTimestamp()
-                )
-              )
-            }.await()
-          }.onFailure { err ->
-            Log.e("TaskFlowRepository", "claimTelegramTaskReward fallback error: ${err.message}", err)
-            throw err
-          }
-        }
-        mapOf("success" to true, "taskId" to tid, "rewardCoins" to reward, "newBalanceCoins" to newBalance)
       }
       "creditManualBonus" -> {
         val rawTargetUid = map?.get("targetUserId")?.toString()?.trim().orEmpty()
@@ -1661,7 +1485,8 @@ class FirebaseRewardCloudFunctionsClient(
       } catch (e: Throwable) {
         val isServerOnlyTelegramCall =
           functionName == "verifyTelegramTaskMembership" ||
-            functionName == "claimTelegramTaskReward"
+            functionName == "claimTelegramTaskReward" ||
+            functionName == "createCampaignClick"
         if (!isServerOnlyTelegramCall && isCloudFunctionMissing(e)) {
           handleLocalCallableFallback(functionName, payload)
         } else {
@@ -2602,6 +2427,62 @@ class FirebaseRewardCloudFunctionsClient(
     val rewardCoins = (dataMap["rewardCoins"] as? Number)?.toLong() ?: 0L
     check(success && rewardCoins > 0L) { "Telegram task reward claim was rejected by server." }
     rewardCoins
+  }
+
+  override suspend fun createCampaignClick(
+    campaignId: String,
+    taskId: String,
+    devicePlatform: String,
+    idempotencyKey: String
+  ): IssuedCampaignClickResult = withTimeout(20_000L) {
+    val cleanCampaignId = campaignId.trim()
+    val payload = mutableMapOf<String, Any>(
+      "campaignId" to cleanCampaignId,
+      "devicePlatform" to devicePlatform.trim().uppercase(Locale.US).ifEmpty { "ANDROID" }
+    )
+    val cleanTaskId = taskId.trim()
+    if (cleanTaskId.isNotEmpty()) {
+      payload["taskId"] = cleanTaskId
+    }
+    val cleanIdempotencyKey = idempotencyKey.trim()
+    if (cleanIdempotencyKey.isNotEmpty()) {
+      payload["idempotencyKey"] = cleanIdempotencyKey
+    }
+
+    val responseData = try {
+      invokeRewardCallable("createCampaignClick", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to start tracked campaign link."),
+        e
+      )
+    }
+
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from createCampaignClick Cloud Function.")
+    val success = dataMap["success"] as? Boolean ?: true
+    check(success) { "Campaign click request was rejected by server." }
+
+    val clickId = (dataMap["clickId"] as? String)?.trim().orEmpty()
+    val trackingUrl = (dataMap["trackingUrl"] as? String)?.trim().orEmpty()
+    check(clickId.isNotBlank()) { "Server did not return a valid clickId." }
+    check(trackingUrl.isNotBlank() && isValidTaskUrl(trackingUrl)) {
+      "Server returned an invalid or unsafe campaign tracking URL."
+    }
+
+    val resolvedMode = (dataMap["verificationMode"] as? String)?.trim().orEmpty()
+      .ifEmpty { CampaignVerificationMode.AFFILIATE_POSTBACK.name }
+    IssuedCampaignClickResult(
+      clickId = clickId,
+      campaignId = (dataMap["campaignId"] as? String)?.trim().orEmpty().ifEmpty { cleanCampaignId },
+      networkId = (dataMap["networkId"] as? String)?.trim().orEmpty(),
+      verificationMode = resolvedMode,
+      trackingUrl = trackingUrl,
+      expiresAtMillis = (dataMap["expiresAtMillis"] as? Number)?.toLong() ?: 0L,
+      deduplicated = dataMap["deduplicated"] as? Boolean ?: false
+    )
   }
 }
 
@@ -6186,12 +6067,8 @@ class TaskFlowRepository(
             snapshot.documents.forEach { doc ->
               val tId = (doc.getString("taskId")?.trim().orEmpty()).ifEmpty { doc.id }
               val hasClicked = doc.getBoolean("hasClickedJoin") ?: false
-              val verified =
-                (doc.getBoolean("isMembershipVerified") ?: false) ||
-                  (doc.getBoolean("verified") ?: false)
-              val claimed =
-                (doc.getBoolean("isClaimed") ?: false) ||
-                  (doc.getBoolean("claimed") ?: false)
+              val verified = doc.getBoolean("isMembershipVerified") ?: false
+              val claimed = doc.getBoolean("isClaimed") ?: false
               put(
                 tId,
                 TelegramUserTaskState(
@@ -6217,7 +6094,6 @@ class TaskFlowRepository(
     val cleanUserId = userId.trim()
     val cleanTaskId = taskId.trim()
     if (cleanUserId.isBlank() || cleanTaskId.isBlank()) return@runCatching
-    rewardFunctionsClient.recordTelegramTaskJoinClicked(cleanUserId, cleanTaskId)
     val stateRef =
       usersCollection.document(cleanUserId).collection("telegram_task_states").document(cleanTaskId)
     runCatching {
@@ -6753,5 +6629,36 @@ class TaskFlowRepository(
     val cleanCardId = cardId.trim()
     check(cleanCardId.isNotBlank()) { "Invalid scratch card." }
     return rewardFunctionsClient.claimScratchCardReward(cleanCardId)
+  }
+
+  // =========================================================================
+  // UNIVERSAL CAMPAIGN TRACKING ENGINE — PHASE 3B CLICK ISSUANCE
+  // =========================================================================
+
+  /**
+   * Requests a cryptographically secure, server-issued click & outbound tracking URL
+   * via the `createCampaignClick` Cloud Function. Never creates click records or
+   * assigns attribution parameters on the client.
+   */
+  suspend fun createCampaignClick(
+    campaignId: String,
+    taskId: String = "",
+    devicePlatform: String = "ANDROID",
+    idempotencyKey: String = ""
+  ): Result<IssuedCampaignClickResult> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Sign-in required to open tracked campaigns." }
+
+    val cleanCampaignId = campaignId.trim()
+    require(cleanCampaignId.matches(Regex("^[a-zA-Z0-9_-]{1,128}$"))) {
+      "Valid campaign ID is required."
+    }
+
+    rewardFunctionsClient.createCampaignClick(
+      campaignId = cleanCampaignId,
+      taskId = taskId.trim(),
+      devicePlatform = devicePlatform.trim().uppercase(Locale.US).ifEmpty { "ANDROID" },
+      idempotencyKey = idempotencyKey.trim()
+    )
   }
 }

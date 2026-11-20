@@ -2884,17 +2884,98 @@ test("14. Step 9 Security & Consistency: locks legacy ad_sessions, blocks client
     })
   );
 
-  // users/{uid}/telegram_task_states and telegram_account: owner can read, nobody can write from client
+  // users/{uid}/telegram_task_states and telegram_account:
+  // Owner can read and record ONLY join-click fields (taskId, userId, hasClickedJoin, joinClickedAt).
+  // Clients CANNOT write verification or claim status fields.
   await assertSucceeds(
     aliceDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_active_1").get()
   );
   await assertFails(
     bobDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_active_1").get()
   );
+  const joinClickTs = new Date(Date.now() - 1000);
+  // Owner CAN create a new join-click record with exact allowed fields
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_join_only_1").set({
+      taskId: "tg_join_only_1",
+      userId: ALICE_UID,
+      hasClickedJoin: true,
+      joinClickedAt: joinClickTs,
+    })
+  );
+  // Owner CAN merge join-click fields onto an existing server-created state doc without altering server fields
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_active_1").set(
+      {
+        taskId: "tg_active_1",
+        userId: ALICE_UID,
+        hasClickedJoin: true,
+        joinClickedAt: joinClickTs,
+      },
+      { merge: true }
+    )
+  );
+  // Owner CANNOT create or update verification/claim status fields
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_forged_1").set({
+      taskId: "tg_forged_1",
+      userId: ALICE_UID,
+      hasClickedJoin: true,
+      joinClickedAt: joinClickTs,
+      isMembershipVerified: true,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_forged_2").set({
+      taskId: "tg_forged_2",
+      userId: ALICE_UID,
+      hasClickedJoin: true,
+      joinClickedAt: joinClickTs,
+      isClaimed: true,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_forged_3").set({
+      taskId: "tg_forged_3",
+      userId: ALICE_UID,
+      hasClickedJoin: true,
+      joinClickedAt: joinClickTs,
+      verified: true,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_active_1").set(
+      {
+        taskId: "tg_active_1",
+        userId: ALICE_UID,
+        isClaimed: true,
+        claimedAt: joinClickTs,
+      },
+      { merge: true }
+    )
+  );
   await assertFails(
     aliceDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_active_1").set({
       isMembershipVerified: true,
       isClaimed: false,
+    })
+  );
+  // Bob CANNOT write to Alice's telegram_task_states
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_join_only_bob").set({
+      taskId: "tg_join_only_bob",
+      userId: ALICE_UID,
+      hasClickedJoin: true,
+      joinClickedAt: joinClickTs,
+    })
+  );
+  // Admin client also CANNOT forge verification/claim fields directly (must use server Admin SDK)
+  await assertFails(
+    adminDb.collection("users").doc(ALICE_UID).collection("telegram_task_states").doc("tg_admin_forge").set({
+      taskId: "tg_admin_forge",
+      userId: ALICE_UID,
+      isMembershipVerified: true,
+      verifiedAt: joinClickTs,
     })
   );
   await assertSucceeds(

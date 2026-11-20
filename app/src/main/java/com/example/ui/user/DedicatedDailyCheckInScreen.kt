@@ -81,6 +81,7 @@ import com.example.data.model.formatCoins
 import com.example.ui.components.NeonBackgroundBox
 import com.example.ui.components.NeonGlassCard
 import com.example.ui.components.TaskFlowBrandLogo
+import com.example.ui.theme.taskFlowColors
 import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
@@ -127,6 +128,7 @@ fun DedicatedDailyCheckInScreen(
 ) {
   BackHandler(onBack = onBack)
   val context = LocalContext.current
+  val tfColors = taskFlowColors()
 
   var remainingCountdownMs by remember {
     mutableLongStateOf(computeIstMidnightCountdownMillis(System.currentTimeMillis()))
@@ -175,12 +177,12 @@ fun DedicatedDailyCheckInScreen(
             text = "Daily Check-in",
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
           Surface(
             shape = RoundedCornerShape(50),
-            color = Color(0xFFFEF3C7),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B))
+            color = tfColors.rewardBadgeBg,
+            border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.rewardBadgeBorder)
           ) {
             Row(
               modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -190,14 +192,14 @@ fun DedicatedDailyCheckInScreen(
               Icon(
                 imageVector = Icons.Default.LocalFireDepartment,
                 contentDescription = null,
-                tint = Color(0xFFD97706),
+                tint = tfColors.goldAccent,
                 modifier = Modifier.size(16.dp)
               )
               Text(
                 text = "${dailyCheckInState.currentStreak}d Streak",
                 style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF92400E)
+                fontWeight = FontWeight.SemiBold,
+                color = tfColors.rewardBadgeText
               )
             }
           }
@@ -208,7 +210,7 @@ fun DedicatedDailyCheckInScreen(
       item {
         NeonGlassCard(
           shape = RoundedCornerShape(22.dp),
-          borderColor = Color(0xFFCBD5E1),
+          borderColor = MaterialTheme.colorScheme.outlineVariant,
           backgroundColor = MaterialTheme.colorScheme.surface,
           modifier = Modifier.fillMaxWidth().testTag("daily_checkin_hero_card")
         ) {
@@ -225,8 +227,8 @@ fun DedicatedDailyCheckInScreen(
                 Text(
                   text = "30-DAY COIN REWARD CYCLE",
                   style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFF1E3A8A),
-                  fontWeight = FontWeight.Bold
+                  color = MaterialTheme.colorScheme.primary,
+                  fontWeight = FontWeight.SemiBold
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
@@ -238,19 +240,19 @@ fun DedicatedDailyCheckInScreen(
                     },
                   style = MaterialTheme.typography.titleLarge,
                   color = MaterialTheme.colorScheme.onSurface,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
               }
               Surface(
                 shape = RoundedCornerShape(50),
-                color = Color(0xFFFEF3C7),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B))
+                color = tfColors.rewardBadgeBg,
+                border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.rewardBadgeBorder)
               ) {
                 Text(
                   text = "Day $nextClaimDay / 30",
                   style = MaterialTheme.typography.labelSmall,
-                  color = Color(0xFF92400E),
-                  fontWeight = FontWeight.Bold,
+                  color = tfColors.rewardBadgeText,
+                  fontWeight = FontWeight.SemiBold,
                   modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                 )
               }
@@ -259,8 +261,8 @@ fun DedicatedDailyCheckInScreen(
             // Status / Timer Notice
             Surface(
               shape = RoundedCornerShape(12.dp),
-              color = Color(0xFFF8FAFC),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
+              color = tfColors.neutralSurfaceBg,
+              border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.neutralSurfaceBorder),
               modifier = Modifier.fillMaxWidth()
             ) {
               Row(
@@ -271,7 +273,7 @@ fun DedicatedDailyCheckInScreen(
                 Icon(
                   imageVector = Icons.Default.Schedule,
                   contentDescription = null,
-                  tint = Color(0xFF1E3A8A),
+                  tint = MaterialTheme.colorScheme.primary,
                   modifier = Modifier.size(16.dp)
                 )
                 Text(
@@ -282,7 +284,7 @@ fun DedicatedDailyCheckInScreen(
                       "Next daily check-in unlocks in $timeRemainingToTomorrow"
                     },
                   style = MaterialTheme.typography.bodySmall,
-                  color = Color(0xFF334155),
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
                   fontWeight = FontWeight.Medium
                 )
               }
@@ -295,10 +297,10 @@ fun DedicatedDailyCheckInScreen(
               shape = RoundedCornerShape(14.dp),
               colors =
                 ButtonDefaults.buttonColors(
-                  containerColor = Color(0xFF1E3A8A),
-                  contentColor = Color.White,
-                  disabledContainerColor = Color(0xFFE2E8F0),
-                  disabledContentColor = Color(0xFF64748B)
+                  containerColor = tfColors.charcoalContainer,
+                  contentColor = tfColors.charcoalContent,
+                  disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                  disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                 ),
               modifier =
                 Modifier.fillMaxWidth()
@@ -309,13 +311,13 @@ fun DedicatedDailyCheckInScreen(
                 CircularProgressIndicator(
                   modifier = Modifier.size(20.dp),
                   strokeWidth = 2.dp,
-                  color = Color.White
+                  color = tfColors.charcoalContent
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
                   text = "Processing Check-in...",
                   style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
               } else if (dailyCheckInState.canCheckInToday) {
                 Icon(
@@ -327,7 +329,7 @@ fun DedicatedDailyCheckInScreen(
                 Text(
                   text = "Claim Day $nextClaimDay (+${formatCoins(todayRewardCoins)})",
                   style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
               } else {
                 Icon(
@@ -339,7 +341,7 @@ fun DedicatedDailyCheckInScreen(
                 Text(
                   text = "Claimed for Today ✓",
                   style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.SemiBold
                 )
               }
             }
@@ -364,16 +366,16 @@ fun DedicatedDailyCheckInScreen(
           Text(
             text = "30-Day Schedule",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground
           )
           Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
           ) {
-            GridLegendDot(color = Color(0xFF059669), label = "Claimed")
-            GridLegendDot(color = Color(0xFF1E3A8A), label = "Today")
-            GridLegendDot(color = Color(0xFF64748B), label = "Locked")
+            GridLegendDot(color = tfColors.goldAccent, label = "Claimed")
+            GridLegendDot(color = MaterialTheme.colorScheme.primary, label = "Today")
+            GridLegendDot(color = MaterialTheme.colorScheme.onSurfaceVariant, label = "Locked")
           }
         }
       }
@@ -437,7 +439,7 @@ fun DedicatedDailyCheckInScreen(
             Icon(
               imageVector = Icons.Default.EmojiEvents,
               contentDescription = null,
-              tint = Color(0xFFD97706),
+              tint = tfColors.goldAccent,
               modifier = Modifier.size(20.dp)
             )
             Text(
@@ -483,32 +485,21 @@ private fun CompactDayGridSquareCard(
   onClick: () -> Unit,
   modifier: Modifier = Modifier
 ) {
+  val tfColors = taskFlowColors()
   val borderColor =
     when {
-      isCurrent -> Color(0xFF0284C7)
-      isClaimed -> Color(0xFF10B981)
-      isMilestone -> Color(0xFFF59E0B)
-      else -> Color(0xFFCBD5E1)
+      isCurrent -> MaterialTheme.colorScheme.primary
+      isClaimed -> tfColors.statusConfirmedBorder
+      isMilestone -> tfColors.rewardBadgeBorder
+      else -> MaterialTheme.colorScheme.outlineVariant
     }
 
-  val bgBrush =
+  val containerColor =
     when {
-      isCurrent ->
-        Brush.verticalGradient(
-          colors = listOf(Color(0xFFE0F2FE), Color(0xFFBAE6FD))
-        )
-      isClaimed ->
-        Brush.verticalGradient(
-          colors = listOf(Color(0xFFECFDF5), Color(0xFFD1FAE5))
-        )
-      isMilestone ->
-        Brush.verticalGradient(
-          colors = listOf(Color(0xFFFFFBEB), Color(0xFFFEF3C7))
-        )
-      else ->
-        Brush.verticalGradient(
-          colors = listOf(Color(0xFFFFFFFF), Color(0xFFF1F5F9))
-        )
+      isCurrent -> MaterialTheme.colorScheme.primaryContainer
+      isClaimed -> tfColors.statusConfirmedBg
+      isMilestone -> tfColors.rewardBadgeBg
+      else -> MaterialTheme.colorScheme.surface
     }
 
   Box(
@@ -516,9 +507,9 @@ private fun CompactDayGridSquareCard(
       modifier
         .aspectRatio(0.92f)
         .clip(RoundedCornerShape(14.dp))
-        .background(bgBrush)
+        .background(containerColor)
         .border(
-          width = if (isCurrent) 2.dp else 1.2.dp,
+          width = if (isCurrent) 1.75.dp else 1.dp,
           color = borderColor,
           shape = RoundedCornerShape(14.dp)
         )
@@ -537,13 +528,13 @@ private fun CompactDayGridSquareCard(
         text = "D$day",
         style = MaterialTheme.typography.labelSmall,
         fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.SemiBold,
         color =
           when {
-            isCurrent -> Color(0xFF0369A1)
-            isClaimed -> Color(0xFF047857)
-            isMilestone -> Color(0xFFB45309)
-            else -> Color(0xFF475569)
+            isCurrent -> MaterialTheme.colorScheme.onPrimaryContainer
+            isClaimed -> tfColors.statusConfirmedFg
+            isMilestone -> tfColors.rewardBadgeText
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
           }
       )
 
@@ -556,14 +547,14 @@ private fun CompactDayGridSquareCard(
           isClaimed -> {
             Surface(
               shape = CircleShape,
-              color = Color(0xFF10B981),
+              color = tfColors.goldAccent,
               modifier = Modifier.size(20.dp)
             ) {
               Box(contentAlignment = Alignment.Center) {
                 Icon(
                   imageVector = Icons.Default.Check,
                   contentDescription = "Claimed",
-                  tint = Color.White,
+                  tint = tfColors.claimContent,
                   modifier = Modifier.size(13.dp)
                 )
               }
@@ -572,14 +563,14 @@ private fun CompactDayGridSquareCard(
           isCurrent -> {
             Surface(
               shape = CircleShape,
-              color = Color(0xFF0284C7),
+              color = MaterialTheme.colorScheme.primary,
               modifier = Modifier.size(20.dp)
             ) {
               Box(contentAlignment = Alignment.Center) {
                 Icon(
                   imageVector = Icons.Default.LocalFireDepartment,
                   contentDescription = "Claimable Today",
-                  tint = Color(0xFFFDE047),
+                  tint = MaterialTheme.colorScheme.onPrimary,
                   modifier = Modifier.size(14.dp)
                 )
               }
@@ -589,7 +580,7 @@ private fun CompactDayGridSquareCard(
             Icon(
               imageVector = Icons.Default.EmojiEvents,
               contentDescription = "Bonus Day",
-              tint = Color(0xFFD97706),
+              tint = tfColors.goldAccent,
               modifier = Modifier.size(16.dp)
             )
           }
@@ -597,7 +588,7 @@ private fun CompactDayGridSquareCard(
             Icon(
               imageVector = Icons.Default.Lock,
               contentDescription = "Locked",
-              tint = Color(0xFF64748B),
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
               modifier = Modifier.size(13.dp)
             )
           }
@@ -609,13 +600,13 @@ private fun CompactDayGridSquareCard(
         text = "+$rewardCoins",
         style = MaterialTheme.typography.labelSmall,
         fontSize = 11.sp,
-        fontWeight = FontWeight.ExtraBold,
+        fontWeight = FontWeight.SemiBold,
         color =
           when {
-            isCurrent -> Color(0xFF0C4A6E)
-            isClaimed -> Color(0xFF065F46)
-            isMilestone -> Color(0xFF92400E)
-            else -> Color(0xFF0F172A)
+            isCurrent -> MaterialTheme.colorScheme.onPrimaryContainer
+            isClaimed -> tfColors.statusConfirmedFg
+            isMilestone -> tfColors.rewardBadgeText
+            else -> MaterialTheme.colorScheme.onSurface
           },
         textAlign = TextAlign.Center
       )
@@ -629,19 +620,20 @@ fun DailyCheckInPendingDialog(
   rewardCents: Long,
   onDismiss: () -> Unit
 ) {
+  val tfColors = taskFlowColors()
   AlertDialog(
     onDismissRequest = onDismiss,
     icon = {
       Surface(
         shape = CircleShape,
-        color = Color(0xFFFEF3C7),
+        color = tfColors.rewardBadgeBg,
         modifier = Modifier.size(54.dp)
       ) {
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.HourglassEmpty,
             contentDescription = null,
-            tint = Color(0xFFD97706),
+            tint = tfColors.goldAccent,
             modifier = Modifier.size(30.dp)
           )
         }
@@ -651,7 +643,7 @@ fun DailyCheckInPendingDialog(
       Text(
         text = "Daily Check-in Notice",
         style = MaterialTheme.typography.titleLarge,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.SemiBold,
         textAlign = TextAlign.Center
       )
     },
@@ -663,7 +655,7 @@ fun DailyCheckInPendingDialog(
         Text(
           text = "Day $streakDay Reward: +${formatCoins(rewardCents)}",
           style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.ExtraBold
+          fontWeight = FontWeight.SemiBold
         )
       }
     },
@@ -671,10 +663,14 @@ fun DailyCheckInPendingDialog(
       Button(
         onClick = onDismiss,
         shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = tfColors.claimContainer,
+            contentColor = tfColors.claimContent
+          ),
         modifier = Modifier.testTag("dismiss_pending_dialog_button")
       ) {
-        Text("Understood", fontWeight = FontWeight.Bold)
+        Text("Understood", fontWeight = FontWeight.SemiBold)
       }
     }
   )
@@ -689,13 +685,14 @@ fun TelegramJoinRewardDailyCard(
   onVerifyMembership: (String) -> Unit,
   onClaimReward: () -> Unit
 ) {
+  val tfColors = taskFlowColors()
   var telegramUserIdInput by rememberSaveable(rewardState.telegramUserId) {
     mutableStateOf(rewardState.telegramUserId)
   }
 
   NeonGlassCard(
     shape = RoundedCornerShape(18.dp),
-    borderColor = Color(0xFF0284C7).copy(alpha = 0.45f),
+    borderColor = MaterialTheme.colorScheme.outlineVariant,
     backgroundColor = MaterialTheme.colorScheme.surface,
     modifier = Modifier.fillMaxWidth().testTag("daily_rewards_telegram_join_card")
   ) {
@@ -715,14 +712,14 @@ fun TelegramJoinRewardDailyCard(
         ) {
           Surface(
             shape = CircleShape,
-            color = Color(0xFFE0F2FE),
+            color = MaterialTheme.colorScheme.primaryContainer,
             modifier = Modifier.size(40.dp)
           ) {
             Box(contentAlignment = Alignment.Center) {
               Icon(
                 imageVector = Icons.Default.Send,
                 contentDescription = "Telegram",
-                tint = Color(0xFF0284C7),
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(20.dp)
               )
             }
@@ -731,7 +728,7 @@ fun TelegramJoinRewardDailyCard(
             Text(
               text = "Telegram Join Reward",
               style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold,
+              fontWeight = FontWeight.SemiBold,
               color = MaterialTheme.colorScheme.onSurface
             )
             Text(
@@ -743,14 +740,14 @@ fun TelegramJoinRewardDailyCard(
         }
         Surface(
           shape = RoundedCornerShape(50),
-          color = Color(0xFFECFDF5),
-          border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981))
+          color = tfColors.rewardBadgeBg,
+          border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.rewardBadgeBorder)
         ) {
           Text(
             text = "+${formatCoins(config.rewardCoins)}",
             style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF047857),
+            fontWeight = FontWeight.SemiBold,
+            color = tfColors.rewardBadgeText,
             modifier =
               Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                 .testTag("daily_rewards_telegram_reward_badge")
@@ -768,14 +765,14 @@ fun TelegramJoinRewardDailyCard(
         Icon(
           imageVector = Icons.Default.OpenInNew,
           contentDescription = null,
-          tint = Color(0xFF0284C7),
+          tint = MaterialTheme.colorScheme.primary,
           modifier = Modifier.size(18.dp)
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
           text = "Join Telegram",
           fontWeight = FontWeight.SemiBold,
-          color = Color(0xFF0284C7)
+          color = MaterialTheme.colorScheme.primary
         )
       }
 
@@ -794,7 +791,11 @@ fun TelegramJoinRewardDailyCard(
           onClick = { onVerifyMembership(telegramUserIdInput) },
           enabled = !isBusy && telegramUserIdInput.isNotBlank(),
           shape = RoundedCornerShape(12.dp),
-          colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor = MaterialTheme.colorScheme.primary,
+              contentColor = MaterialTheme.colorScheme.onPrimary
+            ),
           modifier =
             Modifier.fillMaxWidth()
               .height(46.dp)
@@ -806,14 +807,14 @@ fun TelegramJoinRewardDailyCard(
             modifier = Modifier.size(18.dp)
           )
           Spacer(modifier = Modifier.width(8.dp))
-          Text("Verify Membership", fontWeight = FontWeight.Bold)
+          Text("Verify Membership", fontWeight = FontWeight.SemiBold)
         }
       } else {
         // Step 3: Show Claim ONLY after successful membership verification
         Surface(
           shape = RoundedCornerShape(10.dp),
-          color = Color(0xFFECFDF5),
-          border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981)),
+          color = tfColors.statusConfirmedBg,
+          border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.statusConfirmedBorder),
           modifier = Modifier.fillMaxWidth()
         ) {
           Row(
@@ -824,13 +825,13 @@ fun TelegramJoinRewardDailyCard(
             Icon(
               imageVector = Icons.Default.CheckCircle,
               contentDescription = null,
-              tint = Color(0xFF059669),
+              tint = tfColors.goldAccent,
               modifier = Modifier.size(18.dp)
             )
             Text(
               text = "Telegram channel membership verified!",
               style = MaterialTheme.typography.bodySmall,
-              color = Color(0xFF065F46),
+              color = tfColors.statusConfirmedFg,
               fontWeight = FontWeight.SemiBold
             )
           }
@@ -840,7 +841,11 @@ fun TelegramJoinRewardDailyCard(
           onClick = onClaimReward,
           enabled = !isBusy && !rewardState.isClaimed,
           shape = RoundedCornerShape(12.dp),
-          colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor = tfColors.claimContainer,
+              contentColor = tfColors.claimContent
+            ),
           modifier =
             Modifier.fillMaxWidth()
               .height(48.dp)
@@ -854,7 +859,7 @@ fun TelegramJoinRewardDailyCard(
           Spacer(modifier = Modifier.width(8.dp))
           Text(
             text = "Claim +${formatCoins(config.rewardCoins)}",
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.SemiBold
           )
         }
       }
@@ -877,7 +882,7 @@ fun DailyPromoCodeEntryCard(
 ) {
   NeonGlassCard(
     shape = RoundedCornerShape(18.dp),
-    borderColor = Color(0xFF1E3A8A).copy(alpha = 0.35f),
+    borderColor = MaterialTheme.colorScheme.outlineVariant,
     backgroundColor = MaterialTheme.colorScheme.surface,
     modifier =
       Modifier.fillMaxWidth()
@@ -896,14 +901,14 @@ fun DailyPromoCodeEntryCard(
       ) {
         Surface(
           shape = CircleShape,
-          color = Color(0xFFDBEAFE),
+          color = MaterialTheme.colorScheme.primaryContainer,
           modifier = Modifier.size(40.dp)
         ) {
           Box(contentAlignment = Alignment.Center) {
             Icon(
               imageVector = Icons.Default.ConfirmationNumber,
               contentDescription = "Daily Promo Code",
-              tint = Color(0xFF1E3A8A),
+              tint = MaterialTheme.colorScheme.onPrimaryContainer,
               modifier = Modifier.size(20.dp)
             )
           }
@@ -912,7 +917,7 @@ fun DailyPromoCodeEntryCard(
           Text(
             text = "Daily Promo Code",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface
           )
           Text(
@@ -925,7 +930,11 @@ fun DailyPromoCodeEntryCard(
       Button(
         onClick = onOpenPromoCodeScreen,
         shape = RoundedCornerShape(10.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E3A8A)),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary
+          ),
         modifier = Modifier.testTag("daily_rewards_open_promo_code_button")
       ) {
         Text("Redeem", fontWeight = FontWeight.SemiBold)
@@ -945,6 +954,7 @@ fun PromoCodeRedemptionScreen(
   onBack: () -> Unit
 ) {
   BackHandler(onBack = onBack)
+  val tfColors = taskFlowColors()
   var codeText by rememberSaveable { mutableStateOf(uiState.codeInput) }
 
   LaunchedEffect(uiState.lastRedeemedCode) {
@@ -984,14 +994,14 @@ fun PromoCodeRedemptionScreen(
         Text(
           text = "Daily Promo Code",
           style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
+          fontWeight = FontWeight.SemiBold,
           color = MaterialTheme.colorScheme.onBackground
         )
       }
 
       NeonGlassCard(
         shape = RoundedCornerShape(20.dp),
-        borderColor = Color(0xFFCBD5E1),
+        borderColor = MaterialTheme.colorScheme.outlineVariant,
         backgroundColor = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth()
       ) {
@@ -1005,14 +1015,14 @@ fun PromoCodeRedemptionScreen(
           ) {
             Surface(
               shape = CircleShape,
-              color = Color(0xFFDBEAFE),
+              color = MaterialTheme.colorScheme.primaryContainer,
               modifier = Modifier.size(42.dp)
             ) {
               Box(contentAlignment = Alignment.Center) {
                 Icon(
                   imageVector = Icons.Default.CardGiftcard,
                   contentDescription = null,
-                  tint = Color(0xFF1E3A8A),
+                  tint = MaterialTheme.colorScheme.onPrimaryContainer,
                   modifier = Modifier.size(22.dp)
                 )
               }
@@ -1021,7 +1031,7 @@ fun PromoCodeRedemptionScreen(
               Text(
                 text = "Enter Promo Code",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface
               )
               Text(
@@ -1053,7 +1063,11 @@ fun PromoCodeRedemptionScreen(
             },
             enabled = !uiState.isRedeeming && codeText.isNotBlank(),
             shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E3A8A)),
+            colors =
+              ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary
+              ),
             modifier =
               Modifier.fillMaxWidth()
                 .height(48.dp)
@@ -1063,20 +1077,20 @@ fun PromoCodeRedemptionScreen(
               CircularProgressIndicator(
                 modifier = Modifier.size(18.dp),
                 strokeWidth = 2.dp,
-                color = Color.White
+                color = MaterialTheme.colorScheme.onPrimary
               )
               Spacer(modifier = Modifier.width(8.dp))
-              Text("Redeeming...", fontWeight = FontWeight.Bold)
+              Text("Redeeming...", fontWeight = FontWeight.SemiBold)
             } else {
-              Text("Redeem", fontWeight = FontWeight.Bold)
+              Text("Redeem", fontWeight = FontWeight.SemiBold)
             }
           }
 
           if (!uiState.successMessage.isNullOrBlank()) {
             Surface(
               shape = RoundedCornerShape(12.dp),
-              color = Color(0xFFECFDF5),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981)),
+              color = tfColors.statusConfirmedBg,
+              border = androidx.compose.foundation.BorderStroke(1.dp, tfColors.statusConfirmedBorder),
               modifier = Modifier.fillMaxWidth().testTag("promo_code_success_message")
             ) {
               Row(
@@ -1087,13 +1101,13 @@ fun PromoCodeRedemptionScreen(
                 Icon(
                   imageVector = Icons.Default.CheckCircle,
                   contentDescription = null,
-                  tint = Color(0xFF059669),
+                  tint = tfColors.goldAccent,
                   modifier = Modifier.size(20.dp)
                 )
                 Text(
                   text = uiState.successMessage,
                   style = MaterialTheme.typography.bodyMedium,
-                  color = Color(0xFF065F46),
+                  color = tfColors.statusConfirmedFg,
                   fontWeight = FontWeight.SemiBold
                 )
               }
@@ -1103,8 +1117,8 @@ fun PromoCodeRedemptionScreen(
           if (!uiState.errorMessage.isNullOrBlank()) {
             Surface(
               shape = RoundedCornerShape(12.dp),
-              color = Color(0xFFFEF2F2),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444)),
+              color = MaterialTheme.colorScheme.errorContainer,
+              border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
               modifier = Modifier.fillMaxWidth().testTag("promo_code_error_message")
             ) {
               Row(
@@ -1115,13 +1129,13 @@ fun PromoCodeRedemptionScreen(
                 Icon(
                   imageVector = Icons.Default.ErrorOutline,
                   contentDescription = null,
-                  tint = Color(0xFFDC2626),
+                  tint = MaterialTheme.colorScheme.error,
                   modifier = Modifier.size(20.dp)
                 )
                 Text(
                   text = uiState.errorMessage,
                   style = MaterialTheme.typography.bodyMedium,
-                  color = Color(0xFF991B1B),
+                  color = MaterialTheme.colorScheme.onErrorContainer,
                   fontWeight = FontWeight.SemiBold
                 )
               }
