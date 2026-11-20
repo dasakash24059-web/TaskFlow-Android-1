@@ -3,6 +3,8 @@ const {
   CAMPAIGN_TRACKING_COLLECTIONS,
   CAMPAIGN_CONVERSION_LOCKS_COLLECTION,
   SECRET_ENV_KEY_REGEX,
+  ALLOWED_CAMPAIGN_SECRET_KEYS,
+  isRegisteredCampaignSecretKey,
   CAMPAIGN_VERIFICATION_MODES,
   CAMPAIGN_CONVERSION_STATES,
   canTransitionConversionState,
@@ -74,6 +76,20 @@ const unityAdsSecret = defineSecret("UNITY_ADS_SECRET");
 const telegramBotToken = defineSecret("TELEGRAM_BOT_TOKEN");
 const telegramWebhookSecret = defineSecret("TELEGRAM_WEBHOOK_SECRET");
 const campaignPostbackSecret = defineSecret("CAMPAIGN_POSTBACK_SECRET");
+const campaignPostbackSecretAlpha = defineSecret("CAMPAIGN_POSTBACK_SECRET_ALPHA");
+const campaignPostbackSecretBeta = defineSecret("CAMPAIGN_POSTBACK_SECRET_BETA");
+const campaignPostbackSecretS2S = defineSecret("CAMPAIGN_POSTBACK_SECRET_S2S");
+
+const CAMPAIGN_POSTBACK_SECRET_REGISTRY = Object.freeze({
+  CAMPAIGN_POSTBACK_SECRET: campaignPostbackSecret,
+  CAMPAIGN_POSTBACK_SECRET_ALPHA: campaignPostbackSecretAlpha,
+  CAMPAIGN_POSTBACK_SECRET_BETA: campaignPostbackSecretBeta,
+  CAMPAIGN_POSTBACK_SECRET_S2S: campaignPostbackSecretS2S
+});
+
+const CAMPAIGN_POSTBACK_BOUND_SECRETS = Object.freeze(
+  ALLOWED_CAMPAIGN_SECRET_KEYS.map((key) => CAMPAIGN_POSTBACK_SECRET_REGISTRY[key])
+);
 
 function resolveTelegramBotToken(deps = {}) {
   if (typeof deps.botToken === "string" && deps.botToken.trim()) {
@@ -4707,38 +4723,47 @@ class CampaignPostbackHttpError extends Error {
 }
 
 /**
- * Resolves a network verification secret strictly from server-side Secret Manager / env / deps.
- * Never reads secret values from Firestore client-accessible or tracking documents.
+ * Resolves a network verification secret strictly from an explicitly allowlisted and
+ * Gen-2-bound server-side Secret Manager registry. Rejects unregistered env var names
+ * so Firestore config documents can never reference unrelated server env secrets.
  */
 function resolveCampaignNetworkSecret(networkData = {}, deps = {}) {
   const sigConfig = networkData.signatureConfig || {};
   const secretEnvKey = String(sigConfig.secretEnvKey || "CAMPAIGN_POSTBACK_SECRET").trim();
   const networkId = String(networkData.networkId || "").trim();
 
+  if (
+    !SECRET_ENV_KEY_REGEX.test(secretEnvKey) ||
+    !isRegisteredCampaignSecretKey(secretEnvKey) ||
+    !Object.prototype.hasOwnProperty.call(CAMPAIGN_POSTBACK_SECRET_REGISTRY, secretEnvKey)
+  ) {
+    return "";
+  }
+
   if (typeof deps.resolveSecret === "function") {
     const val = String(deps.resolveSecret(secretEnvKey, networkId) || "").trim();
     if (val) return val;
   }
 
-  if (deps.secrets && typeof deps.secrets === "object" && typeof deps.secrets[secretEnvKey] === "string") {
+  if (
+    deps.secrets &&
+    typeof deps.secrets === "object" &&
+    Object.prototype.hasOwnProperty.call(deps.secrets, secretEnvKey) &&
+    typeof deps.secrets[secretEnvKey] === "string"
+  ) {
     const val = deps.secrets[secretEnvKey].trim();
     if (val) return val;
-  }
-
-  if (!SECRET_ENV_KEY_REGEX.test(secretEnvKey)) {
-    return "";
   }
 
   const envVal = String(process.env[secretEnvKey] || "").trim();
   if (envVal) return envVal;
 
-  if (secretEnvKey === "CAMPAIGN_POSTBACK_SECRET") {
-    try {
-      const boundVal = String(campaignPostbackSecret.value() || "").trim();
-      if (boundVal) return boundVal;
-    } catch (_) {
-      // Secret parameter unavailable outside bound cloud runtime
-    }
+  try {
+    const registeredParam = CAMPAIGN_POSTBACK_SECRET_REGISTRY[secretEnvKey];
+    const boundVal = String(registeredParam.value() || "").trim();
+    if (boundVal) return boundVal;
+  } catch (_) {
+    // Secret parameter unavailable outside bound cloud runtime
   }
 
   return "";
@@ -5281,7 +5306,7 @@ async function executeConversionTransitionInTransaction({
         userData.approvalStatus || "approved"
       );
 
-      // 3. Create immutable wallet ledger credit entry
+      // 3. Create immutable wallet ledger credit entry (attribution identifiers remain server-only in campaign_conversions)
       transaction.set(creditTxRef, {
         userId,
         userName: displayName,
@@ -5291,10 +5316,8 @@ async function executeConversionTransitionInTransaction({
         amountCents: wallet.rewardCents,
         status: "CREDITED",
         referenceId: conversionId,
-        clickId,
         campaignId,
         networkId: clickNetworkId,
-        externalTransactionId: String(externalTransactionId || existingConversion?.externalTransactionId || ""),
         createdAt: ts
       });
 
@@ -5496,7 +5519,7 @@ async function executeConversionTransitionInTransaction({
       userData.approvalStatus || "approved"
     );
 
-    // 3. Create auditable compensating ledger entry (original credit tx stays untouched!)
+    // 3. Create auditable compensating ledger entry (original credit tx stays untouched; attribution identifiers stay server-only)
     transaction.set(revTxRef, {
       userId,
       userName: displayName,
@@ -5510,7 +5533,6 @@ async function executeConversionTransitionInTransaction({
       status: "REVERSED",
       referenceId: conversionId,
       originalTransactionId: existingConversion.creditedTransactionId || creditTxId,
-      clickId,
       campaignId,
       networkId: clickNetworkId,
       reason: effectiveStatusReason || "ADVERTISER_REVERSAL",
@@ -5831,7 +5853,7 @@ exports.createCampaignClick = onCall(async (request) =>
   handleCreateCampaignClick(request)
 );
 exports.campaignPostback = onRequest(
-  { secrets: [campaignPostbackSecret] },
+  { secrets: CAMPAIGN_POSTBACK_BOUND_SECRETS },
   async (req, res) => handleCampaignPostback(req, res)
 );
 exports.reviewCampaignConversion = onCall(async (request) =>
@@ -5851,7 +5873,9 @@ exports._campaignConversionHandlers = {
   handleCampaignPostback,
   handleReviewCampaignConversion,
   resolveCampaignNetworkSecret,
-  extractNetworkIdFromPostbackRequest
+  extractNetworkIdFromPostbackRequest,
+  CAMPAIGN_POSTBACK_BOUND_SECRETS,
+  ALLOWED_CAMPAIGN_SECRET_KEYS
 };
 
 

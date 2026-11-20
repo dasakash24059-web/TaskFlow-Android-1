@@ -408,4 +408,82 @@ test("7. Phase 3C campaign_conversion_locks collection is strictly server-only (
   );
 });
 
+test("8. Phase 3C remediation: users cannot self-create CAMPAIGN_REWARD or CAMPAIGN_REVERSAL notifications", async () => {
+  await seedTrackingFoundationAndAdminData();
+  const ts = new Date(Date.now() - 1000);
 
+  const aliceDb = testEnv
+    .authenticatedContext(ALICE_UID, { email: ALICE_EMAIL, email_verified: true })
+    .firestore();
+  const adminDb = testEnv
+    .authenticatedContext(ADMIN_UID, { email: ADMIN_EMAIL, email_verified: true })
+    .firestore();
+
+  await assertFails(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("notifications")
+      .doc("forged_campaign_reward_notif")
+      .set({
+        userId: ALICE_UID,
+        title: "Fake Campaign Reward",
+        message: "+5000 TF credited",
+        type: "CAMPAIGN_REWARD",
+        rewardCoins: 5000,
+        isRead: false,
+        createdAt: ts
+      })
+  );
+
+  await assertFails(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("notifications")
+      .doc("forged_campaign_reversal_notif")
+      .set({
+        userId: ALICE_UID,
+        title: "Fake Reversal",
+        message: "Reversal notice",
+        type: "CAMPAIGN_REVERSAL",
+        rewardCoins: 500,
+        isRead: false,
+        createdAt: ts
+      })
+  );
+
+  // Legitimate non-reward client notification remains permitted, and admins can create campaign notifications
+  await assertSucceeds(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("notifications")
+      .doc("info_notif_1")
+      .set({
+        userId: ALICE_UID,
+        title: "Reminder",
+        message: "General info",
+        type: "INFO",
+        isRead: false,
+        createdAt: ts
+      })
+  );
+
+  await assertSucceeds(
+    adminDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("notifications")
+      .doc("admin_campaign_notif_1")
+      .set({
+        userId: ALICE_UID,
+        title: "Campaign Reward Credited",
+        message: "+500 TF",
+        type: "CAMPAIGN_REWARD",
+        rewardCoins: 500,
+        isRead: false,
+        createdAt: ts
+      })
+  );
+});

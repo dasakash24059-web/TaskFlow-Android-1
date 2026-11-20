@@ -279,15 +279,7 @@ fun AdminControlCenterHomeScreen(
     withdrawalRequests.count { WithdrawalStatus.isPendingOrActive(it.status) }
   val totalDistributedCoins =
     remember(transactions, users, reviewTasks) {
-      val txCoins =
-        transactions
-          .filter {
-            it.type != TransactionType.DEMO_WITHDRAWAL &&
-              it.type != TransactionType.WITHDRAWAL_DEBIT &&
-              it.type != TransactionType.WITHDRAWAL_REFUND &&
-              it.type != TransactionType.CAMPAIGN_REVERSAL
-          }
-          .sumOf { it.getEffectiveAmountCoins() }
+      val txCoins = com.example.data.model.computeNetCreditedEarningsCoins(transactions)
       val userWalletCoins = users.sumOf { it.getEffectiveBalanceCoins() }
       val approvedTaskCoins =
         reviewTasks.filter { it.status == TaskStatus.APPROVED }.sumOf { it.getEffectiveRewardCoins() }
@@ -944,15 +936,7 @@ fun AdminOverviewSection(
 
   val totalDistributedCoins =
     remember(transactions, users, reviewTasks) {
-      val txCoins =
-        transactions
-          .filter {
-            it.type != TransactionType.DEMO_WITHDRAWAL &&
-              it.type != TransactionType.WITHDRAWAL_DEBIT &&
-              it.type != TransactionType.WITHDRAWAL_REFUND &&
-              it.type != TransactionType.CAMPAIGN_REVERSAL
-          }
-          .sumOf { it.getEffectiveAmountCoins() }
+      val txCoins = com.example.data.model.computeNetCreditedEarningsCoins(transactions)
       val userWalletCoins = users.sumOf { it.getEffectiveBalanceCoins() }
       val approvedTaskCoins =
         reviewTasks.filter { it.status == TaskStatus.APPROVED }.sumOf { it.getEffectiveRewardCoins() }
@@ -1412,21 +1396,22 @@ fun AdminCoinsRewardsSection(
   onTogglePromoCodeActive: (promoId: String, isActive: Boolean) -> Unit = { _, _ -> },
   onCreditManualBonus: (targetUserId: String, amountCoins: Long, reason: String) -> Unit = { _, _, _ -> }
 ) {
-  val creditTransactions =
-    transactions.filter {
-      it.type != TransactionType.DEMO_WITHDRAWAL &&
-        it.type != TransactionType.WITHDRAWAL_DEBIT &&
-        it.type != TransactionType.WITHDRAWAL_REFUND &&
-        it.type != TransactionType.CAMPAIGN_REVERSAL
-    }
   val approvedSubmissions =
     reviewTasks.filter { it.status == TaskStatus.APPROVED }
   val pendingSubmissions =
     reviewTasks.filter { it.status == TaskStatus.SUBMITTED }
 
+  val creditTransactions =
+    transactions.filter {
+      it.type != TransactionType.DEMO_WITHDRAWAL &&
+        it.type != TransactionType.WITHDRAWAL_DEBIT &&
+        it.type != TransactionType.WITHDRAWAL_REFUND &&
+        !it.type.trim().equals(TransactionType.CAMPAIGN_REVERSAL, ignoreCase = true)
+    }
+
   val totalDistributedCoins =
     maxOf(
-      creditTransactions.sumOf { it.getEffectiveAmountCoins() },
+      com.example.data.model.computeNetCreditedEarningsCoins(transactions),
       users.sumOf { it.getEffectiveBalanceCoins() },
       approvedSubmissions.sumOf { it.getEffectiveRewardCoins() }
     )
@@ -2661,14 +2646,7 @@ fun AdminAnalyticsReportsSection(
     } else 0f
 
   val periodDistributedCoins =
-    filteredTransactions
-      .filter {
-        it.type != TransactionType.DEMO_WITHDRAWAL &&
-          it.type != TransactionType.WITHDRAWAL_DEBIT &&
-          it.type != TransactionType.WITHDRAWAL_REFUND &&
-          it.type != TransactionType.CAMPAIGN_REVERSAL
-      }
-      .sumOf { it.getEffectiveAmountCoins() }
+    com.example.data.model.computeNetCreditedEarningsCoins(filteredTransactions)
       .let { txCoins ->
         val approvedSubCoins =
           filteredReviews.filter { it.status == TaskStatus.APPROVED }.sumOf { it.getEffectiveRewardCoins() }

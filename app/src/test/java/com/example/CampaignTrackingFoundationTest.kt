@@ -11,15 +11,22 @@ import com.example.data.model.CampaignNetworkConfig
 import com.example.data.model.CampaignTrackingCollections
 import com.example.data.model.CampaignTrackingConfig
 import com.example.data.model.CampaignVerificationMode
+import com.example.data.model.LeaderboardPeriod
 import com.example.data.model.NetworkCapabilitiesSpec
 import com.example.data.model.NetworkParameterMapping
 import com.example.data.model.NetworkSignatureAlgorithm
 import com.example.data.model.NetworkSignatureSpec
 import com.example.data.model.NotificationRewardType
+import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
+import com.example.data.model.UserProfile
+import com.example.data.model.computeLeaderboardEntriesForPeriod
+import com.example.data.model.computeNetCreditedEarningsCoins
 import com.example.data.tracking.CampaignNetworkAdapterRegistry
 import com.example.data.tracking.OutboundTrackingContext
 import com.example.data.tracking.RawCallbackInput
+import com.google.firebase.Timestamp
+import java.util.Date
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -339,5 +346,246 @@ class CampaignTrackingFoundationTest {
       CampaignClickStatus.PENDING_VERIFICATION,
       CampaignClickStatus.fromWireValue("PENDING_VERIFICATION")
     )
+  }
+
+  @Test
+  fun leaderboardAllTimeThisMonthThisWeekSubtractCampaignReversalsWithoutDoubleSubtraction() {
+    // Anchor at Thursday 2026-06-18 12:00 IST so "This Week" starts Mon 2026-06-15 00:00 IST
+    // and "This Month" starts 2026-06-01 00:00 IST.
+    val dayMs = 24L * 60L * 60L * 1000L
+    val nowMillis = 1_781_764_200_000L // 2026-06-18T06:30:00Z = 2026-06-18T12:00:00 IST
+    val twoDaysAgo = Timestamp(Date(nowMillis - 2 * dayMs)) // This Week & This Month
+    val twelveDaysAgo = Timestamp(Date(nowMillis - 12 * dayMs)) // Earlier This Month (not This Week)
+    val fortyDaysAgo = Timestamp(Date(nowMillis - 40 * dayMs)) // Prior Month (All Time only)
+
+    val alice = UserProfile(
+      id = "u_alice",
+      userId = "u_alice",
+      displayName = "Alice",
+      email = "alice@example.com",
+      role = "user",
+      approvalStatus = "approved",
+      balanceCoins = 300L, // synced net wallet balance after reversal
+      completedTasksCount = 2L
+    )
+    val bob = UserProfile(
+      id = "u_bob",
+      userId = "u_bob",
+      displayName = "Bob",
+      email = "bob@example.com",
+      role = "user",
+      approvalStatus = "approved",
+      balanceCoins = 400L,
+      completedTasksCount = 1L
+    )
+
+    val transactions = listOf(
+      // Alice: 500 campaign reward + 200 spin reward this week, reversed by 500 (duplicate reversal records included)
+      TransactionRecord(
+        id = "conv_credit_c1",
+        userId = "u_alice",
+        userName = "Alice",
+        type = TransactionType.CAMPAIGN_REWARD,
+        amountCoins = 500L,
+        status = "CREDITED",
+        referenceId = "conv_c1",
+        createdAt = twoDaysAgo
+      ),
+      TransactionRecord(
+        id = "conv_rev_c1",
+        userId = "u_alice",
+        userName = "Alice",
+        type = TransactionType.CAMPAIGN_REVERSAL,
+        amountCoins = 500L,
+        status = "REVERSED",
+        referenceId = "conv_c1",
+        originalTransactionId = "conv_credit_c1",
+        createdAt = Timestamp(Date(nowMillis - dayMs))
+      ),
+      // Duplicate reversal pointing to the same originalTransactionId (must NOT double-subtract)
+      TransactionRecord(
+        id = "conv_rev_c1_dup",
+        userId = "u_alice",
+        userName = "Alice",
+        type = TransactionType.CAMPAIGN_REVERSAL,
+        amountCoins = 500L,
+        status = "REVERSED",
+        referenceId = "conv_c1",
+        originalTransactionId = "conv_credit_c1",
+        createdAt = Timestamp(Date(nowMillis - dayMs))
+      ),
+      TransactionRecord(
+        id = "spin_1",
+        userId = "u_alice",
+        userName = "Alice",
+        type = TransactionType.SPIN_EARN,
+        amountCoins = 200L,
+        status = "CREDITED",
+        createdAt = twoDaysAgo
+      ),
+      // Alice earlier this month (not this week): 300 daily check-in - 200 campaign reversed down to 100
+      TransactionRecord(
+        id = "conv_credit_c2",
+        userId = "u_alice",
+        userName = "Alice",
+        type = TransactionType.CAMPAIGN_REWARD,
+        amountCoins = 200L,
+        status = "CREDITED",
+        referenceId = "conv_c2",
+        createdAt = twelveDaysAgo
+      ),
+      TransactionRecord(
+        id = "conv_rev_c2",
+        userId = "u_alice",
+        userName = "Alice",
+        type = TransactionType.CAMPAIGN_REVERSAL,
+        amountCoins = 200L,
+        status = "REVERSED",
+        referenceId = "conv_c2",
+        originalTransactionId = "conv_credit_c2",
+        // Reversed in the current week! Must attach to c2 so c2 becomes 0 without penalizing spin_1 in This Week.
+        createdAt = twoDaysAgo
+      ),
+      TransactionRecord(
+        id = "checkin_1",
+        userId = "u_alice",
+        userName = "Alice",
+        type = TransactionType.DAILY_CHECKIN,
+        amountCoins = 100L,
+        status = "CREDITED",
+        createdAt = twelveDaysAgo
+      ),
+      // Withdrawal debit must remain ignored in leaderboard earnings
+      TransactionRecord(
+        id = "wd_1",
+        userId = "u_alice",
+        userName = "Alice",
+        type = TransactionType.WITHDRAWAL_DEBIT,
+        amountCoins = 125L,
+        status = "PAID",
+        createdAt = twoDaysAgo
+      ),
+      // Bob prior month only: 400 promo reward
+      TransactionRecord(
+        id = "promo_bob_1",
+        userId = "u_bob",
+        userName = "Bob",
+        type = TransactionType.PROMO_CODE,
+        amountCoins = 400L,
+        status = "CREDITED",
+        createdAt = fortyDaysAgo
+      )
+    )
+
+    val thisWeek = computeLeaderboardEntriesForPeriod(
+      users = listOf(alice, bob),
+      transactions = transactions,
+      period = LeaderboardPeriod.THIS_WEEK,
+      nowMillis = nowMillis
+    )
+    assertEquals(1, thisWeek.size)
+    assertEquals("u_alice", thisWeek.first().userId)
+    assertEquals(200L, thisWeek.first().earnedCoins)
+
+    val thisMonth = computeLeaderboardEntriesForPeriod(
+      users = listOf(alice, bob),
+      transactions = transactions,
+      period = LeaderboardPeriod.THIS_MONTH,
+      nowMillis = nowMillis
+    )
+    assertEquals(1, thisMonth.size)
+    assertEquals("u_alice", thisMonth.first().userId)
+    assertEquals(300L, thisMonth.first().earnedCoins)
+
+    val allTime = computeLeaderboardEntriesForPeriod(
+      users = listOf(alice, bob),
+      transactions = transactions,
+      period = LeaderboardPeriod.ALL_TIME,
+      nowMillis = nowMillis
+    )
+    assertEquals(2, allTime.size)
+    assertEquals("u_bob", allTime[0].userId)
+    assertEquals(400L, allTime[0].earnedCoins)
+    assertEquals("u_alice", allTime[1].userId)
+    assertEquals(300L, allTime[1].earnedCoins)
+  }
+
+  @Test
+  fun netCreditedEarningsCoinsReflectsFullPartialAndDuplicateReversalsForUserAndAdminTotals() {
+    val txs = listOf(
+      TransactionRecord(
+        id = "conv_credit_1",
+        userId = "u1",
+        type = TransactionType.CAMPAIGN_REWARD,
+        amountCoins = 500L,
+        referenceId = "conv_1",
+        status = "CREDITED"
+      ),
+      TransactionRecord(
+        id = "conv_rev_1",
+        userId = "u1",
+        type = TransactionType.CAMPAIGN_REVERSAL,
+        amountCoins = 500L,
+        referenceId = "conv_1",
+        originalTransactionId = "conv_credit_1",
+        status = "REVERSED"
+      ),
+      // Duplicate reversal record must not reduce remaining earnings below their net value
+      TransactionRecord(
+        id = "conv_rev_1_dup",
+        userId = "u1",
+        type = TransactionType.CAMPAIGN_REVERSAL,
+        amountCoins = 500L,
+        referenceId = "conv_1",
+        originalTransactionId = "conv_credit_1",
+        status = "REVERSED"
+      ),
+      TransactionRecord(
+        id = "watch_1",
+        userId = "u1",
+        type = TransactionType.WATCH_EARN,
+        amountCoins = 125L,
+        status = "CREDITED"
+      ),
+      TransactionRecord(
+        id = "wd_debit",
+        userId = "u1",
+        type = TransactionType.WITHDRAWAL_DEBIT,
+        amountCoins = 125L,
+        status = "PAID"
+      ),
+      TransactionRecord(
+        id = "wd_refund",
+        userId = "u1",
+        type = TransactionType.WITHDRAWAL_REFUND,
+        amountCoins = 125L,
+        status = "REFUNDED"
+      )
+    )
+
+    // 500 - 500 + 125 = 125 (duplicate reversal capped, withdrawals ignored)
+    assertEquals(125L, computeNetCreditedEarningsCoins(txs))
+
+    // Full single-campaign reversal nets to 0 (no negative balance, no inflated earnings)
+    val fullReversalOnly = listOf(
+      TransactionRecord(
+        id = "conv_credit_only",
+        userId = "u1",
+        type = TransactionType.CAMPAIGN_REWARD,
+        amountCoins = 500L,
+        referenceId = "conv_only",
+        status = "CREDITED"
+      ),
+      TransactionRecord(
+        id = "conv_rev_only",
+        userId = "u1",
+        type = TransactionType.CAMPAIGN_REVERSAL,
+        amountCoins = 500L,
+        referenceId = "conv_only",
+        originalTransactionId = "conv_credit_only",
+        status = "REVERSED"
+      )
+    )
+    assertEquals(0L, computeNetCreditedEarningsCoins(fullReversalOnly))
   }
 }

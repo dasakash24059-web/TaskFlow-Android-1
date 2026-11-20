@@ -15,7 +15,13 @@ const {
 } = require("./campaign_tracking.js");
 
 const { handleCreateCampaignClick } = _campaignTrackingHandlers;
-const { handleCampaignPostback, handleReviewCampaignConversion } = _campaignConversionHandlers;
+const {
+  handleCampaignPostback,
+  handleReviewCampaignConversion,
+  resolveCampaignNetworkSecret,
+  CAMPAIGN_POSTBACK_BOUND_SECRETS,
+  ALLOWED_CAMPAIGN_SECRET_KEYS
+} = _campaignConversionHandlers;
 
 /**
  * In-memory Firestore simulator with optimistic-concurrency transactions
@@ -569,7 +575,7 @@ test("3. Verified S2S postback credits authoritative TF reward (125 TF = ₹1), 
   const nowRef = { value: 1_710_000_000_000 };
   const db = createMockFirestore();
   const netSecret = "beta_network_shared_token_xyz";
-  const deps = makeDeps(db, nowRef, { BETA_SECRET: netSecret });
+  const deps = makeDeps(db, nowRef, { CAMPAIGN_POSTBACK_SECRET_BETA: netSecret });
 
   // Advertiser network using custom aff_sub / txid / conv_state and shared header token
   seedCampaignEnvironment(db, nowRef.value, {
@@ -586,7 +592,7 @@ test("3. Verified S2S postback credits authoritative TF reward (125 TF = ₹1), 
     signatureConfig: {
       algorithm: "SHARED_TOKEN_HEADER",
       headerName: "x-beta-secret",
-      secretEnvKey: "BETA_SECRET"
+      secretEnvKey: "CAMPAIGN_POSTBACK_SECRET_BETA"
     }
   });
 
@@ -631,12 +637,22 @@ test("3. Verified S2S postback credits authoritative TF reward (125 TF = ₹1), 
   assert.equal(lb.balanceCoins, 600);
   assert.equal(lb.balanceCents, 400);
 
-  // Immutable credit ledger doc written
+  // Immutable credit ledger doc written without leaking private attribution identifiers
   const creditTx = db.read(`transactions/conv_credit_${res.payload.conversionId}`);
   assert.equal(creditTx.type, "CAMPAIGN_REWARD");
   assert.equal(creditTx.status, "CREDITED");
   assert.equal(creditTx.amountCoins, 500);
   assert.equal(creditTx.amountCents, 400);
+  assert.equal(creditTx.referenceId, res.payload.conversionId);
+  assert.equal("clickId" in creditTx, false);
+  assert.equal("externalTransactionId" in creditTx, false);
+
+  // Server-only campaign_conversions record retains full attribution metadata
+  const convRecord = db.read(
+    `${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CONVERSIONS}/${res.payload.conversionId}`
+  );
+  assert.equal(convRecord.clickId, click.clickId);
+  assert.equal(convRecord.externalTransactionId, "beta_txn_1001");
 
   // Notification created
   const notif = db.read(`users/user_alice/notifications/notif_conv_credit_${res.payload.conversionId}`);
@@ -856,7 +872,7 @@ test("6. Approved conversion reversal creates compensating ledger without deleti
   assert.equal(cfgAfterRev.usedSubmissions, 0);
   assert.equal(cfgAfterRev.spentBudgetTf, 0);
 
-  // Historical credit tx is NOT deleted, compensating tx created alongside it
+  // Historical credit tx is NOT deleted, compensating tx created alongside it without clickId leakage
   assert.ok(db.read(creditTxPath));
   const revTx = db.read(`transactions/conv_rev_${conversionId}`);
   assert.equal(revTx.type, "CAMPAIGN_REVERSAL");
@@ -864,6 +880,8 @@ test("6. Approved conversion reversal creates compensating ledger without deleti
   assert.equal(revTx.amountCoins, 500);
   assert.equal(revTx.reversedCoins, -500);
   assert.equal(revTx.originalTransactionId, `conv_credit_${conversionId}`);
+  assert.equal("clickId" in revTx, false);
+  assert.equal("externalTransactionId" in revTx, false);
 
   // Replay reversal is idempotent without double debit; invalid backwards transition (REVERSED -> APPROVED) blocked 409
   const replayRevRes = makeMockRes();
@@ -992,3 +1010,86 @@ test("8. Rejection callback releases reserved click slot cleanly and credits 0 T
   assert.equal(cfg.usedSubmissions, 0);
   assert.equal(cfg.spentBudgetTf, 0);
 });
+
+test("9. Phase 3C remediation: explicit Gen 2 secret registry binds all supported keys and rejects unregistered env keys", async () => {
+  assert.deepEqual(
+    [...ALLOWED_CAMPAIGN_SECRET_KEYS],
+    [
+      "CAMPAIGN_POSTBACK_SECRET",
+      "CAMPAIGN_POSTBACK_SECRET_ALPHA",
+      "CAMPAIGN_POSTBACK_SECRET_BETA",
+      "CAMPAIGN_POSTBACK_SECRET_S2S"
+    ]
+  );
+  assert.equal(CAMPAIGN_POSTBACK_BOUND_SECRETS.length, ALLOWED_CAMPAIGN_SECRET_KEYS.length);
+
+  // Unregistered keys MUST fail closed even if present in process.env or deps.secrets (e.g. TELEGRAM_BOT_TOKEN)
+  const prevTg = process.env.TELEGRAM_BOT_TOKEN;
+  const prevArb = process.env.UNREGISTERED_ARBITRARY_SECRET;
+  process.env.TELEGRAM_BOT_TOKEN = "tg_secret_should_never_be_readable";
+  process.env.UNREGISTERED_ARBITRARY_SECRET = "arbitrary_env_secret";
+  try {
+    assert.equal(
+      resolveCampaignNetworkSecret(
+        { networkId: "net_forged", signatureConfig: { secretEnvKey: "TELEGRAM_BOT_TOKEN" } },
+        { secrets: { TELEGRAM_BOT_TOKEN: "tg_secret_should_never_be_readable" } }
+      ),
+      ""
+    );
+    assert.equal(
+      resolveCampaignNetworkSecret(
+        { networkId: "net_forged", signatureConfig: { secretEnvKey: "UNREGISTERED_ARBITRARY_SECRET" } },
+        { secrets: { UNREGISTERED_ARBITRARY_SECRET: "arbitrary_env_secret" } }
+      ),
+      ""
+    );
+    assert.equal(
+      resolveCampaignNetworkSecret(
+        { networkId: "net_alpha", signatureConfig: { secretEnvKey: "CAMPAIGN_POSTBACK_SECRET_ALPHA" } },
+        { secrets: { CAMPAIGN_POSTBACK_SECRET_ALPHA: "alpha_registered_secret_ok" } }
+      ),
+      "alpha_registered_secret_ok"
+    );
+  } finally {
+    if (prevTg === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
+    else process.env.TELEGRAM_BOT_TOKEN = prevTg;
+    if (prevArb === undefined) delete process.env.UNREGISTERED_ARBITRARY_SECRET;
+    else process.env.UNREGISTERED_ARBITRARY_SECRET = prevArb;
+  }
+
+  // End-to-end postback call referencing unregistered key must fail closed with HTTP 500 without leaking secrets
+  const nowRef = { value: 1_710_000_000_000 };
+  const db = createMockFirestore();
+  const deps = makeDeps(db, nowRef, { UNREGISTERED_ENV_KEY: "do_not_leak_secret" });
+
+  seedCampaignEnvironment(db, nowRef.value, {
+    campaignId: "camp_unreg",
+    networkId: "net_unreg",
+    signatureConfig: {
+      algorithm: "SHARED_TOKEN_HEADER",
+      headerName: "x-secret",
+      secretEnvKey: "UNREGISTERED_ENV_KEY"
+    }
+  });
+  const click = await issueClickForUser(db, deps, { campaignId: "camp_unreg" });
+
+  const res = makeMockRes();
+  await handleCampaignPostback(
+    {
+      method: "POST",
+      params: { networkId: "net_unreg" },
+      query: {},
+      body: { click_id: click.clickId, txn_id: "t_unreg_1", status: "approved" },
+      headers: { "x-secret": "do_not_leak_secret" }
+    },
+    res,
+    deps
+  );
+
+  assert.equal(res.statusCode, 500);
+  assert.equal(res.payload.success, false);
+  assert.equal(res.payload.error, "Server verification secret is not configured.");
+  assert.ok(!JSON.stringify(res.payload).includes("do_not_leak_secret"));
+  assert.equal(db.read("users/user_alice").eligibleCoins, 0);
+});
+

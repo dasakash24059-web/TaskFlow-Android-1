@@ -416,6 +416,7 @@ data class TransactionRecord(
   val amountCoins: Long = 0L,
   val status: String = "CREDITED",
   val referenceId: String = "",
+  val originalTransactionId: String = "",
   @ServerTimestamp val createdAt: Timestamp? = null
 ) {
   fun getEffectiveAmountCoins(): Long =
@@ -466,9 +467,96 @@ data class LeaderboardEntryUi(
   val completedTasksCount: Long = 0L
 )
 
+private fun deduplicateCampaignReversals(
+  transactions: List<TransactionRecord>
+): List<TransactionRecord> =
+  transactions
+    .filter { tx ->
+      tx.type.trim().equals(TransactionType.CAMPAIGN_REVERSAL, ignoreCase = true) &&
+        tx.getEffectiveAmountCoins() > 0L
+    }
+    .distinctBy { tx ->
+      tx.id.ifBlank {
+        "${tx.userId}_${tx.type}_${tx.originalTransactionId}_${tx.referenceId}_${tx.createdAt?.seconds ?: 0L}"
+      }
+    }
+
+private fun matchReversalToCampaignCreditIndex(
+  rev: TransactionRecord,
+  credits: List<TransactionRecord>
+): Int {
+  val origId = rev.originalTransactionId.trim()
+  if (origId.isNotEmpty()) {
+    val byId = credits.indexOfFirst { credit ->
+      credit.id.isNotBlank() &&
+        credit.id == origId &&
+        (rev.userId.isBlank() || credit.userId == rev.userId)
+    }
+    if (byId >= 0) return byId
+  }
+  val refId = rev.referenceId.trim()
+  if (refId.isNotEmpty()) {
+    return credits.indexOfFirst { credit ->
+      credit.type.trim().equals(TransactionType.CAMPAIGN_REWARD, ignoreCase = true) &&
+        credit.referenceId == refId &&
+        (rev.userId.isBlank() || credit.userId == rev.userId)
+    }
+  }
+  return -1
+}
+
+/**
+ * Computes net credited TF earnings across [transactions], excluding withdrawal debits/refunds and
+ * subtracting [TransactionType.CAMPAIGN_REVERSAL] amounts from their corresponding
+ * [TransactionType.CAMPAIGN_REWARD] entries without double-subtracting duplicate reversal records.
+ */
+fun computeNetCreditedEarningsCoins(transactions: List<TransactionRecord>): Long {
+  val creditTxs =
+    transactions
+      .filter { tx ->
+        tx.type != TransactionType.DEMO_WITHDRAWAL &&
+          tx.type != TransactionType.WITHDRAWAL_DEBIT &&
+          tx.type != TransactionType.WITHDRAWAL_REFUND &&
+          !tx.type.trim().equals(TransactionType.CAMPAIGN_REVERSAL, ignoreCase = true) &&
+          tx.getEffectiveAmountCoins() > 0L
+      }
+      .distinctBy { tx ->
+        tx.id.ifBlank {
+          "${tx.userId}_${tx.type}_${tx.referenceId}_${tx.createdAt?.seconds ?: 0L}_${tx.getEffectiveAmountCoins()}"
+        }
+      }
+
+  val reversals = deduplicateCampaignReversals(transactions)
+  val reversedByCreditIdx = LongArray(creditTxs.size)
+  var unmatchedReversalCoins = 0L
+  val seenUnmatchedKeys = HashSet<String>()
+
+  for (rev in reversals) {
+    val idx = matchReversalToCampaignCreditIndex(rev, creditTxs)
+    val revAmount = rev.getEffectiveAmountCoins()
+    if (idx >= 0) {
+      val maxReversible = creditTxs[idx].getEffectiveAmountCoins()
+      reversedByCreditIdx[idx] = minOf(maxReversible, reversedByCreditIdx[idx] + revAmount)
+    } else {
+      val dedupKey =
+        "${rev.userId}:${rev.referenceId.ifBlank { rev.originalTransactionId }.ifBlank { rev.id }}"
+      if (seenUnmatchedKeys.add(dedupKey)) {
+        unmatchedReversalCoins += revAmount
+      }
+    }
+  }
+
+  var netSum = 0L
+  for (i in creditTxs.indices) {
+    netSum += (creditTxs[i].getEffectiveAmountCoins() - reversedByCreditIdx[i]).coerceAtLeast(0L)
+  }
+  return (netSum - unmatchedReversalCoins).coerceAtLeast(0L)
+}
+
 /**
  * Computes accurate Leaderboard rankings for the selected time period (`All Time`, `This Month`, `This Week`).
- * Counts ONLY tokens actually earned and credited (`status == "CREDITED"` and reward transaction types).
+ * Counts ONLY tokens actually earned and credited (`status == "CREDITED"` and reward transaction types),
+ * minus any corresponding `CAMPAIGN_REVERSAL` amounts (without double-subtracting reversals).
  * Never includes pending tasks, unapproved submissions, rejected/failed items, or withdrawal debits/refunds.
  */
 fun computeLeaderboardEntriesForPeriod(
@@ -531,10 +619,31 @@ fun computeLeaderboardEntriesForPeriod(
       }
   }
 
+  val validReversalTxs =
+    deduplicateCampaignReversals(transactions).filter { it.userId.isNotBlank() }
+  val reversedByCreditIdx = LongArray(validCreditedTxs.size)
+  val unmatchedReversals = mutableListOf<TransactionRecord>()
+  val seenUnmatchedKeys = HashSet<String>()
+
+  for (rev in validReversalTxs) {
+    val idx = matchReversalToCampaignCreditIndex(rev, validCreditedTxs)
+    val revAmount = rev.getEffectiveAmountCoins()
+    if (idx >= 0) {
+      val maxReversible = validCreditedTxs[idx].getEffectiveAmountCoins()
+      reversedByCreditIdx[idx] = minOf(maxReversible, reversedByCreditIdx[idx] + revAmount)
+    } else {
+      val dedupKey =
+        "${rev.userId}:${rev.referenceId.ifBlank { rev.originalTransactionId }.ifBlank { rev.id }}"
+      if (seenUnmatchedKeys.add(dedupKey)) {
+        unmatchedReversals += rev
+      }
+    }
+  }
+
   val earnedByUid = LinkedHashMap<String, Long>()
   val nameByUid = LinkedHashMap<String, String>()
 
-  validCreditedTxs.forEach { tx ->
+  validCreditedTxs.forEachIndexed { idx, tx ->
     val txMillis = tx.createdAt?.toDate()?.time ?: 0L
     val inWindow =
       when (period) {
@@ -544,10 +653,26 @@ fun computeLeaderboardEntriesForPeriod(
       }
     if (inWindow) {
       val uid = tx.userId
-      earnedByUid[uid] = (earnedByUid[uid] ?: 0L) + tx.getEffectiveAmountCoins()
+      val netTxCoins = (tx.getEffectiveAmountCoins() - reversedByCreditIdx[idx]).coerceAtLeast(0L)
+      earnedByUid[uid] = (earnedByUid[uid] ?: 0L) + netTxCoins
       if (tx.userName.isNotBlank() && !nameByUid.containsKey(uid)) {
         nameByUid[uid] = tx.userName
       }
+    }
+  }
+
+  unmatchedReversals.forEach { rev ->
+    val revMillis = rev.createdAt?.toDate()?.time ?: 0L
+    val inWindow =
+      when (period) {
+        LeaderboardPeriod.ALL_TIME -> true
+        LeaderboardPeriod.THIS_MONTH, LeaderboardPeriod.THIS_WEEK ->
+          revMillis in startMillis..nowMillis
+      }
+    if (inWindow) {
+      val uid = rev.userId
+      val prev = earnedByUid[uid] ?: 0L
+      earnedByUid[uid] = (prev - rev.getEffectiveAmountCoins()).coerceAtLeast(0L)
     }
   }
 

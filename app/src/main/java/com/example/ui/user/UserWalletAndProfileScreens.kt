@@ -97,6 +97,7 @@ import com.example.data.model.UserProfile
 import com.example.data.model.WithdrawalMethodType
 import com.example.data.model.WithdrawalStatus
 import com.example.data.model.centsToCoins
+import com.example.data.model.computeNetCreditedEarningsCoins
 import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
 import com.example.data.model.formatVisibleUserEmail
@@ -164,17 +165,14 @@ fun UserWalletScreen(
 
   val totalEarningsCoins =
     remember(approvedUserTasks, transactions, totalBalanceCoins) {
-      val txEarningsCoins =
-        transactions
-          .filter {
-            it.type != TransactionType.DEMO_WITHDRAWAL &&
-              it.type != TransactionType.WITHDRAWAL_DEBIT &&
-              it.type != TransactionType.WITHDRAWAL_REFUND &&
-              it.type != TransactionType.CAMPAIGN_REVERSAL
-          }
-          .sumOf { it.getEffectiveAmountCoins() }
-      if (txEarningsCoins > 0L) {
-        txEarningsCoins
+      val hasEarningsOrReversalTxs =
+        transactions.any {
+          it.type != TransactionType.DEMO_WITHDRAWAL &&
+            it.type != TransactionType.WITHDRAWAL_DEBIT &&
+            it.type != TransactionType.WITHDRAWAL_REFUND
+        }
+      if (hasEarningsOrReversalTxs) {
+        computeNetCreditedEarningsCoins(transactions)
       } else {
         approvedUserTasks.sumOf { it.getEffectiveRewardCoins() } + totalBalanceCoins
       }

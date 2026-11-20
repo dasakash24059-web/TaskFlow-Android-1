@@ -1334,7 +1334,9 @@ service cloud.firestore {
                             'DAILY_CHECKIN',
                             'WATCH_EARN_REWARD',
                             'SPIN_EARN_REWARD',
-                            'TASK_REWARD'
+                            'TASK_REWARD',
+                            'CAMPAIGN_REWARD',
+                            'CAMPAIGN_REVERSAL'
                           ]))
                         )
                       );
