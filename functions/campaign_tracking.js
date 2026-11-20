@@ -19,6 +19,9 @@ const CAMPAIGN_TRACKING_COLLECTIONS = Object.freeze({
   CAMPAIGN_CLICK_GUARDS: "campaign_click_guards"
 });
 
+const CAMPAIGN_CONVERSION_LOCKS_COLLECTION = "campaign_conversion_locks";
+const SECRET_ENV_KEY_REGEX = /^[A-Z][A-Z0-9_]{2,63}$/;
+
 const CAMPAIGN_VERIFICATION_MODES = Object.freeze({
   AFFILIATE_POSTBACK: "AFFILIATE_POSTBACK",
   ADVERTISER_S2S_API: "ADVERTISER_S2S_API",
@@ -40,6 +43,7 @@ const VALID_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
 const VALID_PARAM_KEY_REGEX = /^[a-zA-Z0-9_.-]{1,64}$/;
 const VALID_COUNTRY_REGEX = /^(ALL|[A-Z]{2})$/;
 const STRICT_COUNTRY_REGEX = /^[A-Z]{2}$/;
+const DEFAULT_SIGNATURE_PARAM_NAMES = new Set(["sig", "signature", "hmac", "hash", "token", "secret"]);
 
 const SECRET_KEY_NAMES = new Set([
   "postbackSecret",
@@ -110,6 +114,286 @@ function stripPrivateTrackingFields(doc) {
  */
 function generateSecureClickId() {
   return `clk_${crypto.randomBytes(16).toString("hex")}`;
+}
+
+/**
+ * Computes a deterministic Firestore-safe external transaction lock document ID
+ * scoped by networkId and normalized externalTransactionId.
+ */
+function buildExternalTxnLockId(networkId, externalTransactionId) {
+  const cleanNet = String(networkId || "").trim();
+  const cleanTxn = String(externalTransactionId || "").trim();
+  const digest = crypto
+    .createHash("sha256")
+    .update(`${cleanNet}::${cleanTxn}`, "utf8")
+    .digest("hex");
+  return `${cleanNet.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)}__${digest}`;
+}
+
+/**
+ * Converts TF tokens to INR paise using authoritative ratio: 125 TF = ₹1 (100 paise).
+ */
+function tfToBalanceCents(rewardTf) {
+  const clean = Math.max(0, Math.floor(Number(rewardTf || 0)));
+  return Math.floor((clean * 100) / 125);
+}
+
+/**
+ * Computes wallet updates when a campaign conversion is approved & credited.
+ * Credits withdrawable task earnings (`eligibleCoins`, `balanceCents`, `balanceCoins`)
+ * while preserving existing `promotionalCoins`.
+ */
+function computeCampaignApprovedWallet(userData = {}, rewardTf = 0) {
+  const cleanReward = Math.floor(Number(rewardTf || 0));
+  const rewardCents = tfToBalanceCents(cleanReward);
+  const oldBalanceCents = Math.max(0, Math.floor(Number(userData.balanceCents || 0)));
+  const oldCentsCoins = Math.floor((oldBalanceCents * 125) / 100);
+  const oldEligible = Math.max(
+    Math.max(0, Math.floor(Number(userData.eligibleCoins || 0))),
+    oldCentsCoins
+  );
+  const oldPromo = Math.max(0, Math.floor(Number(userData.promotionalCoins || 0)));
+  const oldBalanceCoins = Math.max(
+    Math.max(0, Math.floor(Number(userData.balanceCoins || 0))),
+    oldEligible + oldPromo
+  );
+
+  const newBalanceCents = oldBalanceCents + rewardCents;
+  const newEligibleCoins = Math.max(
+    oldEligible + cleanReward,
+    Math.floor((newBalanceCents * 125) / 100)
+  );
+  const eligibleDelta = newEligibleCoins - oldEligible;
+  const newBalanceCoins = oldBalanceCoins + eligibleDelta;
+
+  return {
+    rewardTf: cleanReward,
+    rewardCents,
+    oldBalanceCents,
+    oldEligible,
+    oldPromo,
+    oldBalanceCoins,
+    newBalanceCents,
+    newEligibleCoins,
+    newBalanceCoins
+  };
+}
+
+/**
+ * Computes auditable compensating wallet reversal when an APPROVED conversion is REVERSED.
+ * Never produces negative balances; records any unrecovered shortfall if user already spent/withdrew.
+ */
+function computeCampaignReversedWallet(userData = {}, rewardTf = 0) {
+  const cleanReward = Math.max(0, Math.floor(Number(rewardTf || 0)));
+  const oldBalanceCents = Math.max(0, Math.floor(Number(userData.balanceCents || 0)));
+  const oldCentsCoins = Math.floor((oldBalanceCents * 125) / 100);
+  const oldEligible = Math.max(
+    Math.max(0, Math.floor(Number(userData.eligibleCoins || 0))),
+    oldCentsCoins
+  );
+  const oldPromo = Math.max(0, Math.floor(Number(userData.promotionalCoins || 0)));
+  const oldBalanceCoins = Math.max(
+    Math.max(0, Math.floor(Number(userData.balanceCoins || 0))),
+    oldEligible + oldPromo
+  );
+
+  let remainingToReverse = Math.min(cleanReward, oldBalanceCoins);
+  const reversedEligibleCoins = Math.min(oldEligible, remainingToReverse);
+  remainingToReverse -= reversedEligibleCoins;
+  const reversedPromoCoins = Math.min(oldPromo, remainingToReverse);
+  remainingToReverse -= reversedPromoCoins;
+
+  const newEligibleCoins = Math.max(0, oldEligible - reversedEligibleCoins);
+  const newPromoCoins = Math.max(0, oldPromo - reversedPromoCoins);
+
+  const maxAllowedCentsForNewEligible = Math.floor((newEligibleCoins * 100) / 125);
+  const desiredDeductCents = tfToBalanceCents(reversedEligibleCoins);
+  const minDeductCentsToKeepInvariant = Math.max(0, oldBalanceCents - maxAllowedCentsForNewEligible);
+  const reversedBalanceCents = Math.min(
+    oldBalanceCents,
+    Math.max(desiredDeductCents, minDeductCentsToKeepInvariant)
+  );
+  const newBalanceCents = Math.max(0, oldBalanceCents - reversedBalanceCents);
+
+  const recoveredCoins = reversedEligibleCoins + reversedPromoCoins;
+  const shortfallCoins = Math.max(0, cleanReward - recoveredCoins);
+  const newBalanceCoins = Math.max(0, oldBalanceCoins - recoveredCoins);
+
+  return {
+    rewardTf: cleanReward,
+    reversedEligibleCoins,
+    reversedPromoCoins,
+    reversedBalanceCents,
+    recoveredCoins,
+    shortfallCoins,
+    oldBalanceCents,
+    oldEligible,
+    oldPromo,
+    oldBalanceCoins,
+    newBalanceCents,
+    newEligibleCoins,
+    newPromoCoins,
+    newBalanceCoins
+  };
+}
+
+function timingSafeEqualStrings(expectedStr, receivedStr) {
+  if (typeof expectedStr !== "string" || typeof receivedStr !== "string") {
+    return false;
+  }
+  const expectedBuf = Buffer.from(expectedStr, "utf8");
+  const receivedBuf = Buffer.from(receivedStr, "utf8");
+  if (expectedBuf.length === 0 || expectedBuf.length !== receivedBuf.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(expectedBuf, receivedBuf);
+}
+
+function normalizeHeaderLookup(headers = {}, headerName = "") {
+  if (!headers || typeof headers !== "object" || !headerName) return "";
+  const target = String(headerName).trim().toLowerCase();
+  for (const [k, v] of Object.entries(headers)) {
+    if (String(k).trim().toLowerCase() === target) {
+      return Array.isArray(v) ? String(v[0] || "").trim() : String(v || "").trim();
+    }
+  }
+  return "";
+}
+
+function sanitizeReceivedDigest(rawSig, prefixToStrip = "") {
+  let clean = String(rawSig || "").trim();
+  if (prefixToStrip && clean.toLowerCase().startsWith(prefixToStrip.toLowerCase())) {
+    clean = clean.slice(prefixToStrip.length).trim();
+  }
+  return clean;
+}
+
+/**
+ * Verifies postback webhook authenticity using constant-time comparison and server-side secret.
+ * Disallows NONE algorithm on external postbacks; fails closed on missing secrets or malformed signatures.
+ */
+function verifyCampaignPostbackSignature({
+  req = {},
+  network = {},
+  normalizedPayload = {},
+  secret = ""
+}) {
+  const cleanSecret = typeof secret === "string" ? secret.trim() : "";
+  if (!cleanSecret) {
+    return {
+      valid: false,
+      code: "missing-server-secret",
+      reason: "Server postback verification secret is not configured."
+    };
+  }
+
+  const sigConfig = network.signatureConfig || {};
+  const algorithm = String(sigConfig.algorithm || "HMAC_SHA256").trim().toUpperCase();
+  if (!algorithm || algorithm === "NONE") {
+    return {
+      valid: false,
+      code: "unsupported-signature-mode",
+      reason: "External postback networks cannot operate without signature or shared-secret verification."
+    };
+  }
+
+  const mapping = network.parameterMapping || {};
+  const sigParam = String(sigConfig.queryParamName || mapping.signatureParam || "sig").trim() || "sig";
+  const headerName = String(sigConfig.headerName || "").trim();
+  const headers = req.headers || {};
+  const query = req.query && typeof req.query === "object" ? req.query : {};
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const merged = { ...query, ...body };
+
+  if (algorithm === "SHARED_TOKEN_HEADER") {
+    const targetHeader = headerName || "x-postback-secret";
+    const received = normalizeHeaderLookup(headers, targetHeader);
+    if (!received || !timingSafeEqualStrings(cleanSecret, received)) {
+      return { valid: false, code: "invalid-signature", reason: "Invalid or missing header token." };
+    }
+    return { valid: true, algorithm };
+  }
+
+  if (algorithm === "SHARED_TOKEN_QUERY") {
+    const received = String(merged[sigParam] || "").trim();
+    if (!received || !timingSafeEqualStrings(cleanSecret, received)) {
+      return { valid: false, code: "invalid-signature", reason: "Invalid or missing query token." };
+    }
+    return { valid: true, algorithm };
+  }
+
+  if (algorithm === "TELEGRAM_SECRET_HEADER") {
+    const targetHeader = headerName || "x-telegram-bot-api-secret-token";
+    const received = normalizeHeaderLookup(headers, targetHeader);
+    if (!received || !timingSafeEqualStrings(cleanSecret, received)) {
+      return { valid: false, code: "invalid-signature", reason: "Invalid Telegram secret header." };
+    }
+    return { valid: true, algorithm };
+  }
+
+  if (algorithm !== "HMAC_SHA256" && algorithm !== "HMAC_MD5") {
+    return {
+      valid: false,
+      code: "unsupported-signature-algorithm",
+      reason: `Unsupported signature algorithm: ${algorithm}`
+    };
+  }
+
+  const hashAlg = algorithm === "HMAC_MD5" ? "md5" : "sha256";
+  const encoding = String(sigConfig.encoding || "hex").trim().toLowerCase() === "base64" ? "base64" : "hex";
+  const rawReceivedSig =
+    (headerName ? normalizeHeaderLookup(headers, headerName) : "") ||
+    String(merged[sigParam] || normalizedPayload.signatureValue || "").trim();
+
+  const receivedSig = sanitizeReceivedDigest(
+    rawReceivedSig,
+    sigConfig.signaturePrefix || (hashAlg === "sha256" ? "sha256=" : "md5=")
+  );
+  if (!receivedSig) {
+    return { valid: false, code: "missing-signature", reason: "Postback signature is missing." };
+  }
+
+  const signingMode = String(sigConfig.signingMode || "SORTED_PARAMS").trim().toUpperCase();
+  let signingInput = "";
+
+  if (signingMode === "RAW_BODY") {
+    if (Buffer.isBuffer(req.rawBody)) {
+      signingInput = req.rawBody;
+    } else if (typeof req.rawBody === "string") {
+      signingInput = req.rawBody;
+    } else if (typeof req.body === "string") {
+      signingInput = req.body;
+    } else {
+      signingInput = JSON.stringify(body);
+    }
+  } else if (signingMode === "CANONICAL_FIELDS" && Array.isArray(sigConfig.signedFields) && sigConfig.signedFields.length > 0) {
+    const separator = sigConfig.fieldSeparator !== undefined ? String(sigConfig.fieldSeparator) : "|";
+    signingInput = sigConfig.signedFields
+      .map((field) => String(merged[field] ?? ""))
+      .join(separator);
+  } else {
+    const joiner = signingMode === "SORTED_PARAMS_COMMA" ? "," : "&";
+    const excludedKeys = new Set([sigParam.toLowerCase(), ...DEFAULT_SIGNATURE_PARAM_NAMES]);
+    signingInput = Object.keys(merged)
+      .filter((key) => !excludedKeys.has(key.toLowerCase()) && merged[key] !== undefined && merged[key] !== null)
+      .sort()
+      .map((key) => `${key}=${Array.isArray(merged[key]) ? merged[key][0] : merged[key]}`)
+      .join(joiner);
+  }
+
+  const expectedDigest = crypto
+    .createHmac(hashAlg, cleanSecret)
+    .update(signingInput, typeof signingInput === "string" ? "utf8" : undefined)
+    .digest(encoding);
+
+  const normalizedExpected = encoding === "hex" ? expectedDigest.toLowerCase() : expectedDigest;
+  const normalizedReceived = encoding === "hex" ? receivedSig.toLowerCase() : receivedSig;
+
+  if (!timingSafeEqualStrings(normalizedExpected, normalizedReceived)) {
+    return { valid: false, code: "invalid-signature", reason: "Postback HMAC signature mismatch." };
+  }
+
+  return { valid: true, algorithm, signingMode };
 }
 
 function toMillisValue(val) {
@@ -431,18 +715,40 @@ class BaseNetworkAdapter {
 
   normalizeConversionPayload(rawInput, network) {
     const mapping = (network && network.parameterMapping) || {};
-    const query = (rawInput && rawInput.query) || {};
-    const body = (rawInput && rawInput.body) || {};
-    const headers = (rawInput && rawInput.headers) || {};
+    const query = (rawInput && rawInput.query && typeof rawInput.query === "object") ? rawInput.query : {};
+    const body = (rawInput && rawInput.body && typeof rawInput.body === "object" && !Array.isArray(rawInput.body))
+      ? rawInput.body
+      : {};
+    const headers = (rawInput && rawInput.headers && typeof rawInput.headers === "object") ? rawInput.headers : {};
     const merged = { ...query, ...body };
     const clickId = String(merged[mapping.clickIdParam || "click_id"] || "").trim();
     const externalTransactionId = String(merged[mapping.externalTxnParam || "txn_id"] || "").trim();
     const rawStatus = String(merged[mapping.statusParam || "status"] || "").trim();
     const payoutRaw = String(merged[mapping.payoutParam || "payout"] || "").trim();
+    const reportedCampaignId = String(
+      (mapping.campaignIdParam ? merged[mapping.campaignIdParam] : "") ||
+      merged.campaignId ||
+      merged.campaign_id ||
+      ""
+    ).trim();
+    const reportedUserId = String(
+      (mapping.userIdParam ? merged[mapping.userIdParam] : "") ||
+      merged.userId ||
+      merged.user_id ||
+      ""
+    ).trim();
     const sigHeader = network.signatureConfig?.headerName || "";
     const sigParam = network.signatureConfig?.queryParamName || mapping.signatureParam || "sig";
     const signatureValue = String(
-      merged[sigParam] || (sigHeader ? headers[sigHeader] || headers[sigHeader.toLowerCase()] || "" : "")
+      merged[sigParam] || (sigHeader ? normalizeHeaderLookup(headers, sigHeader) : "")
+    ).trim();
+    const idempotencyKeyHeader = normalizeHeaderLookup(headers, "x-idempotency-key");
+    const idempotencyKey = String(
+      (mapping.idempotencyParam ? merged[mapping.idempotencyParam] : "") ||
+      merged.idempotency_key ||
+      merged.idempotencyKey ||
+      idempotencyKeyHeader ||
+      ""
     ).trim();
 
     return {
@@ -452,6 +758,9 @@ class BaseNetworkAdapter {
       normalizedState: normalizeCallbackStatus(rawStatus, network.postbackStatusMapping),
       payoutRaw,
       signatureValue,
+      reportedCampaignId,
+      reportedUserId,
+      idempotencyKey,
       networkId: network.networkId,
       verificationMode: this.verificationMode
     };
@@ -601,6 +910,8 @@ function buildSafeTrackingUrl(rawBaseUrl, config, network, context, registry = n
 
 module.exports = {
   CAMPAIGN_TRACKING_COLLECTIONS,
+  CAMPAIGN_CONVERSION_LOCKS_COLLECTION,
+  SECRET_ENV_KEY_REGEX,
   CAMPAIGN_VERIFICATION_MODES,
   CAMPAIGN_CONVERSION_STATES,
   isValidVerificationMode,
@@ -609,6 +920,12 @@ module.exports = {
   isSecretKeyName,
   stripPrivateTrackingFields,
   generateSecureClickId,
+  buildExternalTxnLockId,
+  tfToBalanceCents,
+  computeCampaignApprovedWallet,
+  computeCampaignReversedWallet,
+  timingSafeEqualStrings,
+  verifyCampaignPostbackSignature,
   toMillisValue,
   validateDestinationUrl,
   validateCampaignEligibility,

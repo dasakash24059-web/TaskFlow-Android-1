@@ -284,7 +284,8 @@ fun AdminControlCenterHomeScreen(
           .filter {
             it.type != TransactionType.DEMO_WITHDRAWAL &&
               it.type != TransactionType.WITHDRAWAL_DEBIT &&
-              it.type != TransactionType.WITHDRAWAL_REFUND
+              it.type != TransactionType.WITHDRAWAL_REFUND &&
+              it.type != TransactionType.CAMPAIGN_REVERSAL
           }
           .sumOf { it.getEffectiveAmountCoins() }
       val userWalletCoins = users.sumOf { it.getEffectiveBalanceCoins() }
@@ -948,7 +949,8 @@ fun AdminOverviewSection(
           .filter {
             it.type != TransactionType.DEMO_WITHDRAWAL &&
               it.type != TransactionType.WITHDRAWAL_DEBIT &&
-              it.type != TransactionType.WITHDRAWAL_REFUND
+              it.type != TransactionType.WITHDRAWAL_REFUND &&
+              it.type != TransactionType.CAMPAIGN_REVERSAL
           }
           .sumOf { it.getEffectiveAmountCoins() }
       val userWalletCoins = users.sumOf { it.getEffectiveBalanceCoins() }
@@ -1414,7 +1416,8 @@ fun AdminCoinsRewardsSection(
     transactions.filter {
       it.type != TransactionType.DEMO_WITHDRAWAL &&
         it.type != TransactionType.WITHDRAWAL_DEBIT &&
-        it.type != TransactionType.WITHDRAWAL_REFUND
+        it.type != TransactionType.WITHDRAWAL_REFUND &&
+        it.type != TransactionType.CAMPAIGN_REVERSAL
     }
   val approvedSubmissions =
     reviewTasks.filter { it.status == TaskStatus.APPROVED }
@@ -2662,7 +2665,8 @@ fun AdminAnalyticsReportsSection(
       .filter {
         it.type != TransactionType.DEMO_WITHDRAWAL &&
           it.type != TransactionType.WITHDRAWAL_DEBIT &&
-          it.type != TransactionType.WITHDRAWAL_REFUND
+          it.type != TransactionType.WITHDRAWAL_REFUND &&
+          it.type != TransactionType.CAMPAIGN_REVERSAL
       }
       .sumOf { it.getEffectiveAmountCoins() }
       .let { txCoins ->

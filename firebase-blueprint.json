@@ -537,6 +537,21 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "updatedAt"]
+    },
+    "CampaignConversionLock": {
+      "title": "CampaignConversionLock",
+      "description": "Server-only deterministic uniqueness lock mapping (networkId + externalTransactionId) to a single conversion/click to block duplicate transaction IDs.",
+      "type": "object",
+      "properties": {
+        "externalTransactionId": { "type": "string" },
+        "networkId": { "type": "string" },
+        "conversionId": { "type": "string" },
+        "clickId": { "type": "string" },
+        "campaignId": { "type": "string" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["externalTransactionId", "networkId", "conversionId", "clickId", "campaignId", "userId", "createdAt"]
     }
   },
   "firestore": {
@@ -591,6 +606,10 @@
     "/campaign_click_guards/{guardId}": {
       "schema": { "$ref": "#/entities/CampaignClickGuard" },
       "description": "Server-only click rate-limit and deduplication guard records."
+    },
+    "/campaign_conversion_locks/{lockId}": {
+      "schema": { "$ref": "#/entities/CampaignConversionLock" },
+      "description": "Server-only external transaction ID uniqueness locks."
     }
   }
 }

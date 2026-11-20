@@ -1953,9 +1953,7 @@ private fun AdminUsersTabContent(
                 )
               } else {
                 userRewardHistory.take(5).forEach { tx ->
-                  val isDebit =
-                    tx.type == TransactionType.DEMO_WITHDRAWAL ||
-                      tx.type == TransactionType.WITHDRAWAL_DEBIT
+                  val isDebit = TransactionType.isDebitOrReversalType(tx.type)
                   val sign = if (isDebit) "-" else "+"
                   val txCoins = formatCoins(tx.getEffectiveAmountCoins())
                   val txSecondaryInr =

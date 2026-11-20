@@ -373,6 +373,8 @@ object TransactionType {
   const val MANUAL_BONUS = "MANUAL_BONUS"
   const val BONUS = "BONUS"
   const val SCRATCH_CARD = "SCRATCH_CARD"
+  const val CAMPAIGN_REWARD = "CAMPAIGN_REWARD"
+  const val CAMPAIGN_REVERSAL = "CAMPAIGN_REVERSAL"
 
   private val CREDITED_REWARD_TYPES =
     setOf(
@@ -386,11 +388,17 @@ object TransactionType {
       ADMIN_BONUS,
       MANUAL_BONUS,
       BONUS,
-      SCRATCH_CARD
+      SCRATCH_CARD,
+      CAMPAIGN_REWARD
     )
 
   fun isCreditedRewardType(type: String): Boolean =
     CREDITED_REWARD_TYPES.contains(type.trim().uppercase(Locale.US))
+
+  fun isDebitOrReversalType(type: String): Boolean {
+    val norm = type.trim().uppercase(Locale.US)
+    return norm == DEMO_WITHDRAWAL || norm == WITHDRAWAL_DEBIT || norm == CAMPAIGN_REVERSAL
+  }
 
   fun isManualBonusType(type: String): Boolean {
     val norm = type.trim().uppercase(Locale.US)
@@ -1373,6 +1381,8 @@ object NotificationRewardType {
   const val ADMIN_BONUS = "ADMIN_BONUS"
   const val TASK_REWARD = "TASK_REWARD"
   const val SCRATCH_CARD_REWARD = "SCRATCH_CARD_REWARD"
+  const val CAMPAIGN_REWARD = "CAMPAIGN_REWARD"
+  const val CAMPAIGN_REVERSAL = "CAMPAIGN_REVERSAL"
 }
 
 data class TelegramTaskItem(

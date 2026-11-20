@@ -18,6 +18,8 @@ object CampaignTrackingCollections {
   const val CAMPAIGN_CLICK_GUARDS = "campaign_click_guards"
 }
 
+const val CAMPAIGN_CONVERSION_LOCKS_COLLECTION = "campaign_conversion_locks"
+
 /**
  * Supported verification modes for campaigns tracked by TaskFlow.
  */
@@ -66,6 +68,7 @@ enum class CampaignConversionState {
 
 enum class CampaignClickStatus {
   ISSUED,
+  PENDING_VERIFICATION,
   CONVERTED,
   EXPIRED,
   CANCELLED;
@@ -394,6 +397,7 @@ data class CampaignConversionRequirements(
   val requireInstallAttribution: Boolean = false,
   val autoApproveVerifiedPostback: Boolean = false,
   val requireAdminApproval: Boolean = false,
+  val allowMultipleConversions: Boolean = false,
   val attributionWindowHours: Int = 72
 ) {
   fun validate(mode: CampaignVerificationMode?): List<String> {

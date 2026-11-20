@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Task
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -1516,7 +1517,8 @@ fun NotificationListDialog(
                 NotificationRewardType.TELEGRAM_REWARD -> Icons.Default.Send
                 NotificationRewardType.PROMO_CODE_REWARD -> Icons.Default.ConfirmationNumber
                 NotificationRewardType.ADMIN_BONUS -> Icons.Default.CardGiftcard
-                NotificationRewardType.TASK_REWARD -> Icons.Default.CheckCircle
+                NotificationRewardType.TASK_REWARD, NotificationRewardType.CAMPAIGN_REWARD -> Icons.Default.CheckCircle
+                NotificationRewardType.CAMPAIGN_REVERSAL -> Icons.Default.Warning
                 "WITHDRAWAL" -> Icons.Default.Payment
                 else -> Icons.Default.MonetizationOn
               }
@@ -1568,15 +1570,31 @@ fun NotificationListDialog(
                     )
                   }
                   if (item.rewardCoins > 0L) {
+                    val isReversalNotif = item.type == NotificationRewardType.CAMPAIGN_REVERSAL
                     Surface(
                       shape = RoundedCornerShape(50),
-                      color = MaterialTheme.colorScheme.primaryContainer
+                      color =
+                        if (isReversalNotif) {
+                          MaterialTheme.colorScheme.errorContainer
+                        } else {
+                          MaterialTheme.colorScheme.primaryContainer
+                        }
                     ) {
                       Text(
-                        text = "+${formatCoins(item.rewardCoins)}",
+                        text =
+                          if (isReversalNotif) {
+                            "-${formatCoins(item.rewardCoins)}"
+                          } else {
+                            "+${formatCoins(item.rewardCoins)}"
+                          },
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        color =
+                          if (isReversalNotif) {
+                            MaterialTheme.colorScheme.onErrorContainer
+                          } else {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                          },
                         modifier =
                           Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                             .testTag("notification_coins_${item.id}")

@@ -1664,6 +1664,14 @@ service cloud.firestore {
       }
     }
 
+    match /campaign_conversion_locks/{lockId} {
+      allow read, write: if false;
+
+      match /{subpath=**} {
+        allow read, write: if false;
+      }
+    }
+
     // Default deny for all other paths
     match /{document=**} {
       allow read, write: if false;

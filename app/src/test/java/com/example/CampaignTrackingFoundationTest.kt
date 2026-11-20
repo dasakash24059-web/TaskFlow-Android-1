@@ -15,6 +15,8 @@ import com.example.data.model.NetworkCapabilitiesSpec
 import com.example.data.model.NetworkParameterMapping
 import com.example.data.model.NetworkSignatureAlgorithm
 import com.example.data.model.NetworkSignatureSpec
+import com.example.data.model.NotificationRewardType
+import com.example.data.model.TransactionType
 import com.example.data.tracking.CampaignNetworkAdapterRegistry
 import com.example.data.tracking.OutboundTrackingContext
 import com.example.data.tracking.RawCallbackInput
@@ -320,5 +322,22 @@ class CampaignTrackingFoundationTest {
       assertNotNull(resolved)
       assertEquals(mode, resolved.supportedVerificationMode)
     }
+  }
+
+  @Test
+  fun campaignRewardAndReversalLedgerClassificationWorkCorrectly() {
+    assertTrue(TransactionType.isCreditedRewardType(TransactionType.CAMPAIGN_REWARD))
+    assertFalse(TransactionType.isCreditedRewardType(TransactionType.CAMPAIGN_REVERSAL))
+
+    assertTrue(TransactionType.isDebitOrReversalType(TransactionType.CAMPAIGN_REVERSAL))
+    assertTrue(TransactionType.isDebitOrReversalType(TransactionType.WITHDRAWAL_DEBIT))
+    assertFalse(TransactionType.isDebitOrReversalType(TransactionType.CAMPAIGN_REWARD))
+
+    assertEquals("CAMPAIGN_REWARD", NotificationRewardType.CAMPAIGN_REWARD)
+    assertEquals("CAMPAIGN_REVERSAL", NotificationRewardType.CAMPAIGN_REVERSAL)
+    assertEquals(
+      CampaignClickStatus.PENDING_VERIFICATION,
+      CampaignClickStatus.fromWireValue("PENDING_VERIFICATION")
+    )
   }
 }

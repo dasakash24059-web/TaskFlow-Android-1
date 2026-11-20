@@ -1991,9 +1991,7 @@ private fun RecentTransactionsCard(
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
               }
-              val isDebit =
-                tx.type == TransactionType.DEMO_WITHDRAWAL ||
-                  tx.type == TransactionType.WITHDRAWAL_DEBIT
+              val isDebit = TransactionType.isDebitOrReversalType(tx.type)
               val coinsText = formatCoins(tx.getEffectiveAmountCoins())
               Text(
                 text = if (isDebit) "-$coinsText" else "+$coinsText",

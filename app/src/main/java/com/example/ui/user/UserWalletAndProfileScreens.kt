@@ -169,7 +169,8 @@ fun UserWalletScreen(
           .filter {
             it.type != TransactionType.DEMO_WITHDRAWAL &&
               it.type != TransactionType.WITHDRAWAL_DEBIT &&
-              it.type != TransactionType.WITHDRAWAL_REFUND
+              it.type != TransactionType.WITHDRAWAL_REFUND &&
+              it.type != TransactionType.CAMPAIGN_REVERSAL
           }
           .sumOf { it.getEffectiveAmountCoins() }
       if (txEarningsCoins > 0L) {
@@ -675,9 +676,7 @@ fun UserWalletScreen(
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
               }
-              val isDebitTx =
-                tx.type == TransactionType.DEMO_WITHDRAWAL ||
-                  tx.type == TransactionType.WITHDRAWAL_DEBIT
+              val isDebitTx = TransactionType.isDebitOrReversalType(tx.type)
               Text(
                 text =
                   if (isDebitTx) {

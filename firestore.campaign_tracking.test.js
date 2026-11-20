@@ -362,3 +362,50 @@ test("6. Phase 3B campaign_click_guards collection is strictly server-only (deni
   );
 });
 
+test("7. Phase 3C campaign_conversion_locks collection is strictly server-only (denied to unauth, users, and client admins)", async () => {
+  await seedTrackingFoundationAndAdminData();
+  const ts = new Date(Date.now() - 1000);
+  const lockId = "net_alpha__deadbeef1234";
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("campaign_conversion_locks").doc(lockId).set({
+      externalTransactionId: "ext_txn_001",
+      networkId: "net_alpha",
+      conversionId: "conv_clk_unpredictable_0001",
+      clickId: "clk_unpredictable_0001",
+      campaignId: "camp_001",
+      userId: ALICE_UID,
+      createdAt: ts
+    });
+  });
+
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv
+    .authenticatedContext(ALICE_UID, { email: ALICE_EMAIL, email_verified: true })
+    .firestore();
+  const adminDb = testEnv
+    .authenticatedContext(ADMIN_UID, { email: ADMIN_EMAIL, email_verified: true })
+    .firestore();
+
+  await assertFails(unauthDb.collection("campaign_conversion_locks").doc(lockId).get());
+  await assertFails(unauthDb.collection("campaign_conversion_locks").get());
+
+  await assertFails(aliceDb.collection("campaign_conversion_locks").doc(lockId).get());
+  await assertFails(aliceDb.collection("campaign_conversion_locks").get());
+  await assertFails(
+    aliceDb.collection("campaign_conversion_locks").doc("forged_lock").set({
+      externalTransactionId: "ext_forged",
+      networkId: "net_alpha"
+    })
+  );
+
+  await assertFails(adminDb.collection("campaign_conversion_locks").doc(lockId).get());
+  await assertFails(adminDb.collection("campaign_conversion_locks").get());
+  await assertFails(adminDb.collection("campaign_conversion_locks").doc(lockId).delete());
+  await assertFails(
+    adminDb.collection("campaign_conversion_locks").doc(lockId).collection("meta").doc("x").get()
+  );
+});
+
+

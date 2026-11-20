@@ -1,7 +1,17 @@
 const crypto = require("crypto");
 const {
   CAMPAIGN_TRACKING_COLLECTIONS,
+  CAMPAIGN_CONVERSION_LOCKS_COLLECTION,
+  SECRET_ENV_KEY_REGEX,
+  CAMPAIGN_VERIFICATION_MODES,
+  CAMPAIGN_CONVERSION_STATES,
+  canTransitionConversionState,
   generateSecureClickId,
+  buildExternalTxnLockId,
+  tfToBalanceCents,
+  computeCampaignApprovedWallet,
+  computeCampaignReversedWallet,
+  verifyCampaignPostbackSignature,
   toMillisValue,
   validateDestinationUrl,
   isValidVerificationMode,
@@ -63,6 +73,7 @@ const unityS2SSecret = defineSecret("UNITY_S2S_SECRET");
 const unityAdsSecret = defineSecret("UNITY_ADS_SECRET");
 const telegramBotToken = defineSecret("TELEGRAM_BOT_TOKEN");
 const telegramWebhookSecret = defineSecret("TELEGRAM_WEBHOOK_SECRET");
+const campaignPostbackSecret = defineSecret("CAMPAIGN_POSTBACK_SECRET");
 
 function resolveTelegramBotToken(deps = {}) {
   if (typeof deps.botToken === "string" && deps.botToken.trim()) {
@@ -4680,8 +4691,1151 @@ async function handleReleaseExpiredCampaignClickReservations(deps = {}) {
   return { success: true, releasedClicks: totalReleased };
 }
 
+// =========================================================================
+// UNIVERSAL CAMPAIGN TRACKING ENGINE — PHASE 3C: CONVERSION VERIFICATION & TF REWARDS
+// =========================================================================
+
+const EXTERNAL_TXN_ID_REGEX = /^[a-zA-Z0-9_.:-]{1,128}$/;
+const ALLOWED_ADMIN_CONVERSION_ACTIONS = new Set(["APPROVE", "REJECT", "REVERSE"]);
+
+class CampaignPostbackHttpError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/**
+ * Resolves a network verification secret strictly from server-side Secret Manager / env / deps.
+ * Never reads secret values from Firestore client-accessible or tracking documents.
+ */
+function resolveCampaignNetworkSecret(networkData = {}, deps = {}) {
+  const sigConfig = networkData.signatureConfig || {};
+  const secretEnvKey = String(sigConfig.secretEnvKey || "CAMPAIGN_POSTBACK_SECRET").trim();
+  const networkId = String(networkData.networkId || "").trim();
+
+  if (typeof deps.resolveSecret === "function") {
+    const val = String(deps.resolveSecret(secretEnvKey, networkId) || "").trim();
+    if (val) return val;
+  }
+
+  if (deps.secrets && typeof deps.secrets === "object" && typeof deps.secrets[secretEnvKey] === "string") {
+    const val = deps.secrets[secretEnvKey].trim();
+    if (val) return val;
+  }
+
+  if (!SECRET_ENV_KEY_REGEX.test(secretEnvKey)) {
+    return "";
+  }
+
+  const envVal = String(process.env[secretEnvKey] || "").trim();
+  if (envVal) return envVal;
+
+  if (secretEnvKey === "CAMPAIGN_POSTBACK_SECRET") {
+    try {
+      const boundVal = String(campaignPostbackSecret.value() || "").trim();
+      if (boundVal) return boundVal;
+    } catch (_) {
+      // Secret parameter unavailable outside bound cloud runtime
+    }
+  }
+
+  return "";
+}
+
+function extractNetworkIdFromPostbackRequest(req = {}) {
+  const queryNet = req.query?.networkId ?? req.query?.network_id;
+  if (typeof queryNet === "string" && queryNet.trim()) {
+    return queryNet.trim();
+  }
+  const bodyObj = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const bodyNet = bodyObj.networkId ?? bodyObj.network_id;
+  if (typeof bodyNet === "string" && bodyNet.trim()) {
+    return bodyNet.trim();
+  }
+  const paramNet = req.params?.networkId;
+  if (typeof paramNet === "string" && paramNet.trim()) {
+    return paramNet.trim();
+  }
+  const rawPath = String(req.path || req.url || "").split("?")[0].replace(/^\/+|\/+$/g, "");
+  if (rawPath) {
+    const segments = rawPath.split("/").filter(Boolean);
+    const candidate = segments[segments.length - 1] || "";
+    if (candidate && candidate !== "campaignPostback") {
+      return candidate;
+    }
+  }
+  return "";
+}
+
+/**
+ * Core atomic transaction processor for Phase 3C conversion transitions (`PENDING`, `APPROVED`, `REJECTED`, `REVERSED`).
+ * Shared between external S2S postback callbacks and Admin-authorized manual review actions.
+ */
+async function executeConversionTransitionInTransaction({
+  firestoreDb,
+  nowMillis,
+  ts,
+  clickId,
+  networkIdFromRequest = "",
+  externalTransactionId = "",
+  targetState,
+  sourceCallbackType = "S2S_POSTBACK",
+  idempotencyKey = "",
+  reportedCampaignId = "",
+  reportedUserId = "",
+  callbackPayoutRaw = "",
+  statusReason = "",
+  actorAdminInfo = null,
+  isAdminOverride = false
+}) {
+  const clickRef = firestoreDb
+    .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS)
+    .doc(clickId);
+  const conversionId = `conv_${clickId}`;
+  const conversionRef = firestoreDb
+    .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CONVERSIONS)
+    .doc(conversionId);
+
+  return await firestoreDb.runTransaction(async (transaction) => {
+    // Phase 1 Reads: click + existing conversion (+ external txn lock when networkIdFromRequest known)
+    const preliminaryReads = [
+      transaction.get(clickRef),
+      transaction.get(conversionRef)
+    ];
+    let preLockRef = null;
+    if (networkIdFromRequest && externalTransactionId) {
+      preLockRef = firestoreDb
+        .collection(CAMPAIGN_CONVERSION_LOCKS_COLLECTION)
+        .doc(buildExternalTxnLockId(networkIdFromRequest, externalTransactionId));
+      preliminaryReads.push(transaction.get(preLockRef));
+    }
+
+    const [clickSnap, conversionSnap, preLockSnap = null] = await Promise.all(preliminaryReads);
+
+    if (!clickSnap.exists) {
+      throw new CampaignPostbackHttpError(404, "not-found", "Unknown campaign click ID.");
+    }
+    const clickData = clickSnap.data() || {};
+    const resolvedClickId = String(clickData.clickId || clickId).trim();
+    if (resolvedClickId !== clickId) {
+      throw new CampaignPostbackHttpError(400, "invalid-argument", "Click identifier attribution mismatch.");
+    }
+
+    const clickNetworkId = String(clickData.networkId || "").trim();
+    const campaignId = String(clickData.campaignId || "").trim();
+    const userId = String(clickData.userId || "").trim();
+
+    if (!clickNetworkId || !campaignId || !userId) {
+      throw new CampaignPostbackHttpError(400, "failed-precondition", "Stored click attribution record is incomplete.");
+    }
+
+    if (networkIdFromRequest && clickNetworkId !== networkIdFromRequest) {
+      throw new CampaignPostbackHttpError(403, "permission-denied", "Click does not belong to the specified tracking network.");
+    }
+    if (reportedCampaignId && reportedCampaignId !== campaignId) {
+      throw new CampaignPostbackHttpError(400, "invalid-argument", "Callback campaign ID does not match attributed click.");
+    }
+    if (reportedUserId && reportedUserId !== userId) {
+      throw new CampaignPostbackHttpError(403, "permission-denied", "Callback user ID does not match attributed click.");
+    }
+
+    const existingConversion = conversionSnap.exists ? conversionSnap.data() || {} : null;
+    const creditTxId = `conv_credit_${conversionId}`;
+    const revTxId = `conv_rev_${conversionId}`;
+
+    // Phase 2 Reads (still strictly BEFORE any writes): config, network, campaign, user, guard, reservation, ledger docs, and lock
+    const configRef = firestoreDb
+      .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS)
+      .doc(campaignId);
+    const networkRef = firestoreDb
+      .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS)
+      .doc(clickNetworkId);
+    const campaignRef = firestoreDb.collection("campaigns").doc(campaignId);
+    const userRef = firestoreDb.collection("users").doc(userId);
+    const guardRef = firestoreDb
+      .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICK_GUARDS)
+      .doc(`${userId}__${campaignId}`);
+    const resRef =
+      typeof configRef.collection === "function"
+        ? configRef.collection("active_reservations").doc(userId)
+        : null;
+    const creditTxRef = firestoreDb.collection("transactions").doc(creditTxId);
+    const revTxRef = firestoreDb.collection("transactions").doc(revTxId);
+
+    let lockRef = preLockRef;
+    let needSecondLockRead = false;
+    if (!lockRef && externalTransactionId) {
+      lockRef = firestoreDb
+        .collection(CAMPAIGN_CONVERSION_LOCKS_COLLECTION)
+        .doc(buildExternalTxnLockId(clickNetworkId, externalTransactionId));
+      needSecondLockRead = true;
+    }
+
+    const secondaryReads = [
+      transaction.get(configRef),
+      transaction.get(networkRef),
+      transaction.get(campaignRef),
+      transaction.get(userRef),
+      transaction.get(guardRef),
+      transaction.get(creditTxRef),
+      transaction.get(revTxRef),
+      resRef ? transaction.get(resRef) : Promise.resolve(null),
+      needSecondLockRead ? transaction.get(lockRef) : Promise.resolve(preLockSnap)
+    ];
+
+    const [
+      configSnap,
+      networkSnap,
+      campaignSnap,
+      userSnap,
+      guardSnap,
+      creditTxSnap,
+      revTxSnap,
+      resSnap,
+      lockSnap
+    ] = await Promise.all(secondaryReads);
+
+    if (lockSnap && lockSnap.exists) {
+      const lockData = lockSnap.data() || {};
+      if (
+        lockData.conversionId !== conversionId ||
+        lockData.clickId !== clickId ||
+        lockData.campaignId !== campaignId
+      ) {
+        throw new CampaignPostbackHttpError(
+          409,
+          "already-exists",
+          "Duplicate external transaction ID is already bound to another conversion."
+        );
+      }
+    }
+
+    if (!configSnap.exists) {
+      throw new CampaignPostbackHttpError(404, "not-found", "Campaign tracking configuration not found.");
+    }
+    const configData = configSnap.data() || {};
+
+    if (String(configData.networkId || "").trim() !== clickNetworkId) {
+      throw new CampaignPostbackHttpError(403, "permission-denied", "Click network does not match campaign configuration.");
+    }
+
+    const networkData = networkSnap.exists ? networkSnap.data() || {} : null;
+    const verificationMode = String(
+      clickData.verificationMode || configData.verificationMode || ""
+    ).trim();
+
+    if (!isAdminOverride) {
+      if (
+        verificationMode !== CAMPAIGN_VERIFICATION_MODES.AFFILIATE_POSTBACK &&
+        verificationMode !== CAMPAIGN_VERIFICATION_MODES.ADVERTISER_S2S_API &&
+        verificationMode !== CAMPAIGN_VERIFICATION_MODES.CUSTOM_APPROVED
+      ) {
+        throw new CampaignPostbackHttpError(
+          403,
+          "permission-denied",
+          `Campaign verification mode '${verificationMode}' does not accept S2S postbacks.`
+        );
+      }
+      if (networkData && networkData.capabilities?.supportsPostback === false && verificationMode !== CAMPAIGN_VERIFICATION_MODES.CUSTOM_APPROVED) {
+        throw new CampaignPostbackHttpError(
+          403,
+          "permission-denied",
+          "Tracking network does not allow postback callbacks."
+        );
+      }
+    }
+
+    // Hold verified postbacks in PENDING when campaign/network requires manual Admin review
+    let effectiveTargetState = targetState;
+    let effectiveStatusReason = statusReason;
+    if (
+      !isAdminOverride &&
+      targetState === CAMPAIGN_CONVERSION_STATES.APPROVED &&
+      (configData.conversionRequirements?.requireAdminApproval === true ||
+        networkData?.capabilities?.requiresManualReview === true) &&
+      (!existingConversion || existingConversion.state === CAMPAIGN_CONVERSION_STATES.PENDING)
+    ) {
+      if (!existingConversion) {
+        effectiveTargetState = CAMPAIGN_CONVERSION_STATES.PENDING;
+        effectiveStatusReason = statusReason || "HELD_FOR_ADMIN_REVIEW";
+      } else {
+        return {
+          success: true,
+          duplicate: true,
+          heldForReview: true,
+          conversionId,
+          clickId,
+          campaignId,
+          networkId: clickNetworkId,
+          userId,
+          state: existingConversion.state,
+          rewardTf: Number(existingConversion.rewardTf || configData.rewardTf || 0),
+          rewardCredited: Boolean(existingConversion.rewardCredited),
+          idempotencyKey: existingConversion.idempotencyKey || idempotencyKey || conversionId
+        };
+      }
+    }
+
+    // Idempotent duplicate replay guard (state matches or terminal duplicate replay)
+    if (existingConversion) {
+      const currentState = String(existingConversion.state || "").trim();
+      if (currentState === effectiveTargetState) {
+        return {
+          success: true,
+          duplicate: true,
+          conversionId,
+          clickId,
+          campaignId,
+          networkId: clickNetworkId,
+          userId,
+          state: currentState,
+          rewardTf: Number(existingConversion.rewardTf || 0),
+          rewardCredited: Boolean(existingConversion.rewardCredited),
+          idempotencyKey: existingConversion.idempotencyKey || idempotencyKey || conversionId
+        };
+      }
+      if (!canTransitionConversionState(currentState, effectiveTargetState)) {
+        throw new CampaignPostbackHttpError(
+          409,
+          "failed-precondition",
+          `Invalid conversion state transition from ${currentState} to ${effectiveTargetState}.`
+        );
+      }
+    } else {
+      // Brand new conversion creation rules
+      if (effectiveTargetState === CAMPAIGN_CONVERSION_STATES.REVERSED) {
+        throw new CampaignPostbackHttpError(
+          409,
+          "failed-precondition",
+          "Cannot reverse a conversion that has not been approved."
+        );
+      }
+
+      const clickStatus = String(clickData.status || "").trim();
+      if (clickStatus !== "ISSUED") {
+        throw new CampaignPostbackHttpError(
+          409,
+          "failed-precondition",
+          `Click '${clickId}' cannot be converted in status '${clickStatus}'.`
+        );
+      }
+
+      const clickExpiresAtMillis = Number(clickData.expiresAtMillis || 0);
+      if (!Number.isFinite(clickExpiresAtMillis) || clickExpiresAtMillis <= nowMillis) {
+        throw new CampaignPostbackHttpError(
+          410,
+          "deadline-exceeded",
+          "Campaign click attribution window has expired."
+        );
+      }
+    }
+
+    // Campaign, network & user eligibility validation for active approvals or holding in PENDING
+    if (
+      effectiveTargetState !== CAMPAIGN_CONVERSION_STATES.REVERSED &&
+      effectiveTargetState !== CAMPAIGN_CONVERSION_STATES.REJECTED
+    ) {
+      if (configData.isActive !== true) {
+        throw new CampaignPostbackHttpError(400, "failed-precondition", "Campaign tracking configuration is inactive.");
+      }
+      if (campaignSnap.exists) {
+        const campStatus = String(campaignSnap.data()?.status || "ACTIVE").trim().toUpperCase();
+        if (campStatus !== "ACTIVE") {
+          throw new CampaignPostbackHttpError(400, "failed-precondition", `Campaign is currently ${campStatus.toLowerCase()}.`);
+        }
+      }
+      if (!networkSnap.exists || networkData?.isActive !== true) {
+        throw new CampaignPostbackHttpError(403, "failed-precondition", "Tracking network is inactive or missing.");
+      }
+
+      if (!existingConversion) {
+        const startAtMillis = Math.max(Number(configData.startAtMillis || 0), toMillisValue(configData.startAt));
+        const expiresAtMillis = Math.max(Number(configData.expiresAtMillis || 0), toMillisValue(configData.expiresAt));
+        if (startAtMillis > 0 && nowMillis < startAtMillis) {
+          throw new CampaignPostbackHttpError(400, "failed-precondition", "Campaign has not started yet.");
+        }
+        if (expiresAtMillis > 0 && nowMillis > expiresAtMillis) {
+          throw new CampaignPostbackHttpError(400, "failed-precondition", "Campaign has expired.");
+        }
+      }
+    }
+
+    if (!userSnap.exists) {
+      throw new CampaignPostbackHttpError(404, "not-found", "Attributed user profile not found.");
+    }
+    const userData = userSnap.data() || {};
+    if (
+      effectiveTargetState === CAMPAIGN_CONVERSION_STATES.APPROVED &&
+      userData.approvalStatus !== "approved"
+    ) {
+      throw new CampaignPostbackHttpError(
+        403,
+        "permission-denied",
+        "Attributed user account is not approved to receive TF rewards."
+      );
+    }
+
+    const guardData = guardSnap.exists ? guardSnap.data() || {} : {};
+    const allowMultiple = configData.conversionRequirements?.allowMultipleConversions === true;
+    if (!existingConversion && guardData.hasCompletedConversion === true && !allowMultiple) {
+      throw new CampaignPostbackHttpError(
+        409,
+        "already-exists",
+        "User has already completed an approved conversion for this campaign."
+      );
+    }
+
+    // Never trust payout supplied in callback; always resolve server-configured rewardTf
+    const authoritativeRewardTf = existingConversion
+      ? Number(existingConversion.rewardTf || configData.rewardTf || 0)
+      : Number(configData.rewardTf || 0);
+    if (!Number.isInteger(authoritativeRewardTf) || authoritativeRewardTf <= 0) {
+      throw new CampaignPostbackHttpError(
+        400,
+        "failed-precondition",
+        "Campaign tracking configuration has an invalid TF reward."
+      );
+    }
+
+    const submissionBudget = Number(configData.submissionBudget || 0);
+    const usedSubmissions = Number(configData.usedSubmissions || 0);
+    const rewardBudgetTf = Number(configData.rewardBudgetTf || 0);
+    const spentBudgetTf = Number(configData.spentBudgetTf || 0);
+    const currentReservedSlots = Math.max(0, Number(configData.reservedClickSlots || 0));
+    const hasActiveResForClick = Boolean(
+      resSnap && resSnap.exists && resSnap.data()?.clickId === clickId
+    );
+    const nextReservedAfterRelease = hasActiveResForClick
+      ? Math.max(0, currentReservedSlots - 1)
+      : currentReservedSlots;
+
+    const displayName =
+      String(userData.displayName || "TaskFlow Member").trim() || "TaskFlow Member";
+    const completedTasksCount = Math.max(0, Number(userData.completedTasksCount || 0));
+    const campaignTitle = String(
+      (campaignSnap.exists ? campaignSnap.data()?.title : "") || configData.title || campaignId
+    ).trim();
+    const resolvedIdempotencyKey = String(
+      idempotencyKey ||
+      existingConversion?.idempotencyKey ||
+      (externalTransactionId ? `${clickNetworkId}:${externalTransactionId}` : conversionId)
+    ).trim();
+
+    if (effectiveTargetState === CAMPAIGN_CONVERSION_STATES.APPROVED) {
+      if (creditTxSnap.exists || existingConversion?.rewardCredited === true) {
+        throw new CampaignPostbackHttpError(
+          409,
+          "already-exists",
+          "Reward transaction has already been credited for this conversion."
+        );
+      }
+      if (submissionBudget > 0 && usedSubmissions + 1 > submissionBudget) {
+        throw new CampaignPostbackHttpError(
+          409,
+          "resource-exhausted",
+          "Campaign submission budget has been exhausted."
+        );
+      }
+      if (rewardBudgetTf > 0 && spentBudgetTf + authoritativeRewardTf > rewardBudgetTf) {
+        throw new CampaignPostbackHttpError(
+          409,
+          "resource-exhausted",
+          "Campaign TF reward budget has been exhausted."
+        );
+      }
+    }
+
+    if (effectiveTargetState === CAMPAIGN_CONVERSION_STATES.REVERSED) {
+      if (!existingConversion || existingConversion.rewardCredited !== true || existingConversion.reversedAt || revTxSnap.exists) {
+        throw new CampaignPostbackHttpError(
+          409,
+          "failed-precondition",
+          "Conversion is not eligible for reversal or has already been reversed."
+        );
+      }
+    }
+
+    // Phase 3: Atomic Writes
+    if (lockRef && !lockSnap?.exists && externalTransactionId) {
+      transaction.set(lockRef, {
+        externalTransactionId,
+        networkId: clickNetworkId,
+        conversionId,
+        clickId,
+        campaignId,
+        userId,
+        createdAt: ts
+      });
+    }
+
+    const baseConversionFields = {
+      conversionId,
+      clickId,
+      userId,
+      campaignId,
+      networkId: clickNetworkId,
+      trackingNetworkRef: String(
+        clickData.trackingNetworkRef || `${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS}/${clickNetworkId}`
+      ),
+      verificationMode,
+      rewardTf: authoritativeRewardTf,
+      externalTransactionId: String(externalTransactionId || existingConversion?.externalTransactionId || ""),
+      idempotencyKey: resolvedIdempotencyKey,
+      sourceCallbackType,
+      ...(callbackPayoutRaw ? { callbackPayoutRaw } : {}),
+      updatedAt: ts
+    };
+
+    const logRef = firestoreDb.collection("admin_logs").doc();
+
+    if (effectiveTargetState === CAMPAIGN_CONVERSION_STATES.PENDING) {
+      transaction.set(
+        conversionRef,
+        {
+          ...baseConversionFields,
+          state: CAMPAIGN_CONVERSION_STATES.PENDING,
+          rewardCredited: false,
+          statusReason: effectiveStatusReason || "AWAITING_VERIFICATION",
+          createdAt: existingConversion?.createdAt || ts
+        },
+        { merge: true }
+      );
+
+      if (clickData.status === "ISSUED") {
+        transaction.update(clickRef, {
+          status: "PENDING_VERIFICATION",
+          pendingConversionAt: ts
+        });
+      }
+      if (hasActiveResForClick && resRef && typeof transaction.delete === "function") {
+        transaction.delete(resRef);
+      }
+      if (hasActiveResForClick) {
+        transaction.update(configRef, {
+          reservedClickSlots: nextReservedAfterRelease,
+          updatedAt: ts
+        });
+      }
+      transaction.set(
+        guardRef,
+        {
+          userId,
+          campaignId,
+          hasActiveReservation: false,
+          hasPendingConversion: true,
+          lastConversionId: conversionId,
+          updatedAt: ts
+        },
+        { merge: true }
+      );
+      transaction.set(logRef, {
+        actionType: "CAMPAIGN",
+        title: `Conversion Pending: ${campaignTitle.slice(0, 60)}`,
+        details: `Conversion ${conversionId} (${authoritativeRewardTf} TF) held in PENDING (${effectiveStatusReason || "awaiting approval"})`,
+        targetId: conversionId,
+        adminId: actorAdminInfo?.uid || "SYSTEM_POSTBACK",
+        timestampMillis: nowMillis,
+        createdAt: ts
+      });
+
+      return {
+        success: true,
+        duplicate: false,
+        conversionId,
+        clickId,
+        campaignId,
+        networkId: clickNetworkId,
+        userId,
+        state: CAMPAIGN_CONVERSION_STATES.PENDING,
+        rewardTf: authoritativeRewardTf,
+        rewardCredited: false,
+        idempotencyKey: resolvedIdempotencyKey
+      };
+    }
+
+    if (effectiveTargetState === CAMPAIGN_CONVERSION_STATES.APPROVED) {
+      const wallet = computeCampaignApprovedWallet(userData, authoritativeRewardTf);
+      const nextCompletedTasks = completedTasksCount + 1;
+
+      // 1. Credit user wallet atomically (withdrawable earnings: eligibleCoins + balanceCents + balanceCoins)
+      transaction.update(userRef, {
+        balanceCents: wallet.newBalanceCents,
+        eligibleCoins: wallet.newEligibleCoins,
+        balanceCoins: wallet.newBalanceCoins,
+        completedTasksCount: nextCompletedTasks,
+        updatedAt: ts
+      });
+
+      // 2. Sync public leaderboard
+      syncLeaderboardProjection(
+        transaction,
+        firestoreDb,
+        userId,
+        displayName,
+        wallet.newBalanceCents,
+        wallet.newBalanceCoins,
+        nextCompletedTasks,
+        ts,
+        userData.approvalStatus || "approved"
+      );
+
+      // 3. Create immutable wallet ledger credit entry
+      transaction.set(creditTxRef, {
+        userId,
+        userName: displayName,
+        type: "CAMPAIGN_REWARD",
+        title: `Campaign Reward: ${campaignTitle.slice(0, 60)}`,
+        amountCoins: authoritativeRewardTf,
+        amountCents: wallet.rewardCents,
+        status: "CREDITED",
+        referenceId: conversionId,
+        clickId,
+        campaignId,
+        networkId: clickNetworkId,
+        externalTransactionId: String(externalTransactionId || existingConversion?.externalTransactionId || ""),
+        createdAt: ts
+      });
+
+      // 4. Create user notification
+      const notifRef = userRef.collection("notifications").doc(`notif_${creditTxId}`);
+      transaction.set(notifRef, {
+        userId,
+        title: "Campaign Reward Credited",
+        body: `Your conversion for '${campaignTitle.slice(0, 60)}' was verified! +${authoritativeRewardTf} TF credited to your wallet.`,
+        message: `Your conversion for '${campaignTitle.slice(0, 60)}' was verified! +${authoritativeRewardTf} TF credited to your wallet.`,
+        type: "CAMPAIGN_REWARD",
+        rewardCoins: authoritativeRewardTf,
+        referenceId: conversionId,
+        isRead: false,
+        createdAt: ts
+      });
+
+      // 5. Mark click CONVERTED & release any reservation
+      transaction.update(clickRef, {
+        status: "CONVERTED",
+        convertedAt: ts
+      });
+      if (hasActiveResForClick && resRef && typeof transaction.delete === "function") {
+        transaction.delete(resRef);
+      }
+
+      // 6. Update config budgets & submission counters
+      transaction.update(configRef, {
+        usedSubmissions: usedSubmissions + 1,
+        spentBudgetTf: spentBudgetTf + authoritativeRewardTf,
+        reservedClickSlots: nextReservedAfterRelease,
+        updatedAt: ts
+      });
+
+      if (campaignSnap.exists) {
+        const campData = campaignSnap.data() || {};
+        transaction.update(campaignRef, {
+          completedSubmissions: Math.max(0, Number(campData.completedSubmissions || 0)) + 1,
+          spentCents: Math.max(0, Number(campData.spentCents || 0)) + wallet.rewardCents,
+          updatedAt: ts
+        });
+      }
+
+      // 7. Update user campaign guard
+      transaction.set(
+        guardRef,
+        {
+          userId,
+          campaignId,
+          hasActiveReservation: false,
+          hasPendingConversion: false,
+          hasCompletedConversion: true,
+          completedConversionsCount: Number(guardData.completedConversionsCount || 0) + 1,
+          lastConversionId: conversionId,
+          updatedAt: ts
+        },
+        { merge: true }
+      );
+
+      // 8. Save conversion record as APPROVED
+      transaction.set(
+        conversionRef,
+        {
+          ...baseConversionFields,
+          state: CAMPAIGN_CONVERSION_STATES.APPROVED,
+          rewardCents: wallet.rewardCents,
+          rewardCredited: true,
+          creditedTransactionId: creditTxId,
+          statusReason: effectiveStatusReason || "VERIFIED",
+          ...(actorAdminInfo ? { approvedByAdminId: actorAdminInfo.uid } : {}),
+          verifiedAt: ts,
+          createdAt: existingConversion?.createdAt || ts
+        },
+        { merge: true }
+      );
+
+      // 9. Write admin audit log
+      transaction.set(logRef, {
+        actionType: "CAMPAIGN",
+        title: `Conversion Approved (+${authoritativeRewardTf} TF)`,
+        details: `Campaign: ${campaignId} • User: ${userId} • Click: ${clickId} • Mode: ${verificationMode}`,
+        targetId: conversionId,
+        adminId: actorAdminInfo?.uid || "SYSTEM_POSTBACK",
+        timestampMillis: nowMillis,
+        createdAt: ts
+      });
+
+      return {
+        success: true,
+        duplicate: false,
+        conversionId,
+        clickId,
+        campaignId,
+        networkId: clickNetworkId,
+        userId,
+        state: CAMPAIGN_CONVERSION_STATES.APPROVED,
+        rewardTf: authoritativeRewardTf,
+        rewardCents: wallet.rewardCents,
+        rewardCredited: true,
+        creditedTransactionId: creditTxId,
+        newBalanceCoins: wallet.newBalanceCoins,
+        newEligibleCoins: wallet.newEligibleCoins,
+        newBalanceCents: wallet.newBalanceCents,
+        idempotencyKey: resolvedIdempotencyKey
+      };
+    }
+
+    if (effectiveTargetState === CAMPAIGN_CONVERSION_STATES.REJECTED) {
+      if (hasActiveResForClick && resRef && typeof transaction.delete === "function") {
+        transaction.delete(resRef);
+      }
+      if (hasActiveResForClick) {
+        transaction.update(configRef, {
+          reservedClickSlots: nextReservedAfterRelease,
+          updatedAt: ts
+        });
+      }
+      if (clickData.status === "ISSUED" || clickData.status === "PENDING_VERIFICATION") {
+        transaction.update(clickRef, {
+          status: "CANCELLED",
+          cancelledAt: ts
+        });
+      }
+      transaction.set(
+        guardRef,
+        {
+          userId,
+          campaignId,
+          hasActiveReservation: false,
+          hasPendingConversion: false,
+          lastConversionId: conversionId,
+          updatedAt: ts
+        },
+        { merge: true }
+      );
+      transaction.set(
+        conversionRef,
+        {
+          ...baseConversionFields,
+          state: CAMPAIGN_CONVERSION_STATES.REJECTED,
+          rewardCredited: false,
+          statusReason: effectiveStatusReason || "REJECTED",
+          ...(actorAdminInfo ? { rejectedByAdminId: actorAdminInfo.uid } : {}),
+          rejectedAt: ts,
+          createdAt: existingConversion?.createdAt || ts
+        },
+        { merge: true }
+      );
+      transaction.set(logRef, {
+        actionType: "CAMPAIGN",
+        title: `Conversion Rejected: ${campaignTitle.slice(0, 60)}`,
+        details: `Campaign: ${campaignId} • User: ${userId} • Reason: ${effectiveStatusReason || "Rejected"}`,
+        targetId: conversionId,
+        adminId: actorAdminInfo?.uid || "SYSTEM_POSTBACK",
+        timestampMillis: nowMillis,
+        createdAt: ts
+      });
+
+      return {
+        success: true,
+        duplicate: false,
+        conversionId,
+        clickId,
+        campaignId,
+        networkId: clickNetworkId,
+        userId,
+        state: CAMPAIGN_CONVERSION_STATES.REJECTED,
+        rewardTf: authoritativeRewardTf,
+        rewardCredited: false,
+        idempotencyKey: resolvedIdempotencyKey
+      };
+    }
+
+    // APPROVED -> REVERSED (Compensating ledger entry + wallet + budget reconciliation; never deletes history)
+    const revWallet = computeCampaignReversedWallet(userData, authoritativeRewardTf);
+    const nextCompletedAfterReversal = Math.max(0, completedTasksCount - 1);
+    const reversalCents = tfToBalanceCents(authoritativeRewardTf);
+
+    // 1. Reverse user wallet safely without negative balances
+    transaction.update(userRef, {
+      balanceCents: revWallet.newBalanceCents,
+      eligibleCoins: revWallet.newEligibleCoins,
+      promotionalCoins: revWallet.newPromoCoins,
+      balanceCoins: revWallet.newBalanceCoins,
+      completedTasksCount: nextCompletedAfterReversal,
+      updatedAt: ts
+    });
+
+    // 2. Sync leaderboard projection
+    syncLeaderboardProjection(
+      transaction,
+      firestoreDb,
+      userId,
+      displayName,
+      revWallet.newBalanceCents,
+      revWallet.newBalanceCoins,
+      nextCompletedAfterReversal,
+      ts,
+      userData.approvalStatus || "approved"
+    );
+
+    // 3. Create auditable compensating ledger entry (original credit tx stays untouched!)
+    transaction.set(revTxRef, {
+      userId,
+      userName: displayName,
+      type: "CAMPAIGN_REVERSAL",
+      title: `Conversion Reversed: ${campaignTitle.slice(0, 60)}`,
+      amountCoins: authoritativeRewardTf,
+      amountCents: reversalCents,
+      reversedCoins: -authoritativeRewardTf,
+      recoveredCoins: revWallet.recoveredCoins,
+      shortfallCoins: revWallet.shortfallCoins,
+      status: "REVERSED",
+      referenceId: conversionId,
+      originalTransactionId: existingConversion.creditedTransactionId || creditTxId,
+      clickId,
+      campaignId,
+      networkId: clickNetworkId,
+      reason: effectiveStatusReason || "ADVERTISER_REVERSAL",
+      createdAt: ts
+    });
+
+    // 4. Notify user
+    const revNotifRef = userRef.collection("notifications").doc(`notif_${revTxId}`);
+    transaction.set(revNotifRef, {
+      userId,
+      title: "Campaign Conversion Reversed",
+      body: `Reward of ${authoritativeRewardTf} TF for '${campaignTitle.slice(0, 60)}' was reversed (${effectiveStatusReason || "advertiser reversal"}).`,
+      message: `Reward of ${authoritativeRewardTf} TF for '${campaignTitle.slice(0, 60)}' was reversed (${effectiveStatusReason || "advertiser reversal"}).`,
+      type: "CAMPAIGN_REVERSAL",
+      rewardCoins: authoritativeRewardTf,
+      referenceId: conversionId,
+      isRead: false,
+      createdAt: ts
+    });
+
+    // 5. Reconcile campaign budget
+    transaction.update(configRef, {
+      usedSubmissions: Math.max(0, usedSubmissions - 1),
+      spentBudgetTf: Math.max(0, spentBudgetTf - authoritativeRewardTf),
+      updatedAt: ts
+    });
+
+    if (campaignSnap.exists) {
+      const campData = campaignSnap.data() || {};
+      transaction.update(campaignRef, {
+        completedSubmissions: Math.max(0, Number(campData.completedSubmissions || 0) - 1),
+        spentCents: Math.max(0, Number(campData.spentCents || 0) - reversalCents),
+        updatedAt: ts
+      });
+    }
+
+    // 6. Update guard + conversion record
+    const prevCompletedConversions = Math.max(0, Number(guardData.completedConversionsCount || 0));
+    const remainingCompletedConversions = Math.max(0, prevCompletedConversions - 1);
+    transaction.set(
+      guardRef,
+      {
+        userId,
+        campaignId,
+        hasCompletedConversion: remainingCompletedConversions > 0,
+        completedConversionsCount: remainingCompletedConversions,
+        hasReversedConversion: true,
+        reversedConversionsCount: Number(guardData.reversedConversionsCount || 0) + 1,
+        lastReversalAt: ts,
+        updatedAt: ts
+      },
+      { merge: true }
+    );
+
+    transaction.set(
+      conversionRef,
+      {
+        ...baseConversionFields,
+        state: CAMPAIGN_CONVERSION_STATES.REVERSED,
+        rewardCredited: true,
+        creditedTransactionId: existingConversion.creditedTransactionId || creditTxId,
+        reversalTransactionId: revTxId,
+        recoveredCoins: revWallet.recoveredCoins,
+        shortfallCoins: revWallet.shortfallCoins,
+        statusReason: effectiveStatusReason || "ADVERTISER_REVERSAL",
+        ...(actorAdminInfo ? { reversedByAdminId: actorAdminInfo.uid } : {}),
+        reversedAt: ts,
+        createdAt: existingConversion.createdAt || ts
+      },
+      { merge: true }
+    );
+
+    transaction.set(logRef, {
+      actionType: "CAMPAIGN",
+      title: `Conversion Reversed (-${authoritativeRewardTf} TF)`,
+      details: `Campaign: ${campaignId} • User: ${userId} • Recovered: ${revWallet.recoveredCoins} TF • Shortfall: ${revWallet.shortfallCoins} TF • Reason: ${effectiveStatusReason || "Reversal"}`,
+      targetId: conversionId,
+      adminId: actorAdminInfo?.uid || "SYSTEM_POSTBACK",
+      timestampMillis: nowMillis,
+      createdAt: ts
+    });
+
+    return {
+      success: true,
+      duplicate: false,
+      conversionId,
+      clickId,
+      campaignId,
+      networkId: clickNetworkId,
+      userId,
+      state: CAMPAIGN_CONVERSION_STATES.REVERSED,
+      rewardTf: authoritativeRewardTf,
+      recoveredCoins: revWallet.recoveredCoins,
+      shortfallCoins: revWallet.shortfallCoins,
+      reversalTransactionId: revTxId,
+      newBalanceCoins: revWallet.newBalanceCoins,
+      newEligibleCoins: revWallet.newEligibleCoins,
+      newBalanceCents: revWallet.newBalanceCents,
+      idempotencyKey: resolvedIdempotencyKey
+    };
+  });
+}
+
+/**
+ * SECURE SERVER-TO-SERVER POSTBACK ENDPOINT (HTTP Handler)
+ * Receives conversion callbacks from external affiliate networks or advertisers.
+ * Strictly validates network activation, server-side signature/secret, click attribution,
+ * idempotency locks, state machine transitions, and atomic TF reward crediting/reversal.
+ */
+async function handleCampaignPostback(req, res, deps = {}) {
+  try {
+    if (req.method !== "GET" && req.method !== "POST") {
+      return res.status(405).json({ success: false, error: "Method Not Allowed" });
+    }
+
+    const networkId = extractNetworkIdFromPostbackRequest(req);
+    if (!CAMPAIGN_ID_REGEX.test(networkId)) {
+      return res.status(400).json({ success: false, error: "Missing or invalid networkId." });
+    }
+
+    const firestoreDb = deps.db || db;
+    const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+    const ts = getDefaultServerTimestamp(deps);
+    const registry = deps.adapterRegistry || new CampaignNetworkAdapterRegistry();
+
+    const networkSnap = await firestoreDb
+      .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS)
+      .doc(networkId)
+      .get();
+
+    if (!networkSnap.exists) {
+      return res.status(404).json({ success: false, error: "Tracking network not found." });
+    }
+    const networkData = { ...(networkSnap.data() || {}), networkId };
+    if (networkData.isActive !== true) {
+      return res.status(403).json({ success: false, error: "Tracking network is inactive." });
+    }
+
+    const secret = resolveCampaignNetworkSecret(networkData, deps);
+    if (!secret) {
+      console.error(`CRITICAL: Server secret not configured for network '${networkId}'. Rejecting postback.`);
+      return res.status(500).json({
+        success: false,
+        error: "Server verification secret is not configured."
+      });
+    }
+
+    let adapter;
+    try {
+      adapter = registry.resolve(
+        networkData.adapterType || CAMPAIGN_VERIFICATION_MODES.AFFILIATE_POSTBACK,
+        networkData.adapterId || networkId
+      );
+    } catch (_) {
+      return res.status(400).json({ success: false, error: "Unsupported network adapter configuration." });
+    }
+
+    const normalized = adapter.normalizeConversionPayload(
+      { query: req.query || {}, body: req.body || {}, headers: req.headers || {} },
+      networkData
+    );
+
+    // Cryptographically authenticate postback BEFORE mutating any state or exposing click status
+    const sigCheck = verifyCampaignPostbackSignature({
+      req,
+      network: networkData,
+      normalizedPayload: normalized,
+      secret
+    });
+    if (!sigCheck.valid) {
+      const statusCode = sigCheck.code === "missing-server-secret" ? 500 : 401;
+      return res.status(statusCode).json({
+        success: false,
+        error: sigCheck.reason || "Invalid postback signature."
+      });
+    }
+
+    // Validate callback payload fields strictly
+    if (!normalized.clickId || !CAMPAIGN_ID_REGEX.test(normalized.clickId)) {
+      return res.status(400).json({ success: false, error: "Missing or malformed clickId." });
+    }
+    if (
+      !normalized.externalTransactionId ||
+      !EXTERNAL_TXN_ID_REGEX.test(normalized.externalTransactionId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing or malformed externalTransactionId."
+      });
+    }
+    if (normalized.reportedCampaignId && !CAMPAIGN_ID_REGEX.test(normalized.reportedCampaignId)) {
+      return res.status(400).json({ success: false, error: "Malformed campaignId in callback." });
+    }
+
+    const result = await executeConversionTransitionInTransaction({
+      firestoreDb,
+      nowMillis,
+      ts,
+      clickId: normalized.clickId,
+      networkIdFromRequest: networkId,
+      externalTransactionId: normalized.externalTransactionId,
+      targetState: normalized.normalizedState,
+      sourceCallbackType: "S2S_POSTBACK",
+      idempotencyKey: normalized.idempotencyKey,
+      reportedCampaignId: normalized.reportedCampaignId,
+      reportedUserId: normalized.reportedUserId,
+      callbackPayoutRaw: normalized.payoutRaw,
+      statusReason: normalized.rawStatus ? `POSTBACK:${normalized.rawStatus}` : "POSTBACK",
+      isAdminOverride: false
+    });
+
+    return res.status(200).json(result);
+  } catch (err) {
+    if (err instanceof CampaignPostbackHttpError) {
+      return res.status(err.status).json({
+        success: false,
+        code: err.code,
+        error: err.message
+      });
+    }
+    console.error("Error processing campaign postback:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Internal error processing conversion postback."
+    });
+  }
+}
+
+/**
+ * ADMIN-AUTHORIZED CONVERSION REVIEW (Callable Handler)
+ * Allows verified administrators to manually approve PENDING conversions (e.g. MANUAL_PROOF,
+ * CUSTOM_APPROVED, or held postbacks), reject PENDING conversions, or reverse APPROVED conversions
+ * using the exact same atomic ledger, wallet, and budget reconciliation engine.
+ */
+async function handleReviewCampaignConversion(request, deps = {}) {
+  const firestoreDb = deps.db || db;
+  const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+  const ts = getDefaultServerTimestamp(deps);
+
+  const adminInfo = await verifyAdminAccess(
+    request,
+    firestoreDb,
+    "Only authorized administrators can review campaign conversions."
+  );
+
+  const data = request.data || {};
+  const action = String(data.action || "").trim().toUpperCase();
+  if (!ALLOWED_ADMIN_CONVERSION_ACTIONS.has(action)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "action must be one of APPROVE, REJECT, REVERSE."
+    );
+  }
+
+  let clickId = String(data.clickId || "").trim();
+  const conversionId = String(data.conversionId || "").trim();
+  if (!clickId && conversionId) {
+    if (!CAMPAIGN_ID_REGEX.test(conversionId)) {
+      throw new HttpsError("invalid-argument", "Invalid conversionId format.");
+    }
+    if (conversionId.startsWith("conv_")) {
+      clickId = conversionId.slice("conv_".length);
+    } else {
+      const convSnap = await firestoreDb
+        .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CONVERSIONS)
+        .doc(conversionId)
+        .get();
+      if (!convSnap.exists) {
+        throw new HttpsError("not-found", "Conversion record not found.");
+      }
+      clickId = String(convSnap.data()?.clickId || "").trim();
+    }
+  }
+
+  if (!clickId || !CAMPAIGN_ID_REGEX.test(clickId)) {
+    throw new HttpsError("invalid-argument", "A valid conversionId or clickId is required.");
+  }
+
+  const reason = typeof data.reason === "string" ? data.reason.trim().slice(0, 500) : "";
+  if ((action === "REJECT" || action === "REVERSE") && !reason) {
+    throw new HttpsError(
+      "invalid-argument",
+      `A review reason is required when performing ${action}.`
+    );
+  }
+
+  const targetState =
+    action === "APPROVE"
+      ? CAMPAIGN_CONVERSION_STATES.APPROVED
+      : action === "REJECT"
+        ? CAMPAIGN_CONVERSION_STATES.REJECTED
+        : CAMPAIGN_CONVERSION_STATES.REVERSED;
+
+  try {
+    return await executeConversionTransitionInTransaction({
+      firestoreDb,
+      nowMillis,
+      ts,
+      clickId,
+      networkIdFromRequest: "",
+      externalTransactionId: String(data.externalTransactionId || "").trim(),
+      targetState,
+      sourceCallbackType: "ADMIN_REVIEW",
+      idempotencyKey: String(data.idempotencyKey || "").trim(),
+      statusReason: reason || `ADMIN_${action}`,
+      actorAdminInfo: adminInfo,
+      isAdminOverride: true
+    });
+  } catch (err) {
+    if (err instanceof CampaignPostbackHttpError) {
+      throw new HttpsError(err.code || "failed-precondition", err.message);
+    }
+    throw err;
+  }
+}
+
 exports.createCampaignClick = onCall(async (request) =>
   handleCreateCampaignClick(request)
+);
+exports.campaignPostback = onRequest(
+  { secrets: [campaignPostbackSecret] },
+  async (req, res) => handleCampaignPostback(req, res)
+);
+exports.reviewCampaignConversion = onCall(async (request) =>
+  handleReviewCampaignConversion(request)
 );
 if (typeof onSchedule === "function") {
   exports.releaseExpiredCampaignClickReservations = onSchedule(
@@ -4692,6 +5846,12 @@ if (typeof onSchedule === "function") {
 exports._campaignTrackingHandlers = {
   handleCreateCampaignClick,
   handleReleaseExpiredCampaignClickReservations
+};
+exports._campaignConversionHandlers = {
+  handleCampaignPostback,
+  handleReviewCampaignConversion,
+  resolveCampaignNetworkSecret,
+  extractNetworkIdFromPostbackRequest
 };
 
 
