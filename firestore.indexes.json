@@ -1,0 +1,19 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "campaign_tracking_configs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "networkId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "isActive",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

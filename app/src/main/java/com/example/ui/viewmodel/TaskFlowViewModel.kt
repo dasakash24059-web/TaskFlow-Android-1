@@ -3415,7 +3415,9 @@ class TaskFlowViewModel(
               dashboardError = null,
               hasLoadedDashboard = true,
               selectedDateRange = dateRange,
+              timezone = result.timezone,
               summary = result.summary,
+              scanLimits = result.scanLimits,
               campaignPerformance = mergedCampaigns,
               networkPerformance = mergedNetworks
             )
@@ -3460,10 +3462,14 @@ class TaskFlowViewModel(
               } else {
                 page
               }
+            val mergedResolved = prev.resolvedNetworksById.toMutableMap().apply {
+              merged.items.forEach { put(it.networkId, it) }
+            }
             prev.copy(
               isLoadingNetworks = false,
               networksError = null,
-              networks = merged
+              networks = merged,
+              resolvedNetworksById = mergedResolved
             )
           }
         }
@@ -3472,6 +3478,51 @@ class TaskFlowViewModel(
             ?: "Failed to load campaign networks."
           _campaignTrackingAdminState.update {
             it.copy(isLoadingNetworks = false, networksError = msg)
+          }
+        }
+    }
+  }
+
+  /**
+   * Resolves a single campaign network by exact ID (e.g., when editing a campaign whose assigned
+   * network lives on page 2+ beyond the initially loaded slice).
+   */
+  fun ensureCampaignNetworkLoaded(networkId: String) {
+    val targetId = networkId.trim()
+    if (targetId.isEmpty() || !isAdminAuthorized.value) return
+    val current = _campaignTrackingAdminState.value
+    if (current.networks.items.any { it.networkId == targetId } ||
+      current.resolvedNetworksById.containsKey(targetId)
+    ) {
+      return
+    }
+    _campaignTrackingAdminState.update {
+      it.copy(isLoadingNetworkLookup = true, networkLookupError = null)
+    }
+    viewModelScope.launch {
+      repository
+        .adminGetCampaignNetworkById(targetId)
+        .onSuccess { fetched ->
+          _campaignTrackingAdminState.update { prev ->
+            if (fetched != null) {
+              prev.copy(
+                isLoadingNetworkLookup = false,
+                networkLookupError = null,
+                resolvedNetworksById = prev.resolvedNetworksById + (fetched.networkId to fetched)
+              )
+            } else {
+              prev.copy(
+                isLoadingNetworkLookup = false,
+                networkLookupError = "Registered network '$targetId' was not found on server."
+              )
+            }
+          }
+        }
+        .onFailure { err ->
+          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
+            ?: "Failed to look up campaign network '$targetId'."
+          _campaignTrackingAdminState.update {
+            it.copy(isLoadingNetworkLookup = false, networkLookupError = msg)
           }
         }
     }
@@ -3561,6 +3612,7 @@ class TaskFlowViewModel(
                 items = updatedItems,
                 totalCount = maxOf(prev.networks.totalCount, updatedItems.size)
               ),
+              resolvedNetworksById = prev.resolvedNetworksById + (saved.networkId to saved),
               feedbackMessage =
                 if (isEdit) "Updated network '${saved.name}'."
                 else "Registered network '${saved.name}'.",
@@ -3605,6 +3657,7 @@ class TaskFlowViewModel(
                   if (it.networkId == updated.networkId) updated else it
                 }
               ),
+              resolvedNetworksById = prev.resolvedNetworksById + (updated.networkId to updated),
               feedbackMessage =
                 if (updated.isActive) "Enabled network '${updated.name}'."
                 else "Disabled network '${updated.name}'.",
@@ -3637,12 +3690,22 @@ class TaskFlowViewModel(
       }
       return
     }
-    val selectedNetwork =
-      _campaignTrackingAdminState.value.networks.items.firstOrNull { it.networkId == item.networkId.trim() }
-    val validationErrors = validateAdminCampaignConfigForm(item, selectedNetwork)
-    if (validationErrors.isNotEmpty()) {
+    val targetNetworkId = item.networkId.trim()
+    val currentState = _campaignTrackingAdminState.value
+    val cachedNetwork =
+      currentState.networks.items.firstOrNull { it.networkId == targetNetworkId }
+        ?: currentState.resolvedNetworksById[targetNetworkId]
+    if (cachedNetwork != null) {
+      val validationErrors = validateAdminCampaignConfigForm(item, cachedNetwork)
+      if (validationErrors.isNotEmpty()) {
+        _campaignTrackingAdminState.update {
+          it.copy(feedbackMessage = validationErrors.first(), feedbackIsError = true)
+        }
+        return
+      }
+    } else if (targetNetworkId.isEmpty()) {
       _campaignTrackingAdminState.update {
-        it.copy(feedbackMessage = validationErrors.first(), feedbackIsError = true)
+        it.copy(feedbackMessage = "Select a registered campaign network.", feedbackIsError = true)
       }
       return
     }
@@ -3650,6 +3713,25 @@ class TaskFlowViewModel(
       it.copy(isSaving = true, feedbackMessage = null, feedbackIsError = false)
     }
     viewModelScope.launch {
+      // If the campaign's network lives on page 2+ and wasn't cached locally, resolve it via
+      // exact server-side lookup before running client validation and upsert.
+      val resolvedNetwork = cachedNetwork ?: repository.adminGetCampaignNetworkById(targetNetworkId).getOrNull()
+      if (resolvedNetwork != null && cachedNetwork == null) {
+        _campaignTrackingAdminState.update { prev ->
+          prev.copy(resolvedNetworksById = prev.resolvedNetworksById + (resolvedNetwork.networkId to resolvedNetwork))
+        }
+      }
+      val finalValidationErrors = validateAdminCampaignConfigForm(item, resolvedNetwork)
+      if (finalValidationErrors.isNotEmpty()) {
+        _campaignTrackingAdminState.update {
+          it.copy(
+            isSaving = false,
+            feedbackMessage = finalValidationErrors.first(),
+            feedbackIsError = true
+          )
+        }
+        return@launch
+      }
       repository
         .adminUpsertCampaignTrackingConfig(item = item, mode = if (isEdit) "UPDATE" else "CREATE")
         .onSuccess { saved ->

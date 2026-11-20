@@ -242,7 +242,8 @@ fun AdminDashboardScreen(
    onToggleCampaignNetworkStatus: (String, Boolean) -> Unit = { _, _ -> },
    onSaveCampaignTrackingConfig: (AdminCampaignTrackingConfigItem, Boolean, () -> Unit) -> Unit = { _, _, onDone -> onDone() },
    onToggleCampaignTrackingConfigStatus: (String, Boolean) -> Unit = { _, _ -> },
-   onClearCampaignTrackingFeedback: () -> Unit = {}
+   onClearCampaignTrackingFeedback: () -> Unit = {},
+   onEnsureCampaignNetworkLoaded: (String) -> Unit = {}
 ) {
   if (!isAdminAuthorized) {
     UnauthorizedAdminGate(currentUserEmail = currentUserEmail)
@@ -771,7 +772,8 @@ fun AdminDashboardScreen(
               onToggleNetworkStatus = onToggleCampaignNetworkStatus,
               onSaveCampaignConfig = onSaveCampaignTrackingConfig,
               onToggleCampaignConfigStatus = onToggleCampaignTrackingConfigStatus,
-              onClearFeedback = onClearCampaignTrackingFeedback
+              onClearFeedback = onClearCampaignTrackingFeedback,
+              onEnsureNetworkLoaded = onEnsureCampaignNetworkLoaded
             )
           }
           AdminTab.COINS_REWARDS -> {

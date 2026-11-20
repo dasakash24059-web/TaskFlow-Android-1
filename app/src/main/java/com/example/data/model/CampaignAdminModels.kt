@@ -1,6 +1,71 @@
 package com.example.data.model
 
+import java.net.URI
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
+
+const val MAX_CAMPAIGN_TRACKING_URL_LENGTH: Int = 2000
+val STRICT_ISO_DATE_REGEX: Regex = Regex("^\\d{4}-\\d{2}-\\d{2}$")
+private val IPV4_HOST_REGEX: Regex = Regex("^\\d{1,3}(?:\\.\\d{1,3}){3}$")
+
+/**
+ * Strictly parses a YYYY-MM-DD calendar date in UTC.
+ * - Blank input returns 0L (unbounded / cleared).
+ * - Invalid format or impossible calendar dates (e.g. 2026-02-30) return null so forms surface an
+ *   explicit validation error instead of silently converting to 0L.
+ */
+fun parseStrictIsoDateToUtcMillis(rawDate: String, endOfDay: Boolean): Long? {
+  val clean = rawDate.trim()
+  if (clean.isEmpty()) return 0L
+  if (!STRICT_ISO_DATE_REGEX.matches(clean)) return null
+  return runCatching {
+    val formatter = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+      isLenient = false
+      timeZone = TimeZone.getTimeZone("UTC")
+    }
+    val parsed = formatter.parse(clean) ?: return null
+    if (formatter.format(parsed) != clean) return null
+    if (endOfDay) parsed.time + 86_399_999L else parsed.time
+  }.getOrNull()
+}
+
+fun formatUtcMillisToIsoDate(millis: Long): String {
+  if (millis <= 0L) return ""
+  val formatter = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+    isLenient = false
+    timeZone = TimeZone.getTimeZone("UTC")
+  }
+  return formatter.format(Date(millis))
+}
+
+/**
+ * Validates a campaign tracking destination URL with full parity to backend
+ * `validateDestinationUrl` (HTTPS only, max 2000 chars, no embedded credentials or control chars,
+ * public domain host blocking localhost/.local/.internal/IPv4).
+ */
+fun isValidCampaignTrackingUrl(rawUrl: String): Boolean {
+  val trimmed = rawUrl.trim()
+  if (trimmed.isEmpty() || trimmed.length > MAX_CAMPAIGN_TRACKING_URL_LENGTH) return false
+  if (!trimmed.startsWith("https://", ignoreCase = true)) return false
+  if (trimmed.any { it.isWhitespace() || it.code < 0x20 || it.code == 0x7F || it == '<' || it == '>' }) {
+    return false
+  }
+  return try {
+    val uri = URI(trimmed)
+    val scheme = uri.scheme?.lowercase(Locale.US)
+    val host = uri.host?.lowercase(Locale.US).orEmpty()
+    if (scheme != "https") return false
+    if (!uri.userInfo.isNullOrEmpty()) return false
+    if (host.isEmpty() || !host.contains(".")) return false
+    if (host == "localhost" || host.endsWith(".local") || host.endsWith(".internal")) return false
+    if (IPV4_HOST_REGEX.matches(host) || host.contains(":")) return false
+    true
+  } catch (_: Exception) {
+    false
+  }
+}
 
 /**
  * Explicitly registered Firebase Secret Manager key names accepted by the backend
@@ -62,7 +127,8 @@ data class AdminCampaignNetworkItem(
   val postbackStatusMapping: Map<String, String> = emptyMap(),
   val signatureConfig: AdminNetworkSignatureConfig = AdminNetworkSignatureConfig(),
   val createdAtMillis: Long = 0L,
-  val updatedAtMillis: Long = 0L
+  val updatedAtMillis: Long = 0L,
+  val activeCampaignsCount: Int = 0
 )
 
 data class AdminCampaignConversionRequirements(
@@ -122,9 +188,22 @@ data class CampaignTrackingSummaryMetrics(
   val hasConversionData: Boolean = false,
   val grossCreditedTf: Long = 0L,
   val reversedTf: Long = 0L,
+  val recoveredTf: Long = 0L,
+  val shortfallTf: Long = 0L,
   val netCreditedTf: Long = 0L,
+  val netWalletImpactTf: Long = 0L,
   val grossCreditedCents: Long = 0L,
-  val netCreditedCents: Long = 0L
+  val reversedCents: Long = 0L,
+  val recoveredCents: Long = 0L,
+  val shortfallCents: Long = 0L,
+  val netCreditedCents: Long = 0L,
+  val netWalletImpactCents: Long = 0L,
+  val orphanedClicksCount: Long = 0L,
+  val orphanedConversionsCount: Long = 0L,
+  val orphanedGrossCreditedTf: Long = 0L,
+  val orphanedReversedTf: Long = 0L,
+  val orphanedCampaignCount: Int = 0,
+  val orphanedNetworkCount: Int = 0
 )
 
 data class CampaignPerformanceRow(
@@ -133,6 +212,7 @@ data class CampaignPerformanceRow(
   val networkId: String = "",
   val verificationMode: String = "",
   val isActive: Boolean = false,
+  val isOrphaned: Boolean = false,
   val rewardTf: Long = 0L,
   val clicksCount: Long = 0L,
   val totalConversions: Long = 0L,
@@ -143,8 +223,13 @@ data class CampaignPerformanceRow(
   val approvalRatePercent: Double? = null,
   val grossCreditedTf: Long = 0L,
   val reversedTf: Long = 0L,
+  val recoveredTf: Long = 0L,
+  val shortfallTf: Long = 0L,
   val netCreditedTf: Long = 0L,
   val grossCreditedCents: Long = 0L,
+  val reversedCents: Long = 0L,
+  val recoveredCents: Long = 0L,
+  val shortfallCents: Long = 0L,
   val netCreditedCents: Long = 0L,
   val submissionBudget: Long = 0L,
   val usedSubmissions: Long = 0L,
@@ -159,6 +244,7 @@ data class NetworkPerformanceRow(
   val name: String = "",
   val adapterType: String = "",
   val isActive: Boolean = false,
+  val isOrphaned: Boolean = false,
   val campaignsCount: Int = 0,
   val clicksCount: Long = 0L,
   val totalConversions: Long = 0L,
@@ -169,23 +255,46 @@ data class NetworkPerformanceRow(
   val approvalRatePercent: Double? = null,
   val grossCreditedTf: Long = 0L,
   val reversedTf: Long = 0L,
+  val recoveredTf: Long = 0L,
+  val shortfallTf: Long = 0L,
   val netCreditedTf: Long = 0L,
   val grossCreditedCents: Long = 0L,
+  val reversedCents: Long = 0L,
+  val recoveredCents: Long = 0L,
+  val shortfallCents: Long = 0L,
   val netCreditedCents: Long = 0L
+)
+
+data class CampaignAnalyticsScanLimits(
+  val clicksScanLimit: Int = 5000,
+  val conversionsScanLimit: Int = 5000,
+  val campaignsScanLimit: Int = 1000,
+  val networksScanLimit: Int = 500,
+  val clicksScanned: Int = 0,
+  val conversionsScanned: Int = 0,
+  val clicksTruncated: Boolean = false,
+  val conversionsTruncated: Boolean = false,
+  val campaignsTruncated: Boolean = false,
+  val networksTruncated: Boolean = false,
+  val isTruncated: Boolean = false,
+  val queryStrategy: String = "INDEXED_TIMESTAMP_RANGE"
 )
 
 data class AdminPaginatedSlice<T>(
   val items: List<T> = emptyList(),
   val nextCursor: String = "",
   val hasMore: Boolean = false,
-  val totalCount: Int = 0
+  val totalCount: Int = 0,
+  val truncated: Boolean = false
 )
 
 data class AdminCampaignDashboardResult(
   val dateRange: String = CampaignAnalyticsDateRange.LAST_30_DAYS.wireValue,
+  val timezone: String = "Asia/Kolkata",
   val startAtMillis: Long = 0L,
   val endAtMillis: Long = 0L,
   val summary: CampaignTrackingSummaryMetrics = CampaignTrackingSummaryMetrics(),
+  val scanLimits: CampaignAnalyticsScanLimits = CampaignAnalyticsScanLimits(),
   val campaignPerformance: AdminPaginatedSlice<CampaignPerformanceRow> = AdminPaginatedSlice(),
   val networkPerformance: AdminPaginatedSlice<NetworkPerformanceRow> = AdminPaginatedSlice()
 )
@@ -195,12 +304,17 @@ data class AdminCampaignTrackingUiState(
   val dashboardError: String? = null,
   val hasLoadedDashboard: Boolean = false,
   val selectedDateRange: CampaignAnalyticsDateRange = CampaignAnalyticsDateRange.LAST_30_DAYS,
+  val timezone: String = "Asia/Kolkata",
   val summary: CampaignTrackingSummaryMetrics = CampaignTrackingSummaryMetrics(),
+  val scanLimits: CampaignAnalyticsScanLimits = CampaignAnalyticsScanLimits(),
   val campaignPerformance: AdminPaginatedSlice<CampaignPerformanceRow> = AdminPaginatedSlice(),
   val networkPerformance: AdminPaginatedSlice<NetworkPerformanceRow> = AdminPaginatedSlice(),
   val isLoadingNetworks: Boolean = false,
   val networksError: String? = null,
   val networks: AdminPaginatedSlice<AdminCampaignNetworkItem> = AdminPaginatedSlice(),
+  val resolvedNetworksById: Map<String, AdminCampaignNetworkItem> = emptyMap(),
+  val isLoadingNetworkLookup: Boolean = false,
+  val networkLookupError: String? = null,
   val isLoadingConfigs: Boolean = false,
   val configsError: String? = null,
   val configs: AdminPaginatedSlice<AdminCampaignTrackingConfigItem> = AdminPaginatedSlice(),
@@ -334,6 +448,9 @@ fun validateAdminCampaignConfigForm(
       if (item.isActive && !selectedNetwork.capabilities.supportsIncentivizedTraffic) {
         errors += "Selected network does not permit incentivized traffic."
       }
+      if (item.isActive && !selectedNetwork.capabilities.supportsPostback) {
+        errors += "Selected network does not support S2S postbacks."
+      }
       if (item.trackingBaseUrl.trim().isEmpty()) {
         errors += "Tracking Base URL is required for ${mode.name} campaigns."
       }
@@ -357,9 +474,29 @@ fun validateAdminCampaignConfigForm(
   if (item.rewardBudgetTf > 0L && item.rewardBudgetTf < item.spentBudgetTf) {
     errors += "Reward TF budget cannot be less than already spent budget (${item.spentBudgetTf} TF)."
   }
-  if (item.startAtMillis > 0L && item.expiresAtMillis > 0L && item.expiresAtMillis < item.startAtMillis) {
+
+  // Strict ISO date validation (MEDIUM-1 / MEDIUM-2): never silently coerce invalid dates to 0L.
+  val parsedStartMillis =
+    if (item.startDate.trim().isNotEmpty()) parseStrictIsoDateToUtcMillis(item.startDate, endOfDay = false)
+    else 0L
+  val parsedEndMillis =
+    if (item.endDate.trim().isNotEmpty()) parseStrictIsoDateToUtcMillis(item.endDate, endOfDay = true)
+    else 0L
+  if (item.startDate.trim().isNotEmpty() && parsedStartMillis == null) {
+    errors += "Start date must be a valid YYYY-MM-DD calendar date."
+  }
+  if (item.endDate.trim().isNotEmpty() && parsedEndMillis == null) {
+    errors += "End date must be a valid YYYY-MM-DD calendar date."
+  }
+  if (parsedStartMillis != null && parsedEndMillis != null &&
+    parsedStartMillis > 0L && parsedEndMillis > 0L &&
+    parsedEndMillis < parsedStartMillis
+  ) {
+    errors += "End date must be on or after the start date."
+  } else if (item.startAtMillis > 0L && item.expiresAtMillis > 0L && item.expiresAtMillis < item.startAtMillis) {
     errors += "Expiration date must be on or after the start date."
   }
+
   val countries = item.allowedCountries.map { it.trim().uppercase(Locale.US) }.filter { it.isNotEmpty() }
   if (countries.isEmpty() || countries.any { !COUNTRY_CODE_REGEX.matches(it) }) {
     errors += "Allowed countries must be 'ALL' or valid 2-letter ISO codes (e.g., IN, US)."
@@ -368,11 +505,14 @@ fun validateAdminCampaignConfigForm(
   if (platforms.isEmpty() || platforms.any { CampaignDevicePlatform.fromWireValue(it) == null }) {
     errors += "Select at least one valid target platform."
   }
-  if (item.trackingBaseUrl.isNotBlank() && !isValidTaskUrl(item.trackingBaseUrl)) {
-    errors += "Tracking Base URL must be a valid HTTPS URL."
+  if (item.trackingBaseUrl.isNotBlank() && !isValidCampaignTrackingUrl(item.trackingBaseUrl)) {
+    errors += "Tracking Base URL must be a valid public HTTPS URL (max $MAX_CAMPAIGN_TRACKING_URL_LENGTH characters)."
   }
   if (item.conversionRequirements.attributionWindowHours !in 1..2160) {
     errors += "Attribution window must be between 1 and 2160 hours."
+  }
+  if (item.clickTtlMinutes !in 1..43200) {
+    errors += "Click TTL must be between 1 and 43200 minutes."
   }
   return errors
 }

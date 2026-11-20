@@ -1494,7 +1494,10 @@ private fun AuthenticatedWorkspace(
             onToggleCampaignTrackingConfigStatus = { campaignId, isActive ->
               viewModel.setCampaignTrackingConfigStatus(campaignId = campaignId, isActive = isActive)
             },
-            onClearCampaignTrackingFeedback = { viewModel.clearCampaignTrackingFeedback() }
+            onClearCampaignTrackingFeedback = { viewModel.clearCampaignTrackingFeedback() },
+            onEnsureCampaignNetworkLoaded = { networkId ->
+              viewModel.ensureCampaignNetworkLoaded(networkId)
+            }
           )
         }
       }

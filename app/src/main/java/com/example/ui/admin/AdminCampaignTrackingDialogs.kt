@@ -30,6 +30,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,25 +57,15 @@ import com.example.data.model.allowedSignatureAlgorithmsForMode
 import com.example.data.model.coinsToCents
 import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
+import com.example.data.model.formatUtcMillisToIsoDate
+import com.example.data.model.parseStrictIsoDateToUtcMillis
 import com.example.data.model.validateAdminCampaignConfigForm
 import com.example.data.model.validateAdminNetworkForm
 import com.example.ui.theme.taskFlowColors
-import java.text.SimpleDateFormat
 import java.util.Locale
-import java.util.TimeZone
 
-internal fun parseIsoDateToUtcMillis(rawDate: String, endOfDay: Boolean): Long {
-  val clean = rawDate.trim()
-  if (clean.isEmpty()) return 0L
-  return runCatching {
-    val formatter = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
-      isLenient = false
-      timeZone = TimeZone.getTimeZone("UTC")
-    }
-    val parsed = formatter.parse(clean) ?: return 0L
-    if (endOfDay) parsed.time + 86_399_999L else parsed.time
-  }.getOrDefault(0L)
-}
+internal fun parseIsoDateToUtcMillis(rawDate: String, endOfDay: Boolean): Long? =
+  parseStrictIsoDateToUtcMillis(rawDate, endOfDay = endOfDay)
 
 @Composable
 fun CampaignStatusConfirmationDialog(
@@ -616,6 +607,12 @@ fun CampaignTrackingConfigEditorDialog(
   initial: AdminCampaignTrackingConfigItem?,
   networks: List<AdminCampaignNetworkItem>,
   isSaving: Boolean,
+  hasMoreNetworks: Boolean = false,
+  isLoadingNetworks: Boolean = false,
+  isLoadingNetworkLookup: Boolean = false,
+  networkLookupError: String? = null,
+  onLoadMoreNetworks: () -> Unit = {},
+  onEnsureNetworkLoaded: (String) -> Unit = {},
   onDismiss: () -> Unit,
   onSave: (AdminCampaignTrackingConfigItem, Boolean) -> Unit
 ) {
@@ -623,22 +620,40 @@ fun CampaignTrackingConfigEditorDialog(
 
   var campaignId by remember(initial) { mutableStateOf(initial?.campaignId.orEmpty()) }
   var title by remember(initial) { mutableStateOf(initial?.title.orEmpty()) }
-  var selectedNetworkId by remember(initial, networks) {
+  var selectedNetworkId by remember(initial) {
     mutableStateOf(
       initial?.networkId?.takeIf { it.isNotBlank() }
         ?: networks.firstOrNull { it.isActive }?.networkId
         ?: networks.firstOrNull()?.networkId.orEmpty()
     )
   }
+  LaunchedEffect(networks) {
+    if (selectedNetworkId.isBlank() && networks.isNotEmpty()) {
+      selectedNetworkId =
+        networks.firstOrNull { it.isActive }?.networkId
+          ?: networks.first().networkId
+    }
+  }
+  LaunchedEffect(initial?.networkId, networks) {
+    val requiredNetworkId = initial?.networkId?.trim().orEmpty()
+    if (requiredNetworkId.isNotEmpty() && networks.none { it.networkId == requiredNetworkId }) {
+      onEnsureNetworkLoaded(requiredNetworkId)
+    }
+  }
   val selectedNetwork = remember(selectedNetworkId, networks) {
     networks.firstOrNull { it.networkId == selectedNetworkId }
   }
-  var verificationMode by remember(initial, selectedNetwork) {
+  var verificationMode by remember(initial) {
     mutableStateOf(
       initial?.verificationMode?.takeIf { it.isNotBlank() }
         ?: selectedNetwork?.adapterType
         ?: CampaignVerificationMode.AFFILIATE_POSTBACK.name
     )
+  }
+  LaunchedEffect(selectedNetwork) {
+    if (!isEdit && selectedNetwork != null && initial?.verificationMode.isNullOrBlank()) {
+      verificationMode = selectedNetwork.adapterType
+    }
   }
   var isActive by remember(initial) { mutableStateOf(initial?.isActive ?: true) }
   var rewardTfText by remember(initial) { mutableStateOf((initial?.rewardTf ?: 125L).toString()) }
@@ -648,8 +663,18 @@ fun CampaignTrackingConfigEditorDialog(
   var rewardBudgetTfText by remember(initial) {
     mutableStateOf((initial?.rewardBudgetTf ?: 0L).toString())
   }
-  var startDate by remember(initial) { mutableStateOf(initial?.startDate.orEmpty()) }
-  var endDate by remember(initial) { mutableStateOf(initial?.endDate.orEmpty()) }
+  var startDate by remember(initial) {
+    mutableStateOf(
+      initial?.startDate?.takeIf { it.isNotBlank() }
+        ?: formatUtcMillisToIsoDate(initial?.startAtMillis ?: 0L)
+    )
+  }
+  var endDate by remember(initial) {
+    mutableStateOf(
+      initial?.endDate?.takeIf { it.isNotBlank() }
+        ?: formatUtcMillisToIsoDate(initial?.expiresAtMillis ?: 0L)
+    )
+  }
   var countriesText by remember(initial) {
     mutableStateOf((initial?.allowedCountries ?: listOf("ALL")).joinToString(", "))
   }
@@ -751,13 +776,42 @@ fun CampaignTrackingConfigEditorDialog(
           style = MaterialTheme.typography.labelMedium,
           fontWeight = FontWeight.SemiBold
         )
-        if (networks.isEmpty()) {
+        if (isLoadingNetworkLookup && selectedNetwork == null) {
+          Text(
+            text = "Loading assigned network '$selectedNetworkId'...",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.testTag("campaign_network_lookup_loading")
+          )
+        } else if (networkLookupError != null && selectedNetwork == null && selectedNetworkId.isNotBlank()) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("campaign_network_lookup_error"),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Text(
+              text = networkLookupError,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.error,
+              modifier = Modifier.weight(1f)
+            )
+            TextButton(
+              onClick = { onEnsureNetworkLoaded(selectedNetworkId) },
+              modifier = Modifier.testTag("campaign_network_lookup_retry")
+            ) {
+              Text("Retry")
+            }
+          }
+        }
+        if (networks.isEmpty() && !isLoadingNetworkLookup) {
           Text(
             text = "No networks registered yet. Register a network first.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error
           )
-        } else {
+        } else if (networks.isNotEmpty()) {
           Row(
             modifier = Modifier
               .fillMaxWidth()
@@ -778,6 +832,15 @@ fun CampaignTrackingConfigEditorDialog(
                   )
                 },
                 modifier = Modifier.testTag("campaign_network_chip_${net.networkId}")
+              )
+            }
+            if (hasMoreNetworks) {
+              FilterChip(
+                selected = false,
+                enabled = !isLoadingNetworks,
+                onClick = onLoadMoreNetworks,
+                label = { Text(if (isLoadingNetworks) "Loading..." else "Load More...") },
+                modifier = Modifier.testTag("campaign_editor_load_more_networks_chip")
               )
             }
           }
@@ -988,19 +1051,24 @@ fun CampaignTrackingConfigEditorDialog(
       Button(
         enabled = !isSaving,
         onClick = {
-          val startMillis =
-            if (startDate.isNotBlank()) parseIsoDateToUtcMillis(startDate, endOfDay = false)
-            else initial?.startAtMillis ?: 0L
-          val endMillis =
-            if (endDate.isNotBlank()) parseIsoDateToUtcMillis(endDate, endOfDay = true)
-            else initial?.expiresAtMillis ?: 0L
+          // MEDIUM-1 / MEDIUM-2: Clearing startDate/endDate explicitly clears startAtMillis/expiresAtMillis
+          // to 0L rather than retaining stale timestamps, and invalid dates remain null so
+          // validateAdminCampaignConfigForm surfaces an explicit validation error.
+          val cleanStartDate = startDate.trim()
+          val cleanEndDate = endDate.trim()
+          val parsedStartMillis = parseStrictIsoDateToUtcMillis(cleanStartDate, endOfDay = false)
+          val parsedEndMillis = parseStrictIsoDateToUtcMillis(cleanEndDate, endOfDay = true)
+          val startMillis = parsedStartMillis ?: 0L
+          val endMillis = parsedEndMillis ?: 0L
+          val parsedAttributionHours = attributionWindowText.trim().toIntOrNull() ?: 0
+          val parsedClickTtlMinutes = clickTtlText.trim().toIntOrNull() ?: 0
           val candidate = AdminCampaignTrackingConfigItem(
             configId = campaignId.trim(),
             campaignId = campaignId.trim(),
             title = title.trim(),
             isActive = isActive,
-            startDate = startDate.trim(),
-            endDate = endDate.trim(),
+            startDate = cleanStartDate,
+            endDate = cleanEndDate,
             startAtMillis = startMillis,
             expiresAtMillis = endMillis,
             submissionBudget = submissionBudgetText.trim().toLongOrNull() ?: 0L,
@@ -1031,11 +1099,11 @@ fun CampaignTrackingConfigEditorDialog(
               autoApproveVerifiedPostback = autoApprovePostback,
               requireAdminApproval = requireAdminApproval,
               allowMultipleConversions = allowMultipleConversions,
-              attributionWindowHours = attributionWindowText.trim().toIntOrNull() ?: 72,
+              attributionWindowHours = parsedAttributionHours,
               requireVerifiedCountry = requireVerifiedCountry,
               requireAppCheck = requireAppCheck
             ),
-            clickTtlMinutes = (clickTtlText.trim().toIntOrNull() ?: 60).coerceIn(5, 1440)
+            clickTtlMinutes = parsedClickTtlMinutes
           )
           val errors = validateAdminCampaignConfigForm(candidate, selectedNetwork)
           if (errors.isNotEmpty()) {

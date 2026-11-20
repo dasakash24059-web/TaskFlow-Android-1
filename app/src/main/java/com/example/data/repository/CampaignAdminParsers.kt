@@ -7,6 +7,7 @@ import com.example.data.model.AdminCampaignTrackingConfigItem
 import com.example.data.model.AdminNetworkSignatureConfig
 import com.example.data.model.AdminPaginatedSlice
 import com.example.data.model.CampaignAnalyticsDateRange
+import com.example.data.model.CampaignAnalyticsScanLimits
 import com.example.data.model.CampaignDevicePlatform
 import com.example.data.model.CampaignPerformanceRow
 import com.example.data.model.CampaignTrackingSummaryMetrics
@@ -92,7 +93,8 @@ internal object CampaignAdminParsers {
         fieldSeparator = (sig["fieldSeparator"] as? String) ?: "|"
       ),
       createdAtMillis = map.long("createdAtMillis"),
-      updatedAtMillis = map.long("updatedAtMillis")
+      updatedAtMillis = map.long("updatedAtMillis"),
+      activeCampaignsCount = map.int("activeCampaignsCount", 0).coerceAtLeast(0)
     )
   }
 
@@ -103,7 +105,8 @@ internal object CampaignAdminParsers {
       items = items,
       nextCursor = dataMap.str("nextCursor"),
       hasMore = dataMap.bool("hasMore"),
-      totalCount = dataMap.int("totalCount", items.size)
+      totalCount = dataMap.int("totalCount", items.size),
+      truncated = dataMap.bool("truncated")
     )
   }
 
@@ -158,17 +161,22 @@ internal object CampaignAdminParsers {
       items = items,
       nextCursor = dataMap.str("nextCursor"),
       hasMore = dataMap.bool("hasMore"),
-      totalCount = dataMap.int("totalCount", items.size)
+      totalCount = dataMap.int("totalCount", items.size),
+      truncated = dataMap.bool("truncated")
     )
   }
 
-  fun parseCampaignPerformanceRow(map: Map<*, *>): CampaignPerformanceRow =
-    CampaignPerformanceRow(
+  fun parseCampaignPerformanceRow(map: Map<*, *>): CampaignPerformanceRow {
+    val reversedTf = map.long("reversedTf")
+    val recoveredTf = map.long("recoveredTf", reversedTf)
+    val shortfallTf = map.long("shortfallTf", (reversedTf - recoveredTf).coerceAtLeast(0L))
+    return CampaignPerformanceRow(
       campaignId = map.str("campaignId"),
       title = map.str("title", map.str("campaignId")),
       networkId = map.str("networkId"),
       verificationMode = map.str("verificationMode"),
       isActive = map.bool("isActive"),
+      isOrphaned = map.bool("isOrphaned"),
       rewardTf = map.long("rewardTf"),
       clicksCount = map.long("clicksCount"),
       totalConversions = map.long("totalConversions"),
@@ -178,9 +186,14 @@ internal object CampaignAdminParsers {
       reversedConversions = map.long("reversedConversions"),
       approvalRatePercent = map.doubleOrNull("approvalRatePercent"),
       grossCreditedTf = map.long("grossCreditedTf"),
-      reversedTf = map.long("reversedTf"),
+      reversedTf = reversedTf,
+      recoveredTf = recoveredTf,
+      shortfallTf = shortfallTf,
       netCreditedTf = map.long("netCreditedTf"),
       grossCreditedCents = map.long("grossCreditedCents"),
+      reversedCents = map.long("reversedCents", coinsToCents(reversedTf)),
+      recoveredCents = map.long("recoveredCents", coinsToCents(recoveredTf)),
+      shortfallCents = map.long("shortfallCents", coinsToCents(shortfallTf)),
       netCreditedCents = map.long("netCreditedCents"),
       submissionBudget = map.long("submissionBudget"),
       usedSubmissions = map.long("usedSubmissions"),
@@ -189,13 +202,18 @@ internal object CampaignAdminParsers {
       spentBudgetTf = map.long("spentBudgetTf"),
       budgetUtilizationPercent = map.doubleOrNull("budgetUtilizationPercent")
     )
+  }
 
-  fun parseNetworkPerformanceRow(map: Map<*, *>): NetworkPerformanceRow =
-    NetworkPerformanceRow(
+  fun parseNetworkPerformanceRow(map: Map<*, *>): NetworkPerformanceRow {
+    val reversedTf = map.long("reversedTf")
+    val recoveredTf = map.long("recoveredTf", reversedTf)
+    val shortfallTf = map.long("shortfallTf", (reversedTf - recoveredTf).coerceAtLeast(0L))
+    return NetworkPerformanceRow(
       networkId = map.str("networkId"),
       name = map.str("name", map.str("networkId")),
       adapterType = map.str("adapterType"),
       isActive = map.bool("isActive"),
+      isOrphaned = map.bool("isOrphaned"),
       campaignsCount = map.int("campaignsCount"),
       clicksCount = map.long("clicksCount"),
       totalConversions = map.long("totalConversions"),
@@ -205,16 +223,45 @@ internal object CampaignAdminParsers {
       reversedConversions = map.long("reversedConversions"),
       approvalRatePercent = map.doubleOrNull("approvalRatePercent"),
       grossCreditedTf = map.long("grossCreditedTf"),
-      reversedTf = map.long("reversedTf"),
+      reversedTf = reversedTf,
+      recoveredTf = recoveredTf,
+      shortfallTf = shortfallTf,
       netCreditedTf = map.long("netCreditedTf"),
       grossCreditedCents = map.long("grossCreditedCents"),
+      reversedCents = map.long("reversedCents", coinsToCents(reversedTf)),
+      recoveredCents = map.long("recoveredCents", coinsToCents(recoveredTf)),
+      shortfallCents = map.long("shortfallCents", coinsToCents(shortfallTf)),
       netCreditedCents = map.long("netCreditedCents")
     )
+  }
+
+  fun parseScanLimits(map: Map<*, *>?): CampaignAnalyticsScanLimits {
+    if (map == null) return CampaignAnalyticsScanLimits()
+    val clicksTrunc = map.bool("clicksTruncated")
+    val convTrunc = map.bool("conversionsTruncated")
+    val campTrunc = map.bool("campaignsTruncated")
+    val netTrunc = map.bool("networksTruncated")
+    return CampaignAnalyticsScanLimits(
+      clicksScanLimit = map.int("clicksScanLimit", 5000),
+      conversionsScanLimit = map.int("conversionsScanLimit", 5000),
+      campaignsScanLimit = map.int("campaignsScanLimit", 1000),
+      networksScanLimit = map.int("networksScanLimit", 500),
+      clicksScanned = map.int("clicksScanned"),
+      conversionsScanned = map.int("conversionsScanned"),
+      clicksTruncated = clicksTrunc,
+      conversionsTruncated = convTrunc,
+      campaignsTruncated = campTrunc,
+      networksTruncated = netTrunc,
+      isTruncated = map.bool("isTruncated", clicksTrunc || convTrunc || campTrunc || netTrunc),
+      queryStrategy = map.str("queryStrategy", "INDEXED_TIMESTAMP_RANGE")
+    )
+  }
 
   fun parseDashboardResult(dataMap: Map<*, *>): AdminCampaignDashboardResult {
     val summaryMap = dataMap["summary"] as? Map<*, *> ?: emptyMap<String, Any>()
     val campPageMap = dataMap["campaignPerformance"] as? Map<*, *> ?: emptyMap<String, Any>()
     val netPageMap = dataMap["networkPerformance"] as? Map<*, *> ?: emptyMap<String, Any>()
+    val scanLimitsMap = dataMap["scanLimits"] as? Map<*, *>
 
     val campItems =
       (campPageMap["items"] as? List<*>)?.mapNotNull { (it as? Map<*, *>)?.let(::parseCampaignPerformanceRow) }
@@ -222,6 +269,13 @@ internal object CampaignAdminParsers {
     val netItems =
       (netPageMap["items"] as? List<*>)?.mapNotNull { (it as? Map<*, *>)?.let(::parseNetworkPerformanceRow) }
         ?: emptyList()
+
+    val grossTf = summaryMap.long("grossCreditedTf")
+    val reversedTf = summaryMap.long("reversedTf")
+    val recoveredTf = summaryMap.long("recoveredTf", reversedTf)
+    val shortfallTf = summaryMap.long("shortfallTf", (reversedTf - recoveredTf).coerceAtLeast(0L))
+    val netTf = summaryMap.long("netCreditedTf", grossTf - reversedTf)
+    val netWalletImpactTf = summaryMap.long("netWalletImpactTf", grossTf - recoveredTf)
 
     val summary = CampaignTrackingSummaryMetrics(
       totalCampaigns = summaryMap.int("totalCampaigns"),
@@ -236,18 +290,33 @@ internal object CampaignAdminParsers {
       reversedConversions = summaryMap.long("reversedConversions"),
       approvalRatePercent = summaryMap.doubleOrNull("approvalRatePercent"),
       hasConversionData = summaryMap.bool("hasConversionData"),
-      grossCreditedTf = summaryMap.long("grossCreditedTf"),
-      reversedTf = summaryMap.long("reversedTf"),
-      netCreditedTf = summaryMap.long("netCreditedTf"),
+      grossCreditedTf = grossTf,
+      reversedTf = reversedTf,
+      recoveredTf = recoveredTf,
+      shortfallTf = shortfallTf,
+      netCreditedTf = netTf,
+      netWalletImpactTf = netWalletImpactTf,
       grossCreditedCents = summaryMap.long("grossCreditedCents"),
-      netCreditedCents = summaryMap.long("netCreditedCents")
+      reversedCents = summaryMap.long("reversedCents", coinsToCents(reversedTf)),
+      recoveredCents = summaryMap.long("recoveredCents", coinsToCents(recoveredTf)),
+      shortfallCents = summaryMap.long("shortfallCents", coinsToCents(shortfallTf)),
+      netCreditedCents = summaryMap.long("netCreditedCents"),
+      netWalletImpactCents = summaryMap.long("netWalletImpactCents"),
+      orphanedClicksCount = summaryMap.long("orphanedClicksCount"),
+      orphanedConversionsCount = summaryMap.long("orphanedConversionsCount"),
+      orphanedGrossCreditedTf = summaryMap.long("orphanedGrossCreditedTf"),
+      orphanedReversedTf = summaryMap.long("orphanedReversedTf"),
+      orphanedCampaignCount = summaryMap.int("orphanedCampaignCount"),
+      orphanedNetworkCount = summaryMap.int("orphanedNetworkCount")
     )
 
     return AdminCampaignDashboardResult(
       dateRange = dataMap.str("dateRange", CampaignAnalyticsDateRange.LAST_30_DAYS.wireValue),
+      timezone = dataMap.str("timezone", "Asia/Kolkata"),
       startAtMillis = dataMap.long("startAtMillis"),
       endAtMillis = dataMap.long("endAtMillis"),
       summary = summary,
+      scanLimits = parseScanLimits(scanLimitsMap),
       campaignPerformance = AdminPaginatedSlice(
         items = campItems,
         nextCursor = campPageMap.str("nextCursor"),

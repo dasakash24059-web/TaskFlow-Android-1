@@ -10,6 +10,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.model.AdminCampaignNetworkItem
 import com.example.data.model.AdminCampaignTrackingConfigItem
@@ -18,21 +20,28 @@ import com.example.data.model.AdminNetworkSignatureConfig
 import com.example.data.model.AdminPaginatedSlice
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.CampaignAnalyticsDateRange
+import com.example.data.model.CampaignAnalyticsScanLimits
 import com.example.data.model.CampaignPerformanceRow
 import com.example.data.model.CampaignTrackingSummaryMetrics
 import com.example.data.model.CampaignVerificationMode
+import com.example.data.model.MAX_CAMPAIGN_TRACKING_URL_LENGTH
 import com.example.data.model.NetworkCapabilitiesSpec
 import com.example.data.model.NetworkPerformanceRow
 import com.example.data.model.NetworkSignatureAlgorithm
 import com.example.data.model.REGISTERED_CAMPAIGN_SECRET_KEYS
 import com.example.data.model.coinsToCents
 import com.example.data.model.formatApprovalRateDisplay
+import com.example.data.model.formatSignedRewardInr
+import com.example.data.model.isValidCampaignTrackingUrl
+import com.example.data.model.parseStrictIsoDateToUtcMillis
 import com.example.data.model.validateAdminCampaignConfigForm
 import com.example.data.model.validateAdminNetworkForm
+import com.example.data.repository.CampaignAdminParsers
 import com.example.data.repository.FirebaseRewardCloudFunctionsClient
 import com.example.data.repository.TaskFlowRepository
 import com.example.ui.admin.AdminCampaignTrackingSection
 import com.example.ui.admin.AdminDashboardScreen
+import com.example.ui.admin.CampaignTrackingConfigEditorDialog
 import com.example.ui.auth.PortalLoginTarget
 import com.example.ui.theme.AppThemeMode
 import com.example.ui.theme.TaskFlowTheme
@@ -667,4 +676,481 @@ class AdminCampaignTrackingPhase3DTest {
     composeTestRule.onNodeWithText("Admin Access Restricted", substring = true).assertIsDisplayed()
     composeTestRule.onNodeWithTag("admin_campaign_tracking_root").assertDoesNotExist()
   }
+
+  @Test
+  fun high2_parsersAndAnalyticsUi_handleNegativeNet_recoveredShortfall_orphans_andTruncationBanner() {
+    assertEquals("-₹4.00", formatSignedRewardInr(-400L))
+    assertEquals("₹4.00", formatSignedRewardInr(400L))
+
+    val parsed = CampaignAdminParsers.parseDashboardResult(
+      mapOf(
+        "dateRange" to "TODAY",
+        "timezone" to "Asia/Kolkata",
+        "summary" to mapOf(
+          "totalCampaigns" to 1,
+          "activeCampaigns" to 1,
+          "totalClicks" to 10,
+          "totalConversions" to 1,
+          "reversedConversions" to 1,
+          "grossCreditedTf" to 0,
+          "reversedTf" to 500,
+          "recoveredTf" to 300,
+          "shortfallTf" to 200,
+          "netCreditedTf" to -500,
+          "grossCreditedCents" to 0,
+          "reversedCents" to 400,
+          "recoveredCents" to 240,
+          "shortfallCents" to 160,
+          "netCreditedCents" to -400,
+          "orphanedClicksCount" to 2,
+          "orphanedConversionsCount" to 1,
+          "orphanedCampaignCount" to 1,
+          "orphanedNetworkCount" to 1
+        ),
+        "scanLimits" to mapOf(
+          "clicksScanLimit" to 5000,
+          "conversionsScanLimit" to 5000,
+          "clicksScanned" to 5000,
+          "conversionsScanned" to 1,
+          "clicksTruncated" to true,
+          "conversionsTruncated" to false,
+          "isTruncated" to true,
+          "queryStrategy" to "INDEXED_TIMESTAMP_RANGE"
+        ),
+        "campaignPerformance" to mapOf(
+          "items" to listOf(
+            mapOf(
+              "campaignId" to "camp_deleted",
+              "title" to "Orphaned Campaign (camp_deleted)",
+              "networkId" to "net_deleted",
+              "isOrphaned" to true,
+              "clicksCount" to 2,
+              "totalConversions" to 1,
+              "reversedConversions" to 1,
+              "grossCreditedTf" to 0,
+              "reversedTf" to 500,
+              "recoveredTf" to 300,
+              "shortfallTf" to 200,
+              "netCreditedTf" to -500,
+              "netCreditedCents" to -400
+            )
+          ),
+          "totalCount" to 1
+        ),
+        "networkPerformance" to mapOf("items" to emptyList<Any>(), "totalCount" to 0)
+      )
+    )
+
+    assertEquals("Asia/Kolkata", parsed.timezone)
+    assertEquals(-500L, parsed.summary.netCreditedTf)
+    assertEquals(-400L, parsed.summary.netCreditedCents)
+    assertEquals(300L, parsed.summary.recoveredTf)
+    assertEquals(200L, parsed.summary.shortfallTf)
+    assertTrue(parsed.scanLimits.isTruncated)
+    assertTrue(parsed.scanLimits.clicksTruncated)
+    assertTrue(parsed.campaignPerformance.items.single().isOrphaned)
+
+    val uiState = AdminCampaignTrackingUiState(
+      hasLoadedDashboard = true,
+      selectedDateRange = CampaignAnalyticsDateRange.TODAY,
+      timezone = parsed.timezone,
+      summary = parsed.summary,
+      scanLimits = parsed.scanLimits,
+      campaignPerformance = parsed.campaignPerformance,
+      networkPerformance = parsed.networkPerformance
+    )
+
+    composeTestRule.setContent {
+      TaskFlowTheme(themeMode = AppThemeMode.LIGHT) {
+        AdminCampaignTrackingSection(
+          state = uiState,
+          onRefreshAll = {},
+          onSelectDateRange = {},
+          onLoadMoreCampaignAnalytics = {},
+          onLoadMoreNetworkAnalytics = {},
+          onLoadMoreNetworks = {},
+          onLoadMoreConfigs = {},
+          onSaveNetwork = { _, _, onDone -> onDone() },
+          onToggleNetworkStatus = { _, _ -> },
+          onSaveCampaignConfig = { _, _, onDone -> onDone() },
+          onToggleCampaignConfigStatus = { _, _ -> },
+          onClearFeedback = {}
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("analytics_truncation_warning_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("analytics_orphaned_warning_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("overview_lazy_column")
+      .performScrollToNode(hasTestTag("overview_gross_vs_net_card"))
+    composeTestRule.onNodeWithTag("metric_net_tf_rewards").assertTextContains("-500", substring = true)
+    composeTestRule.onNodeWithTag("metric_net_tf_rewards").assertTextContains("-₹4.00", substring = true)
+    composeTestRule.onNodeWithTag("metric_recovered_tf").assertTextContains("300", substring = true)
+    composeTestRule.onNodeWithTag("metric_shortfall_tf").assertTextContains("200", substring = true)
+
+    composeTestRule.onNodeWithTag("campaign_tracking_tab_analytics").performClick()
+    composeTestRule.onNodeWithTag("analytics_truncation_warning_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("analytics_lazy_column")
+      .performScrollToNode(hasTestTag("analytics_campaign_row_camp_deleted"))
+    composeTestRule.onNodeWithTag("analytics_campaign_row_camp_deleted")
+      .assertTextContains("ORPHANED", substring = true)
+  }
+
+  @Test
+  fun medium1AndMedium2_strictDateValidation_endDateClearing_and2000CharUrlParity() {
+    val net = sampleNetwork()
+
+    // Invalid calendar dates return null (never silently 0L) and fail validation explicitly
+    assertEquals(null, parseStrictIsoDateToUtcMillis("2026-02-30", endOfDay = true))
+    assertEquals(null, parseStrictIsoDateToUtcMillis("not-a-date", endOfDay = false))
+    assertEquals(0L, parseStrictIsoDateToUtcMillis("", endOfDay = true))
+
+    val invalidDateErrors = validateAdminCampaignConfigForm(
+      sampleConfig().copy(startDate = "2026-02-30", endDate = "bad-date"),
+      net
+    )
+    assertTrue(invalidDateErrors.any { it.contains("Start date must be a valid YYYY-MM-DD") })
+    assertTrue(invalidDateErrors.any { it.contains("End date must be a valid YYYY-MM-DD") })
+
+    val invertedDateErrors = validateAdminCampaignConfigForm(
+      sampleConfig().copy(startDate = "2026-12-31", endDate = "2026-01-01"),
+      net
+    )
+    assertTrue(invertedDateErrors.any { it.contains("End date must be on or after") })
+
+    // URL length parity: 2000 accepted, 2001 rejected
+    val prefix = "https://track.alpha.example/click?p="
+    val url2000 = prefix + "x".repeat(MAX_CAMPAIGN_TRACKING_URL_LENGTH - prefix.length)
+    val url2001 = prefix + "x".repeat(MAX_CAMPAIGN_TRACKING_URL_LENGTH - prefix.length + 1)
+    assertTrue(isValidCampaignTrackingUrl(url2000))
+    assertFalse(isValidCampaignTrackingUrl(url2001))
+    assertTrue(validateAdminCampaignConfigForm(sampleConfig().copy(trackingBaseUrl = url2000), net).isEmpty())
+    assertTrue(validateAdminCampaignConfigForm(sampleConfig().copy(trackingBaseUrl = url2001), net).isNotEmpty())
+
+    // Clearing endDate in CampaignTrackingConfigEditorDialog must clear expiresAtMillis to 0L
+    var savedItem: AdminCampaignTrackingConfigItem? = null
+    val initialWithExpiry = sampleConfig().copy(
+      startDate = "2026-01-01",
+      endDate = "2026-12-31",
+      startAtMillis = parseStrictIsoDateToUtcMillis("2026-01-01", endOfDay = false)!!,
+      expiresAtMillis = parseStrictIsoDateToUtcMillis("2026-12-31", endOfDay = true)!!
+    )
+    composeTestRule.setContent {
+      TaskFlowTheme(themeMode = AppThemeMode.LIGHT) {
+        CampaignTrackingConfigEditorDialog(
+          initial = initialWithExpiry,
+          networks = listOf(net),
+          isSaving = false,
+          onDismiss = {},
+          onSave = { item, _ -> savedItem = item }
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("campaign_config_end_date_input").performTextClearance()
+    composeTestRule.onNodeWithTag("campaign_config_form_save_button").performClick()
+    assertNotNull(savedItem)
+    assertEquals("", savedItem!!.endDate)
+    assertEquals(0L, savedItem!!.expiresAtMillis)
+  }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun medium2_page2NetworkLookup_resolvesExactNetworkInViewModelAndDialog() = runTest {
+    val dispatcher = StandardTestDispatcher(testScheduler)
+    Dispatchers.setMain(dispatcher)
+    try {
+      val firestore = createTestFirestore()
+      val page1Network = sampleNetwork(id = "net_page1")
+      val page2Network = sampleNetwork(id = "net_page2")
+      var exactLookupRequestedId: String? = null
+      var upsertedCampaignId: String? = null
+
+      val client = FirebaseRewardCloudFunctionsClient(
+        firestore = firestore,
+        rewardCallableInvoker = { fnName, payload ->
+          val payloadMap = payload as? Map<*, *> ?: emptyMap<Any, Any>()
+          when (fnName) {
+            "adminListCampaignNetworks" -> {
+              val requestedNetId = (payloadMap["networkId"] as? String).orEmpty()
+              if (requestedNetId == "net_page2") {
+                exactLookupRequestedId = requestedNetId
+                mapOf(
+                  "items" to listOf(
+                    mapOf(
+                      "networkId" to page2Network.networkId,
+                      "name" to page2Network.name,
+                      "adapterType" to page2Network.adapterType,
+                      "isActive" to true,
+                      "capabilities" to mapOf("supportsIncentivizedTraffic" to true, "supportsPostback" to true),
+                      "signatureConfig" to mapOf(
+                        "algorithm" to "HMAC_SHA256",
+                        "secretEnvKey" to REGISTERED_CAMPAIGN_SECRET_KEYS[1]
+                      )
+                    )
+                  ),
+                  "totalCount" to 1,
+                  "hasMore" to false,
+                  "nextCursor" to ""
+                )
+              } else {
+                mapOf(
+                  "items" to listOf(
+                    mapOf(
+                      "networkId" to page1Network.networkId,
+                      "name" to page1Network.name,
+                      "adapterType" to page1Network.adapterType,
+                      "isActive" to true,
+                      "capabilities" to mapOf("supportsIncentivizedTraffic" to true, "supportsPostback" to true),
+                      "signatureConfig" to mapOf(
+                        "algorithm" to "HMAC_SHA256",
+                        "secretEnvKey" to REGISTERED_CAMPAIGN_SECRET_KEYS[1]
+                      )
+                    )
+                  ),
+                  "totalCount" to 2,
+                  "hasMore" to true,
+                  "nextCursor" to "net_page1"
+                )
+              }
+            }
+            "adminUpsertCampaignTrackingConfig" -> {
+              upsertedCampaignId = payloadMap["campaignId"] as? String
+              mapOf(
+                "config" to mapOf(
+                  "configId" to (payloadMap["campaignId"] ?: "camp_page2"),
+                  "campaignId" to (payloadMap["campaignId"] ?: "camp_page2"),
+                  "title" to (payloadMap["title"] ?: "Page 2 Campaign"),
+                  "networkId" to "net_page2",
+                  "verificationMode" to "AFFILIATE_POSTBACK",
+                  "isActive" to true,
+                  "rewardTf" to 250
+                )
+              )
+            }
+            "adminGetCampaignTrackingDashboard" -> mapOf(
+              "dateRange" to "30D",
+              "summary" to mapOf("totalCampaigns" to 1),
+              "campaignPerformance" to mapOf("items" to emptyList<Any>(), "totalCount" to 0),
+              "networkPerformance" to mapOf("items" to emptyList<Any>(), "totalCount" to 0)
+            )
+            else -> mapOf("items" to emptyList<Any>(), "totalCount" to 0)
+          }
+        }
+      )
+
+      val repo = TaskFlowRepository(
+        firestore = firestore,
+        rewardFunctionsClient = client,
+        authenticatedUidProvider = { "uid_admin" }
+      )
+      val adminVm = TaskFlowViewModel(
+        repository = repo,
+        currentUserId = "uid_admin",
+        currentUserEmail = BOOTSTRAPPED_ADMIN_EMAIL,
+        currentUserDisplayName = "Admin",
+        initialPortal = PortalLoginTarget.ADMIN_DASHBOARD
+      )
+
+      // Load only page 1 of networks (contains net_page1, NOT net_page2)
+      adminVm.loadCampaignTrackingNetworks(loadMore = false)
+      advanceUntilIdle()
+      assertEquals(listOf("net_page1"), adminVm.campaignTrackingAdminState.value.networks.items.map { it.networkId })
+
+      // Upsert campaign referencing net_page2 -> ViewModel resolves net_page2 via exact lookup and saves cleanly!
+      var saveSucceeded = false
+      adminVm.upsertCampaignTrackingConfig(
+        item = sampleConfig(id = "camp_page2", networkId = "net_page2"),
+        isEdit = true,
+        onSuccess = { saveSucceeded = true }
+      )
+      advanceUntilIdle()
+
+      assertEquals("net_page2", exactLookupRequestedId)
+      assertEquals("camp_page2", upsertedCampaignId)
+      assertTrue(saveSucceeded)
+      assertTrue(adminVm.campaignTrackingAdminState.value.resolvedNetworksById.containsKey("net_page2"))
+    } finally {
+      Dispatchers.resetMain()
+    }
+  }
+
+  @Test
+  fun medium2_editorDialog_triggersEnsureNetworkLoadedForPage2Network_andShowsLoadMoreChip() {
+    var requestedLookupId: String? = null
+    var loadMoreClicked = false
+    val page1Net = sampleNetwork(id = "net_page1")
+    val editingCampaignOnPage2Net = sampleConfig(id = "camp_p2", networkId = "net_page2")
+
+    composeTestRule.setContent {
+      TaskFlowTheme(themeMode = AppThemeMode.LIGHT) {
+        CampaignTrackingConfigEditorDialog(
+          initial = editingCampaignOnPage2Net,
+          networks = listOf(page1Net),
+          isSaving = false,
+          hasMoreNetworks = true,
+          onLoadMoreNetworks = { loadMoreClicked = true },
+          onEnsureNetworkLoaded = { requestedLookupId = it },
+          onDismiss = {},
+          onSave = { _, _ -> }
+        )
+      }
+    }
+
+    composeTestRule.waitForIdle()
+    assertEquals("net_page2", requestedLookupId)
+    composeTestRule.onNodeWithTag("campaign_editor_load_more_networks_chip").performClick()
+    assertTrue(loadMoreClicked)
+  }
+
+  @Test
+  fun low1_networkDisableDialog_showsActiveDependentCampaignCountImpactAndPreservesKillSwitch() {
+    var toggledNetworkId: String? = null
+    var toggledNextActive: Boolean? = null
+
+    val activeNet = sampleNetwork(id = "net_live").copy(
+      name = "Live Partner Net",
+      isActive = true,
+      activeCampaignsCount = 3
+    )
+    val state = AdminCampaignTrackingUiState(
+      hasLoadedDashboard = true,
+      networks = AdminPaginatedSlice(items = listOf(activeNet), totalCount = 1),
+      configs = AdminPaginatedSlice(
+        items = listOf(
+          sampleConfig(id = "camp_a", networkId = "net_live").copy(isActive = true),
+          sampleConfig(id = "camp_b", networkId = "net_live").copy(isActive = false)
+        ),
+        totalCount = 2
+      )
+    )
+
+    composeTestRule.setContent {
+      TaskFlowTheme(themeMode = AppThemeMode.LIGHT) {
+        AdminCampaignTrackingSection(
+          state = state,
+          onRefreshAll = {},
+          onSelectDateRange = {},
+          onLoadMoreCampaignAnalytics = {},
+          onLoadMoreNetworkAnalytics = {},
+          onLoadMoreNetworks = {},
+          onLoadMoreConfigs = {},
+          onSaveNetwork = { _, _, _ -> },
+          onToggleNetworkStatus = { id, nextActive ->
+            toggledNetworkId = id
+            toggledNextActive = nextActive
+          },
+          onSaveCampaignConfig = { _, _, _ -> },
+          onToggleCampaignConfigStatus = { _, _ -> },
+          onClearFeedback = {}
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("campaign_tracking_tab_networks").performClick()
+    composeTestRule.onNodeWithTag("networks_lazy_column")
+      .performScrollToNode(hasTestTag("network_card_net_live"))
+    composeTestRule.onNodeWithTag("toggle_network_net_live").performClick()
+
+    // Confirmation dialog must clearly show active dependent count (3), click & postback impact, and non-mutation notice
+    composeTestRule.onNodeWithTag("campaign_status_confirm_dialog").assertExists()
+    composeTestRule.onNodeWithText("3 active dependent campaigns", substring = true).assertExists()
+    composeTestRule.onNodeWithText("stop new campaign click issuance", substring = true).assertExists()
+    composeTestRule.onNodeWithText("interrupt associated postback processing", substring = true).assertExists()
+    composeTestRule.onNodeWithText("will not be modified or deactivated", substring = true).assertExists()
+
+    // Confirming preserves immediate kill-switch capability
+    composeTestRule.onNodeWithTag("campaign_status_confirm_button").performClick()
+    assertEquals("net_live", toggledNetworkId)
+    assertEquals(false, toggledNextActive)
+  }
+
+  @Test
+  fun low3_analyticsUi_displaysNetWalletImpact_defaultCampaignLimit1000_andManagementTruncationBanners() {
+    // 1) Verify campaignsScanLimit fallback default is 1000 (both data class default and parser fallback)
+    assertEquals(1000, CampaignAnalyticsScanLimits().campaignsScanLimit)
+    val parsedDefaultLimits = CampaignAdminParsers.parseScanLimits(emptyMap<String, Any>())
+    assertEquals(1000, parsedDefaultLimits.campaignsScanLimit)
+    assertEquals(500, parsedDefaultLimits.networksScanLimit)
+    assertEquals(5000, parsedDefaultLimits.clicksScanLimit)
+    assertEquals(5000, parsedDefaultLimits.conversionsScanLimit)
+
+    // 2) Verify Net Wallet Impact row and management-tab truncation warning banners
+    val summary = CampaignTrackingSummaryMetrics(
+      totalCampaigns = 1,
+      activeCampaigns = 1,
+      totalNetworks = 1,
+      activeNetworks = 1,
+      grossCreditedTf = 500L,
+      reversedTf = 500L,
+      recoveredTf = 300L,
+      shortfallTf = 200L,
+      netCreditedTf = 0L,
+      netWalletImpactTf = 200L,
+      grossCreditedCents = 400L,
+      reversedCents = 400L,
+      recoveredCents = 240L,
+      shortfallCents = 160L,
+      netCreditedCents = 0L,
+      netWalletImpactCents = 160L
+    )
+    val state = AdminCampaignTrackingUiState(
+      hasLoadedDashboard = true,
+      summary = summary,
+      scanLimits = CampaignAnalyticsScanLimits(
+        campaignsScanLimit = 1000,
+        networksScanLimit = 500,
+        campaignsTruncated = true,
+        networksTruncated = true,
+        isTruncated = true
+      ),
+      networks = AdminPaginatedSlice(
+        items = listOf(sampleNetwork(id = "net_trunc")),
+        totalCount = 1,
+        truncated = true
+      ),
+      configs = AdminPaginatedSlice(
+        items = listOf(sampleConfig(id = "camp_trunc", networkId = "net_trunc")),
+        totalCount = 1,
+        truncated = true
+      )
+    )
+
+    composeTestRule.setContent {
+      TaskFlowTheme(themeMode = AppThemeMode.LIGHT) {
+        AdminCampaignTrackingSection(
+          state = state,
+          onRefreshAll = {},
+          onSelectDateRange = {},
+          onLoadMoreCampaignAnalytics = {},
+          onLoadMoreNetworkAnalytics = {},
+          onLoadMoreNetworks = {},
+          onLoadMoreConfigs = {},
+          onSaveNetwork = { _, _, _ -> },
+          onToggleNetworkStatus = { _, _ -> },
+          onSaveCampaignConfig = { _, _, _ -> },
+          onToggleCampaignConfigStatus = { _, _ -> },
+          onClearFeedback = {}
+        )
+      }
+    }
+
+    // Overview card displays Net Wallet Impact TF and INR
+    composeTestRule.onNodeWithTag("overview_lazy_column")
+      .performScrollToNode(hasTestTag("overview_gross_vs_net_card"))
+    composeTestRule.onNodeWithTag("metric_net_wallet_impact_tf").assertTextContains("200", substring = true)
+    composeTestRule.onNodeWithTag("metric_net_wallet_impact_tf").assertTextContains("₹1.60", substring = true)
+
+    // Networks tab displays truncation warning banner with 500 limit
+    composeTestRule.onNodeWithTag("campaign_tracking_tab_networks").performClick()
+    composeTestRule.onNodeWithTag("networks_truncation_warning_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("networks_truncation_warning_banner").assertTextContains("500", substring = true)
+
+    // Campaigns tab displays truncation warning banner with 1000 limit
+    composeTestRule.onNodeWithTag("campaign_tracking_tab_campaigns").performClick()
+    composeTestRule.onNodeWithTag("campaigns_truncation_warning_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("campaigns_truncation_warning_banner").assertTextContains("1000", substring = true)
+  }
 }
+
+

@@ -88,12 +88,14 @@ fun formatVisibleUserEmail(email: String?, role: String? = null): String {
   return if (trimmed.isNotEmpty()) trimmed else "Verified Member"
 }
 
+const val MAX_TASK_URL_LENGTH: Int = 2000
+
 /**
  * Validates that a Task URL is a well-formed HTTPS link (e.g., Google Play Store or website link).
  */
 fun isValidTaskUrl(rawUrl: String): Boolean {
   val trimmed = rawUrl.trim()
-  if (trimmed.isEmpty() || trimmed.length > 1000) return false
+  if (trimmed.isEmpty() || trimmed.length > MAX_TASK_URL_LENGTH) return false
   if (!trimmed.startsWith("https://", ignoreCase = true)) return false
   return try {
     val uri = URI(trimmed)
@@ -1315,6 +1317,18 @@ data class AdminRecord(
 fun formatRewardInr(cents: Long): String {
   val rupees = cents / 100.0
   return String.format(Locale.US, "₹%.2f", rupees)
+}
+
+/**
+ * Formats signed integer amounts (100 units = ₹1.00) so negative net periods render as "-₹4.00"
+ * rather than "₹-4.00".
+ */
+fun formatSignedRewardInr(cents: Long): String {
+  if (cents < 0L) {
+    val absCents = if (cents == Long.MIN_VALUE) Long.MAX_VALUE else -cents
+    return "-${formatRewardInr(absCents)}"
+  }
+  return formatRewardInr(cents)
 }
 
 /**

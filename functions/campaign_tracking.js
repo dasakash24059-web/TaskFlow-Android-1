@@ -151,6 +151,19 @@ function tfToBalanceCents(rewardTf) {
 }
 
 /**
+ * Signed variant of `tfToBalanceCents` preserving 125 TF = ₹1 (100 paise)
+ * for period cashflow reporting where reversals exceed new credits.
+ */
+function signedTfToBalanceCents(netTf) {
+  const num = Number(netTf || 0);
+  if (!Number.isFinite(num) || num === 0) return 0;
+  const clean = Math.trunc(num);
+  if (clean === 0) return 0;
+  const sign = clean < 0 ? -1 : 1;
+  return sign * tfToBalanceCents(Math.abs(clean));
+}
+
+/**
  * Computes wallet updates when a campaign conversion is approved & credited.
  * Credits withdrawable task earnings (`eligibleCoins`, `balanceCents`, `balanceCoins`)
  * while preserving existing `promotionalCoins`.
@@ -439,13 +452,15 @@ function isHostMatchesAllowlist(hostname, allowedHosts) {
  * Strictly validates an external campaign destination URL to block open redirects,
  * non-HTTPS schemes, embedded credentials, local/private network hosts, and template injections.
  */
+const MAX_DESTINATION_URL_LENGTH = 2000;
+
 function validateDestinationUrl(rawUrl, allowedHosts = []) {
   if (typeof rawUrl !== "string") {
     return { valid: false, reason: "Destination URL must be a string." };
   }
   const trimmed = rawUrl.trim();
-  if (!trimmed || trimmed.length > 2000) {
-    return { valid: false, reason: "Destination URL is missing or exceeds max length." };
+  if (!trimmed || trimmed.length > MAX_DESTINATION_URL_LENGTH) {
+    return { valid: false, reason: `Destination URL is missing or exceeds max length (${MAX_DESTINATION_URL_LENGTH} chars).` };
   }
   if (/[\s\x00-\x1f\x7f<>]/.test(trimmed)) {
     return { valid: false, reason: "Destination URL contains invalid whitespace or control characters." };
@@ -936,6 +951,8 @@ module.exports = {
   generateSecureClickId,
   buildExternalTxnLockId,
   tfToBalanceCents,
+  signedTfToBalanceCents,
+  MAX_DESTINATION_URL_LENGTH,
   computeCampaignApprovedWallet,
   computeCampaignReversedWallet,
   timingSafeEqualStrings,

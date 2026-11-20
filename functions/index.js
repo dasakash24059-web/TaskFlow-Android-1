@@ -4144,14 +4144,18 @@ async function handleCreateCampaignClick(request, deps = {}) {
       ? configData.allowedCountries.map((c) => String(c || "").trim().toUpperCase())
       : [];
     const allowsAllCountries = allowedCountries.length === 0 || allowedCountries.includes("ALL");
-    if (!allowsAllCountries) {
-      if (!countryContext.countryCode) {
+    const requireVerifiedCountry =
+      configData.conversionRequirements?.requireVerifiedCountry === true;
+    if (!allowsAllCountries || requireVerifiedCountry) {
+      if (!countryContext.countryCode || countryContext.trustLevel === "UNVERIFIED") {
         throw new HttpsError(
           "failed-precondition",
-          "Verified country signal is unavailable for this geo-restricted campaign."
+          !allowsAllCountries
+            ? "Verified country signal is unavailable for this geo-restricted campaign."
+            : "Verified country signal is required for this campaign."
         );
       }
-      if (!allowedCountries.includes(countryContext.countryCode)) {
+      if (!allowsAllCountries && !allowedCountries.includes(countryContext.countryCode)) {
         throw new HttpsError(
           "permission-denied",
           `This campaign is not available in your country (${countryContext.countryCode}).`
@@ -4160,10 +4164,10 @@ async function handleCreateCampaignClick(request, deps = {}) {
     }
     const resolvedCountryCode = countryContext.countryCode || "UNVERIFIED";
 
-    if (
-      configData.requireDeviceAttestation === true &&
-      deviceContext.trustLevel !== "APP_CHECK_VERIFIED"
-    ) {
+    const requireAppCheck =
+      configData.requireDeviceAttestation === true ||
+      configData.conversionRequirements?.requireAppCheck === true;
+    if (requireAppCheck && deviceContext.trustLevel !== "APP_CHECK_VERIFIED") {
       throw new HttpsError(
         "failed-precondition",
         "Device attestation (App Check) is required for this campaign."
@@ -4469,10 +4473,21 @@ async function handleCreateCampaignClick(request, deps = {}) {
         )
       )
     );
+    const attributionWindowMs = attributionWindowHours * 60 * 60 * 1000;
+    const rawClickTtlMinutes = configData.clickTtlMinutes;
+    const hasConfiguredClickTtl =
+      rawClickTtlMinutes !== undefined &&
+      rawClickTtlMinutes !== null &&
+      Number.isFinite(Number(rawClickTtlMinutes)) &&
+      Number(rawClickTtlMinutes) > 0;
+    const clickTtlMs = hasConfiguredClickTtl
+      ? Math.min(43200, Math.max(1, Math.floor(Number(rawClickTtlMinutes)))) * 60 * 1000
+      : attributionWindowMs;
+    const effectiveClickLifetimeMs = Math.min(clickTtlMs, attributionWindowMs);
     const clickExpiresAtMillis =
       expiresAtMillis > 0
-        ? Math.min(expiresAtMillis, nowMillis + attributionWindowHours * 60 * 60 * 1000)
-        : nowMillis + attributionWindowHours * 60 * 60 * 1000;
+        ? Math.min(expiresAtMillis, nowMillis + effectiveClickLifetimeMs)
+        : nowMillis + effectiveClickLifetimeMs;
     const clickExpiresAt = makeTimestampFromMillis(clickExpiresAtMillis, deps);
     const trackingNetworkRef = String(
       configData.trackingNetworkRef ||
@@ -4974,23 +4989,33 @@ async function executeConversionTransitionInTransaction({
     }
 
     // Hold verified postbacks in PENDING when campaign/network requires manual Admin review
+    // or explicitly disables automatic postback approval (`autoApproveVerifiedPostback === false`).
     let effectiveTargetState = targetState;
     let effectiveStatusReason = statusReason;
+    const convReqs = configData.conversionRequirements || {};
+    const requiresAdminReviewPolicy =
+      convReqs.requireAdminApproval === true ||
+      convReqs.autoApproveVerifiedPostback === false ||
+      networkData?.capabilities?.requiresManualReview === true;
     if (
       !isAdminOverride &&
       targetState === CAMPAIGN_CONVERSION_STATES.APPROVED &&
-      (configData.conversionRequirements?.requireAdminApproval === true ||
-        networkData?.capabilities?.requiresManualReview === true) &&
+      requiresAdminReviewPolicy &&
       (!existingConversion || existingConversion.state === CAMPAIGN_CONVERSION_STATES.PENDING)
     ) {
+      const holdReason =
+        convReqs.requireAdminApproval === true || networkData?.capabilities?.requiresManualReview === true
+          ? "HELD_FOR_ADMIN_REVIEW"
+          : "AUTO_APPROVAL_DISABLED";
       if (!existingConversion) {
         effectiveTargetState = CAMPAIGN_CONVERSION_STATES.PENDING;
-        effectiveStatusReason = statusReason || "HELD_FOR_ADMIN_REVIEW";
+        effectiveStatusReason = holdReason;
       } else {
         return {
           success: true,
           duplicate: true,
           heldForReview: true,
+          holdReason,
           conversionId,
           clickId,
           campaignId,

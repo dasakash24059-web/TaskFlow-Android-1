@@ -66,6 +66,7 @@ import com.example.data.model.AdminCampaignNetworkItem
 import com.example.data.model.AdminCampaignTrackingConfigItem
 import com.example.data.model.AdminCampaignTrackingUiState
 import com.example.data.model.CampaignAnalyticsDateRange
+import com.example.data.model.CampaignAnalyticsScanLimits
 import com.example.data.model.CampaignPerformanceRow
 import com.example.data.model.CampaignTrackingSummaryMetrics
 import com.example.data.model.NetworkPerformanceRow
@@ -73,6 +74,7 @@ import com.example.data.model.coinsToCents
 import com.example.data.model.formatApprovalRateDisplay
 import com.example.data.model.formatCoins
 import com.example.data.model.formatRewardInr
+import com.example.data.model.formatSignedRewardInr
 import com.example.ui.theme.taskFlowColors
 import java.util.Locale
 
@@ -104,7 +106,8 @@ fun AdminCampaignTrackingSection(
   onToggleNetworkStatus: (String, Boolean) -> Unit,
   onSaveCampaignConfig: (AdminCampaignTrackingConfigItem, Boolean, () -> Unit) -> Unit,
   onToggleCampaignConfigStatus: (String, Boolean) -> Unit,
-  onClearFeedback: () -> Unit
+  onClearFeedback: () -> Unit,
+  onEnsureNetworkLoaded: (String) -> Unit = {}
 ) {
   val tfColors = taskFlowColors()
   var activeSubTab by rememberSaveable { mutableStateOf(CampaignTrackingSubTab.OVERVIEW) }
@@ -113,6 +116,15 @@ fun AdminCampaignTrackingSection(
   var editingConfig by remember { mutableStateOf<AdminCampaignTrackingConfigItem?>(null) }
   var showConfigDialog by remember { mutableStateOf(false) }
   var pendingStatusConfirm by remember { mutableStateOf<PendingStatusConfirmation?>(null) }
+
+  val availableNetworksForEditor = remember(state.networks.items, state.resolvedNetworksById) {
+    val byId = linkedMapOf<String, AdminCampaignNetworkItem>()
+    state.networks.items.forEach { byId[it.networkId] = it }
+    state.resolvedNetworksById.values.forEach { net ->
+      byId.putIfAbsent(net.networkId, net)
+    }
+    byId.values.toList()
+  }
 
   if (showNetworkDialog) {
     CampaignNetworkEditorDialog(
@@ -128,8 +140,14 @@ fun AdminCampaignTrackingSection(
   if (showConfigDialog) {
     CampaignTrackingConfigEditorDialog(
       initial = editingConfig,
-      networks = state.networks.items,
+      networks = availableNetworksForEditor,
       isSaving = state.isSaving,
+      hasMoreNetworks = state.networks.hasMore,
+      isLoadingNetworks = state.isLoadingNetworks,
+      isLoadingNetworkLookup = state.isLoadingNetworkLookup,
+      networkLookupError = state.networkLookupError,
+      onLoadMoreNetworks = onLoadMoreNetworks,
+      onEnsureNetworkLoaded = onEnsureNetworkLoaded,
       onDismiss = { showConfigDialog = false },
       onSave = { item, isEdit ->
         onSaveCampaignConfig(item, isEdit) { showConfigDialog = false }
@@ -292,12 +310,31 @@ fun AdminCampaignTrackingSection(
           },
           onRequestToggleStatus = { net ->
             val nextActive = !net.isActive
+            val loadedActiveDependentCount = buildSet {
+              state.configs.items
+                .filter { it.networkId == net.networkId && it.isActive }
+                .forEach { add(it.campaignId) }
+              state.campaignPerformance.items
+                .filter { it.networkId == net.networkId && !it.isOrphaned && it.isActive }
+                .forEach { add(it.campaignId) }
+            }.size
+            val activeDependentCount = maxOf(net.activeCampaignsCount, loadedActiveDependentCount)
             pendingStatusConfirm = PendingStatusConfirmation(
               title = if (nextActive) "Enable Network?" else "Disable Network?",
               message = if (nextActive) {
                 "Enable '${net.name}' (${net.networkId}) for campaign tracking and postback verification?"
               } else {
-                "Disable '${net.name}' (${net.networkId})? New click issuance and activation of linked campaigns will be blocked."
+                buildString {
+                  if (activeDependentCount > 0) {
+                    val noun = if (activeDependentCount == 1) "campaign" else "campaigns"
+                    append("Warning: $activeDependentCount active dependent $noun currently use '${net.name}' (${net.networkId}).\n\n")
+                  } else {
+                    append("Disable '${net.name}' (${net.networkId})?\n\n")
+                  }
+                  append(
+                    "Disabling this network will immediately stop new campaign click issuance and may interrupt associated postback processing. Dependent campaigns will not be modified or deactivated automatically."
+                  )
+                }
               },
               confirmLabel = if (nextActive) "Enable" else "Disable",
               isDestructive = !nextActive,
@@ -381,6 +418,18 @@ private fun CampaignTrackingOverviewTab(
     contentPadding = PaddingValues(16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp)
   ) {
+    if (state.scanLimits.isTruncated) {
+      item {
+        AnalyticsTruncationWarningBanner(scanLimits = state.scanLimits)
+      }
+    }
+
+    if (summary.orphanedConversionsCount > 0L || summary.orphanedClicksCount > 0L) {
+      item {
+        AnalyticsOrphanedRecordsBanner(summary = summary)
+      }
+    }
+
     item {
       GrossVsNetFinancialCard(
         summary = summary,
@@ -502,12 +551,141 @@ private fun CampaignTrackingOverviewTab(
 }
 
 @Composable
+private fun AnalyticsTruncationWarningBanner(scanLimits: CampaignAnalyticsScanLimits) {
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = MaterialTheme.colorScheme.errorContainer,
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+    modifier = Modifier
+      .fillMaxWidth()
+      .semantics(mergeDescendants = true) {}
+      .testTag("analytics_truncation_warning_banner")
+  ) {
+    Row(
+      modifier = Modifier.padding(12.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Icon(
+        imageVector = Icons.Default.ErrorOutline,
+        contentDescription = "Truncated analytics warning",
+        tint = MaterialTheme.colorScheme.error,
+        modifier = Modifier.size(20.dp)
+      )
+      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+          text = "Partial Analytics Window (Scan Limit Reached)",
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onErrorContainer
+        )
+        val details = buildList {
+          if (scanLimits.clicksTruncated) add("clicks capped at ${scanLimits.clicksScanLimit}")
+          if (scanLimits.conversionsTruncated) add("conversions capped at ${scanLimits.conversionsScanLimit}")
+          if (scanLimits.campaignsTruncated) add("campaigns capped at ${scanLimits.campaignsScanLimit}")
+          if (scanLimits.networksTruncated) add("networks capped at ${scanLimits.networksScanLimit}")
+        }.joinToString(", ")
+        Text(
+          text = "Totals reflect scanned records only (${details.ifEmpty { "limit reached" }}). Narrow the date range for exact reporting.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onErrorContainer
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun ManagementListTruncationBanner(
+  title: String,
+  message: String,
+  tag: String
+) {
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = MaterialTheme.colorScheme.errorContainer,
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+    modifier = Modifier
+      .fillMaxWidth()
+      .semantics(mergeDescendants = true) {}
+      .testTag(tag)
+  ) {
+    Row(
+      modifier = Modifier.padding(12.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Icon(
+        imageVector = Icons.Default.ErrorOutline,
+        contentDescription = title,
+        tint = MaterialTheme.colorScheme.error,
+        modifier = Modifier.size(18.dp)
+      )
+      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+          text = title,
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onErrorContainer
+        )
+        Text(
+          text = message,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onErrorContainer
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun AnalyticsOrphanedRecordsBanner(summary: CampaignTrackingSummaryMetrics) {
+  val tfColors = taskFlowColors()
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = tfColors.neutralSurfaceBg,
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    modifier = Modifier
+      .fillMaxWidth()
+      .semantics(mergeDescendants = true) {}
+      .testTag("analytics_orphaned_warning_banner")
+  ) {
+    Row(
+      modifier = Modifier.padding(12.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Icon(
+        imageVector = Icons.Default.ErrorOutline,
+        contentDescription = "Orphaned records notice",
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(18.dp)
+      )
+      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+          text = "Orphaned Campaign/Network Activity Included",
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+          text = "${summary.orphanedClicksCount} clicks & ${summary.orphanedConversionsCount} conversions reference deleted/unregistered IDs and are shown as ORPHANED rows for 100% reconciliation.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      }
+    }
+  }
+}
+
+@Composable
 private fun GrossVsNetFinancialCard(
   summary: CampaignTrackingSummaryMetrics,
   dateRangeLabel: String,
   tag: String
 ) {
   val tfColors = taskFlowColors()
+  val netColor = if (summary.netCreditedTf < 0L) tfColors.debitText else tfColors.goldText
   Card(
     shape = RoundedCornerShape(16.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -584,12 +762,12 @@ private fun GrossVsNetFinancialCard(
             text = formatCoins(summary.netCreditedTf),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
-            color = tfColors.goldText
+            color = netColor
           )
           Text(
-            text = formatRewardInr(summary.netCreditedCents),
+            text = formatSignedRewardInr(summary.netCreditedCents),
             style = MaterialTheme.typography.labelSmall,
-            color = tfColors.goldText
+            color = netColor
           )
         }
       }
@@ -606,10 +784,75 @@ private fun GrossVsNetFinancialCard(
           color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
-          text = "-${formatCoins(summary.reversedTf)} (${formatRewardInr(coinsToCents(summary.reversedTf))})",
+          text = "-${formatCoins(summary.reversedTf)} (${formatRewardInr(summary.reversedCents)})",
           style = MaterialTheme.typography.labelSmall,
           fontWeight = FontWeight.SemiBold,
           color = tfColors.debitText
+        )
+      }
+
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .semantics(mergeDescendants = true) {}
+          .testTag("metric_recovered_tf"),
+        horizontalArrangement = Arrangement.SpaceBetween
+      ) {
+        Text(
+          text = "Actually Recovered From Wallets",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+          text = "${formatCoins(summary.recoveredTf)} (${formatRewardInr(summary.recoveredCents)})",
+          style = MaterialTheme.typography.labelSmall,
+          fontWeight = FontWeight.Medium,
+          color = MaterialTheme.colorScheme.onSurface
+        )
+      }
+
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .semantics(mergeDescendants = true) {}
+          .testTag("metric_shortfall_tf"),
+        horizontalArrangement = Arrangement.SpaceBetween
+      ) {
+        Text(
+          text = "Unrecovered Shortfall",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+          text = "${formatCoins(summary.shortfallTf)} (${formatRewardInr(summary.shortfallCents)})",
+          style = MaterialTheme.typography.labelSmall,
+          fontWeight = if (summary.shortfallTf > 0L) FontWeight.Bold else FontWeight.Medium,
+          color = if (summary.shortfallTf > 0L) tfColors.debitText else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      }
+
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .semantics(mergeDescendants = true) {}
+          .testTag("metric_net_wallet_impact_tf"),
+        horizontalArrangement = Arrangement.SpaceBetween
+      ) {
+        Text(
+          text = "Net Wallet Impact (Gross − Recovered)",
+          style = MaterialTheme.typography.labelSmall,
+          fontWeight = FontWeight.Medium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        val walletImpactColor =
+          if (summary.netWalletImpactTf < 0L) tfColors.debitText else MaterialTheme.colorScheme.onSurface
+        Text(
+          text = "${formatCoins(summary.netWalletImpactTf)} (${formatSignedRewardInr(summary.netWalletImpactCents)})",
+          style = MaterialTheme.typography.labelSmall,
+          fontWeight = FontWeight.SemiBold,
+          color = walletImpactColor
         )
       }
     }
@@ -659,6 +902,16 @@ private fun CampaignTrackingNetworksTab(
           Spacer(Modifier.width(4.dp))
           Text("Add")
         }
+      }
+    }
+
+    if (state.networks.truncated || state.scanLimits.networksTruncated) {
+      item {
+        ManagementListTruncationBanner(
+          title = "Network List Truncated (Scan Limit Reached)",
+          message = "Showing up to ${state.scanLimits.networksScanLimit} scanned networks. Use exact network lookup or narrow filters if a network is missing.",
+          tag = "networks_truncation_warning_banner"
+        )
       }
     }
 
@@ -854,6 +1107,16 @@ private fun CampaignTrackingConfigsTab(
           Spacer(Modifier.width(4.dp))
           Text("Create")
         }
+      }
+    }
+
+    if (state.configs.truncated || state.scanLimits.campaignsTruncated) {
+      item {
+        ManagementListTruncationBanner(
+          title = "Campaign List Truncated (Scan Limit Reached)",
+          message = "Showing up to ${state.scanLimits.campaignsScanLimit} scanned campaigns. Narrow filters to view specific campaigns.",
+          tag = "campaigns_truncation_warning_banner"
+        )
       }
     }
 
@@ -1083,6 +1346,18 @@ private fun CampaignTrackingAnalyticsTab(
       return@LazyColumn
     }
 
+    if (state.scanLimits.isTruncated) {
+      item {
+        AnalyticsTruncationWarningBanner(scanLimits = state.scanLimits)
+      }
+    }
+
+    if (state.summary.orphanedConversionsCount > 0L || state.summary.orphanedClicksCount > 0L) {
+      item {
+        AnalyticsOrphanedRecordsBanner(summary = state.summary)
+      }
+    }
+
     item {
       GrossVsNetFinancialCard(
         summary = state.summary,
@@ -1164,6 +1439,7 @@ private fun CampaignTrackingAnalyticsTab(
 @Composable
 private fun CampaignPerformanceCard(row: CampaignPerformanceRow) {
   val tfColors = taskFlowColors()
+  val netColor = if (row.netCreditedTf < 0L) tfColors.debitText else tfColors.goldText
   Card(
     shape = RoundedCornerShape(14.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -1194,12 +1470,22 @@ private fun CampaignPerformanceCard(row: CampaignPerformanceRow) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
         }
-        StatusPill(
-          text = "Rate: ${formatApprovalRateDisplay(row.approvalRatePercent, row.totalConversions)}",
-          bg = tfColors.neutralSurfaceBg,
-          fg = tfColors.neutralSurfaceFg,
-          border = tfColors.neutralSurfaceBorder
-        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+          if (row.isOrphaned) {
+            StatusPill(
+              text = "ORPHANED",
+              bg = MaterialTheme.colorScheme.errorContainer,
+              fg = MaterialTheme.colorScheme.onErrorContainer,
+              border = MaterialTheme.colorScheme.error.copy(alpha = 0.4f)
+            )
+          }
+          StatusPill(
+            text = "Rate: ${formatApprovalRateDisplay(row.approvalRatePercent, row.totalConversions)}",
+            bg = tfColors.neutralSurfaceBg,
+            fg = tfColors.neutralSurfaceFg,
+            border = tfColors.neutralSurfaceBorder
+          )
+        }
       }
 
       Text(
@@ -1218,10 +1504,18 @@ private fun CampaignPerformanceCard(row: CampaignPerformanceRow) {
           color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
-          text = "Net: ${formatCoins(row.netCreditedTf)} (${formatRewardInr(row.netCreditedCents)})",
+          text = "Net: ${formatCoins(row.netCreditedTf)} (${formatSignedRewardInr(row.netCreditedCents)})",
           style = MaterialTheme.typography.labelSmall,
           fontWeight = FontWeight.Bold,
-          color = tfColors.goldText
+          color = netColor
+        )
+      }
+
+      if (row.reversedTf > 0L) {
+        Text(
+          text = "Reversed: ${formatCoins(row.reversedTf)} • Recovered: ${formatCoins(row.recoveredTf)} • Shortfall: ${formatCoins(row.shortfallTf)}",
+          style = MaterialTheme.typography.labelSmall,
+          color = tfColors.debitText
         )
       }
 
@@ -1245,6 +1539,7 @@ private fun CampaignPerformanceCard(row: CampaignPerformanceRow) {
 @Composable
 private fun NetworkPerformanceCard(row: NetworkPerformanceRow) {
   val tfColors = taskFlowColors()
+  val netColor = if (row.netCreditedTf < 0L) tfColors.debitText else tfColors.goldText
   Card(
     shape = RoundedCornerShape(14.dp),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -1275,12 +1570,22 @@ private fun NetworkPerformanceCard(row: NetworkPerformanceRow) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
         }
-        StatusPill(
-          text = "Rate: ${formatApprovalRateDisplay(row.approvalRatePercent, row.totalConversions)}",
-          bg = tfColors.neutralSurfaceBg,
-          fg = tfColors.neutralSurfaceFg,
-          border = tfColors.neutralSurfaceBorder
-        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+          if (row.isOrphaned) {
+            StatusPill(
+              text = "ORPHANED",
+              bg = MaterialTheme.colorScheme.errorContainer,
+              fg = MaterialTheme.colorScheme.onErrorContainer,
+              border = MaterialTheme.colorScheme.error.copy(alpha = 0.4f)
+            )
+          }
+          StatusPill(
+            text = "Rate: ${formatApprovalRateDisplay(row.approvalRatePercent, row.totalConversions)}",
+            bg = tfColors.neutralSurfaceBg,
+            fg = tfColors.neutralSurfaceFg,
+            border = tfColors.neutralSurfaceBorder
+          )
+        }
       }
 
       Text(
@@ -1299,10 +1604,18 @@ private fun NetworkPerformanceCard(row: NetworkPerformanceRow) {
           color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
-          text = "Net: ${formatCoins(row.netCreditedTf)} (${formatRewardInr(row.netCreditedCents)})",
+          text = "Net: ${formatCoins(row.netCreditedTf)} (${formatSignedRewardInr(row.netCreditedCents)})",
           style = MaterialTheme.typography.labelSmall,
           fontWeight = FontWeight.Bold,
-          color = tfColors.goldText
+          color = netColor
+        )
+      }
+
+      if (row.reversedTf > 0L) {
+        Text(
+          text = "Reversed: ${formatCoins(row.reversedTf)} • Recovered: ${formatCoins(row.recoveredTf)} • Shortfall: ${formatCoins(row.shortfallTf)}",
+          style = MaterialTheme.typography.labelSmall,
+          color = tfColors.debitText
         )
       }
     }

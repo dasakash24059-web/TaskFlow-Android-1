@@ -340,7 +340,8 @@ interface RewardCloudFunctionsClient {
   suspend fun adminListCampaignNetworks(
     pageSize: Int = 20,
     cursor: String = "",
-    search: String = ""
+    search: String = "",
+    networkId: String = ""
   ): AdminPaginatedSlice<AdminCampaignNetworkItem> = AdminPaginatedSlice()
 
   suspend fun adminUpsertCampaignNetwork(
@@ -2543,11 +2544,13 @@ class FirebaseRewardCloudFunctionsClient(
   override suspend fun adminListCampaignNetworks(
     pageSize: Int,
     cursor: String,
-    search: String
+    search: String,
+    networkId: String
   ): AdminPaginatedSlice<AdminCampaignNetworkItem> = withTimeout(20_000L) {
     val payload = mutableMapOf<String, Any>("pageSize" to pageSize.coerceIn(1, 50))
     if (cursor.isNotBlank()) payload["cursor"] = cursor.trim()
     if (search.isNotBlank()) payload["search"] = search.trim()
+    if (networkId.isNotBlank()) payload["networkId"] = networkId.trim()
     val responseData = try {
       invokeRewardCallable("adminListCampaignNetworks", payload)
     } catch (e: CancellationException) {
@@ -6891,15 +6894,31 @@ class TaskFlowRepository(
   suspend fun adminListCampaignNetworks(
     pageSize: Int = 20,
     cursor: String = "",
-    search: String = ""
+    search: String = "",
+    networkId: String = ""
   ): Result<AdminPaginatedSlice<AdminCampaignNetworkItem>> = runCatching {
     val authUid = authenticatedUidProvider()?.trim().orEmpty()
     require(authUid.isNotBlank()) { "Admin sign-in required." }
     rewardFunctionsClient.adminListCampaignNetworks(
       pageSize = pageSize,
       cursor = cursor.trim(),
-      search = search.trim()
+      search = search.trim(),
+      networkId = networkId.trim()
     )
+  }
+
+  suspend fun adminGetCampaignNetworkById(
+    networkId: String
+  ): Result<AdminCampaignNetworkItem?> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    val targetId = networkId.trim()
+    require(targetId.isNotEmpty()) { "Valid networkId is required." }
+    val slice = rewardFunctionsClient.adminListCampaignNetworks(
+      pageSize = 1,
+      networkId = targetId
+    )
+    slice.items.firstOrNull { it.networkId == targetId }
   }
 
   suspend fun adminUpsertCampaignNetwork(

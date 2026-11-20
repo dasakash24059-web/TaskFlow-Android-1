@@ -21,6 +21,7 @@ const {
   isSecretKeyName,
   stripPrivateTrackingFields,
   tfToBalanceCents,
+  signedTfToBalanceCents,
   toMillisValue,
   validateDestinationUrl
 } = require("./campaign_tracking");
@@ -63,6 +64,88 @@ const SUPPORTED_HMAC_ENCODING_SET = new Set(SUPPORTED_HMAC_ENCODINGS);
 const MAX_PAGE_SIZE = 50;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_ANALYTICS_SCAN_LIMIT = 5000;
+const DEFAULT_SCAN_BATCH_SIZE = 500;
+const MAX_NETWORKS_SCAN_LIMIT = 500;
+const MAX_CAMPAIGNS_SCAN_LIMIT = 1000;
+const IST_OFFSET_MS = 330 * 60 * 1000; // Asia/Kolkata (UTC+05:30, no DST)
+const ANALYTICS_TIMEZONE = "Asia/Kolkata";
+
+const ORPHANED_CAMPAIGN_SENTINEL = "__ORPHANED_CAMPAIGN__";
+const ORPHANED_NETWORK_SENTINEL = "__ORPHANED_NETWORK__";
+
+const MANAGED_NETWORK_TOP_LEVEL_KEYS = new Set([
+  "networkId",
+  "name",
+  "adapterType",
+  "adapterId",
+  "isActive",
+  "capabilities",
+  "allowedDestinationHosts",
+  "parameterMapping",
+  "postbackStatusMapping",
+  "signatureConfig",
+  "createdBy",
+  "updatedBy",
+  "createdAt",
+  "updatedAt"
+]);
+
+const MANAGED_CAMPAIGN_CONFIG_TOP_LEVEL_KEYS = new Set([
+  "configId",
+  "campaignId",
+  "title",
+  "isActive",
+  "startDate",
+  "endDate",
+  "startAt",
+  "expiresAt",
+  "startAtMillis",
+  "expiresAtMillis",
+  "submissionBudget",
+  "usedSubmissions",
+  "reservedClickSlots",
+  "issuedClicksCount",
+  "rewardBudgetTf",
+  "spentBudgetTf",
+  "allowedCountries",
+  "allowedPlatforms",
+  "rewardTf",
+  "rewardCents",
+  "verificationMode",
+  "networkId",
+  "trackingNetworkRef",
+  "trackingBaseUrl",
+  "allowedDestinationHosts",
+  "parameterOverrides",
+  "conversionRequirements",
+  "requireDeviceAttestation",
+  "clickTtlMinutes",
+  "clickCooldownMs",
+  "maxClicksPerUserPerHour",
+  "clickOverbookingBuffer",
+  "createdBy",
+  "updatedBy",
+  "createdAt",
+  "updatedAt"
+]);
+
+function extractPreservedSafeFields(existingData, managedKeys) {
+  if (!existingData || typeof existingData !== "object") return {};
+  const preserved = {};
+  for (const [key, val] of Object.entries(existingData)) {
+    if (managedKeys.has(key) || isSecretKeyName(key)) continue;
+    preserved[key] = val;
+  }
+  return preserved;
+}
+
+function parseIsoDateToUtcMillis(dateStr, endOfDay = false) {
+  const cleaned = String(dateStr || "").trim();
+  if (!cleaned || !VALID_DATE_YYYY_MM_DD_REGEX.test(cleaned)) return 0;
+  const [y, m, d] = cleaned.split("-").map(Number);
+  const utcStart = Date.UTC(y, m - 1, d, 0, 0, 0, 0);
+  return endOfDay ? utcStart + 86_399_999 : utcStart;
+}
 
 function assertNoRawSecretFields(obj, pathPrefix = "", HttpsErrorCtor = Error) {
   if (!obj || typeof obj !== "object") return;
@@ -166,7 +249,7 @@ function validateStrictDateString(raw, fieldName, HttpsErrorCtor) {
   return cleaned;
 }
 
-function validateAndSanitizeNetworkInput(data, HttpsErrorCtor) {
+function validateAndSanitizeNetworkInput(data, HttpsErrorCtor, existingNetwork = null) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new HttpsErrorCtor("invalid-argument", "Network configuration payload is required.");
   }
@@ -231,9 +314,18 @@ function validateAndSanitizeNetworkInput(data, HttpsErrorCtor) {
     return cleaned;
   };
 
+  const existingParamMap =
+    existingNetwork?.parameterMapping && typeof existingNetwork.parameterMapping === "object"
+      ? existingNetwork.parameterMapping
+      : {};
+
   const extraStaticParams = {};
-  if (rawMap.extraStaticParams && typeof rawMap.extraStaticParams === "object" && !Array.isArray(rawMap.extraStaticParams)) {
-    const entries = Object.entries(rawMap.extraStaticParams);
+  const rawExtraStaticParams =
+    rawMap.extraStaticParams !== undefined
+      ? rawMap.extraStaticParams
+      : existingParamMap.extraStaticParams;
+  if (rawExtraStaticParams && typeof rawExtraStaticParams === "object" && !Array.isArray(rawExtraStaticParams)) {
+    const entries = Object.entries(rawExtraStaticParams);
     if (entries.length > 20) {
       throw new HttpsErrorCtor("invalid-argument", "extraStaticParams cannot exceed 20 entries.");
     }
@@ -250,6 +342,11 @@ function validateAndSanitizeNetworkInput(data, HttpsErrorCtor) {
     }
   }
 
+  const idempotencyParam =
+    rawMap.idempotencyParam !== undefined
+      ? sanitizeOptionalParam(rawMap.idempotencyParam, "")
+      : sanitizeOptionalParam(existingParamMap.idempotencyParam, "");
+
   const parameterMapping = {
     clickIdParam,
     userIdParam: sanitizeOptionalParam(rawMap.userIdParam, ""),
@@ -258,13 +355,18 @@ function validateAndSanitizeNetworkInput(data, HttpsErrorCtor) {
     statusParam: sanitizeOptionalParam(rawMap.statusParam, "status") || "status",
     payoutParam: sanitizeOptionalParam(rawMap.payoutParam, "payout") || "payout",
     signatureParam: sanitizeOptionalParam(rawMap.signatureParam, "sig") || "sig",
+    ...(idempotencyParam ? { idempotencyParam } : {}),
     extraStaticParams
   };
 
-  // Postback status mapping validation
+  // Postback status mapping validation (preserve existing mapping on update when omitted)
   const postbackStatusMapping = {};
-  if (data.postbackStatusMapping && typeof data.postbackStatusMapping === "object" && !Array.isArray(data.postbackStatusMapping)) {
-    const entries = Object.entries(data.postbackStatusMapping);
+  const rawPostbackStatusMapping =
+    data.postbackStatusMapping !== undefined
+      ? data.postbackStatusMapping
+      : existingNetwork?.postbackStatusMapping;
+  if (rawPostbackStatusMapping && typeof rawPostbackStatusMapping === "object" && !Array.isArray(rawPostbackStatusMapping)) {
+    const entries = Object.entries(rawPostbackStatusMapping);
     if (entries.length > 30) {
       throw new HttpsErrorCtor("invalid-argument", "postbackStatusMapping cannot exceed 30 entries.");
     }
@@ -395,6 +497,37 @@ function validateAndSanitizeNetworkInput(data, HttpsErrorCtor) {
     }
   }
 
+  const existingSig =
+    existingNetwork?.signatureConfig && typeof existingNetwork.signatureConfig === "object"
+      ? existingNetwork.signatureConfig
+      : {};
+  const rawSignaturePrefix =
+    rawSig.signaturePrefix !== undefined
+      ? String(rawSig.signaturePrefix || "").trim()
+      : String(existingSig.signaturePrefix || "").trim();
+  if (rawSignaturePrefix.length > 32 || /[\r\n\x00]/.test(rawSignaturePrefix)) {
+    throw new HttpsErrorCtor(
+      "invalid-argument",
+      "signatureConfig.signaturePrefix must be at most 32 printable characters."
+    );
+  }
+
+  let adapterId = "";
+  if (data.adapterId !== undefined) {
+    adapterId = String(data.adapterId || "").trim();
+    if (adapterId && !VALID_ID_REGEX.test(adapterId)) {
+      throw new HttpsErrorCtor(
+        "invalid-argument",
+        "adapterId must be 1-128 alphanumeric, underscore, or hyphen characters."
+      );
+    }
+  } else if (existingNetwork?.adapterId) {
+    const existingAdapterId = String(existingNetwork.adapterId || "").trim();
+    if (VALID_ID_REGEX.test(existingAdapterId)) {
+      adapterId = existingAdapterId;
+    }
+  }
+
   const signatureConfig = {
     algorithm,
     headerName:
@@ -409,6 +542,7 @@ function validateAndSanitizeNetworkInput(data, HttpsErrorCtor) {
         ? queryParamName || "sig"
         : "",
     secretEnvKey: algorithm === "NONE" ? "" : secretEnvKey,
+    ...(rawSignaturePrefix ? { signaturePrefix: rawSignaturePrefix } : {}),
     ...(HMAC_ALGORITHMS.has(algorithm)
       ? {
           signingMode,
@@ -422,6 +556,7 @@ function validateAndSanitizeNetworkInput(data, HttpsErrorCtor) {
     networkId,
     name,
     adapterType,
+    ...(adapterId ? { adapterId } : {}),
     isActive,
     capabilities,
     allowedDestinationHosts,
@@ -447,6 +582,7 @@ function toSafeAdminNetworkDto(docData = {}, fallbackId = "") {
     networkId: String(clean.networkId || fallbackId || "").trim(),
     name: String(clean.name || "").trim(),
     adapterType: String(clean.adapterType || CAMPAIGN_VERIFICATION_MODES.AFFILIATE_POSTBACK).trim(),
+    ...(clean.adapterId ? { adapterId: String(clean.adapterId).trim() } : {}),
     isActive: clean.isActive === true,
     capabilities: {
       supportsIncentivizedTraffic: Boolean(caps.supportsIncentivizedTraffic),
@@ -466,6 +602,7 @@ function toSafeAdminNetworkDto(docData = {}, fallbackId = "") {
       statusParam: String(map.statusParam || "status"),
       payoutParam: String(map.payoutParam || "payout"),
       signatureParam: String(map.signatureParam || "sig"),
+      ...(map.idempotencyParam ? { idempotencyParam: String(map.idempotencyParam).trim() } : {}),
       extraStaticParams:
         map.extraStaticParams && typeof map.extraStaticParams === "object"
           ? stripPrivateTrackingFields(map.extraStaticParams)
@@ -480,6 +617,7 @@ function toSafeAdminNetworkDto(docData = {}, fallbackId = "") {
       headerName: String(sig.headerName || ""),
       queryParamName: String(sig.queryParamName || "sig"),
       secretEnvKey: isRegisteredCampaignSecretKey(sig.secretEnvKey) ? String(sig.secretEnvKey) : "",
+      ...(sig.signaturePrefix ? { signaturePrefix: String(sig.signaturePrefix).trim() } : {}),
       signingMode: String(sig.signingMode || "SORTED_PARAMS"),
       encoding: String(sig.encoding || "hex"),
       signedFields: Array.isArray(sig.signedFields) ? sig.signedFields.map(String) : [],
@@ -490,7 +628,179 @@ function toSafeAdminNetworkDto(docData = {}, fallbackId = "") {
   };
 }
 
-function validateAndSanitizeCampaignConfigInput(data, networkData, existingConfig, HttpsErrorCtor) {
+/**
+ * Shared server-authoritative guard verifying that a campaign configuration and its
+ * tracking network are mutually compatible and eligible for active traffic.
+ * Used by campaign upsert, campaign reactivation, and network mutation safety checks.
+ */
+function validateCampaignActivationCompatibility({
+  config,
+  networkData,
+  nowMillis = Date.now(),
+  HttpsErrorCtor = Error,
+  skipScheduleAndBudget = false
+}) {
+  const campaignId = String(config?.campaignId || config?.configId || "").trim() || "campaign";
+  const networkId = String(config?.networkId || networkData?.networkId || "").trim();
+
+  if (!networkData || networkData.isActive !== true) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Cannot activate campaign '${campaignId}' while network '${networkId}' is missing or disabled.`
+    );
+  }
+
+  const verificationMode = String(config?.verificationMode || "").trim().toUpperCase();
+  if (!isValidVerificationMode(verificationMode)) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Campaign '${campaignId}' has an invalid verificationMode '${verificationMode}'.`
+    );
+  }
+
+  const networkAdapterType = String(networkData.adapterType || "").trim().toUpperCase();
+  if (networkAdapterType && networkAdapterType !== verificationMode) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Campaign '${campaignId}' verificationMode '${verificationMode}' is incompatible with network '${networkId}' adapterType '${networkAdapterType}'.`
+    );
+  }
+
+  const caps = networkData.capabilities && typeof networkData.capabilities === "object"
+    ? networkData.capabilities
+    : {};
+  const sig = networkData.signatureConfig && typeof networkData.signatureConfig === "object"
+    ? networkData.signatureConfig
+    : {};
+  const sigAlg = String(sig.algorithm || "NONE").trim().toUpperCase();
+
+  if (caps.supportsIncentivizedTraffic !== true) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Network '${networkId}' does not explicitly permit incentivized traffic for campaign '${campaignId}'.`
+    );
+  }
+
+  if (POSTBACK_REQUIRED_MODES.has(verificationMode)) {
+    if (caps.supportsPostback !== true) {
+      throw new HttpsErrorCtor(
+        "failed-precondition",
+        `Network '${networkId}' does not support postback verification required by campaign '${campaignId}'.`
+      );
+    }
+    if (
+      !SUPPORTED_SIGNATURE_ALGORITHM_SET.has(sigAlg) ||
+      sigAlg === "NONE" ||
+      !isRegisteredCampaignSecretKey(sig.secretEnvKey)
+    ) {
+      throw new HttpsErrorCtor(
+        "failed-precondition",
+        `Network '${networkId}' must configure a valid signature scheme and registered secret key for campaign '${campaignId}'.`
+      );
+    }
+  } else if (
+    verificationMode === CAMPAIGN_VERIFICATION_MODES.TELEGRAM_BOT_API &&
+    sigAlg !== "NONE" &&
+    (!SUPPORTED_SIGNATURE_ALGORITHM_SET.has(sigAlg) || !isRegisteredCampaignSecretKey(sig.secretEnvKey))
+  ) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Network '${networkId}' has an invalid Telegram signature/secret configuration for campaign '${campaignId}'.`
+    );
+  }
+
+  const trackingBaseUrl = String(config?.trackingBaseUrl || "").trim();
+  const combinedAllowedHosts = [
+    ...(Array.isArray(networkData.allowedDestinationHosts) ? networkData.allowedDestinationHosts : []),
+    ...(Array.isArray(config?.allowedDestinationHosts) ? config.allowedDestinationHosts : [])
+  ].filter(Boolean);
+
+  if (POSTBACK_REQUIRED_MODES.has(verificationMode) && !trackingBaseUrl) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Campaign '${campaignId}' requires a valid trackingBaseUrl for ${verificationMode}.`
+    );
+  }
+  if (trackingBaseUrl) {
+    const urlCheck = validateDestinationUrl(trackingBaseUrl, combinedAllowedHosts);
+    if (!urlCheck.valid) {
+      throw new HttpsErrorCtor(
+        "failed-precondition",
+        `Campaign '${campaignId}' trackingBaseUrl failed validation against network '${networkId}': ${urlCheck.reason}`
+      );
+    }
+  }
+
+  if (skipScheduleAndBudget) {
+    return;
+  }
+
+  const rewardTf = Math.floor(Number(config?.rewardTf || 0));
+  if (!Number.isInteger(rewardTf) || rewardTf <= 0) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Campaign '${campaignId}' has an invalid TF reward.`
+    );
+  }
+
+  const startDate = String(config?.startDate || "").trim();
+  const endDate = String(config?.endDate || "").trim();
+  if (startDate && endDate && endDate < startDate) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Campaign '${campaignId}' endDate (${endDate}) cannot be earlier than startDate (${startDate}).`
+    );
+  }
+
+  const startAtMillis = Math.max(
+    Number(config?.startAtMillis || 0),
+    toMillisValue(config?.startAt),
+    startDate ? parseIsoDateToUtcMillis(startDate, false) : 0
+  );
+  const expiresAtMillis = Math.max(
+    Number(config?.expiresAtMillis || 0),
+    toMillisValue(config?.expiresAt),
+    endDate ? parseIsoDateToUtcMillis(endDate, true) : 0
+  );
+  if (startAtMillis > 0 && expiresAtMillis > 0 && expiresAtMillis < startAtMillis) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Campaign '${campaignId}' expiration time cannot precede start time.`
+    );
+  }
+  if (expiresAtMillis > 0 && nowMillis > expiresAtMillis) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Cannot activate expired campaign '${campaignId}'. Extend its expiration date first.`
+    );
+  }
+
+  const submissionBudget = Math.max(0, Math.floor(Number(config?.submissionBudget || 0)));
+  const usedSubmissions = Math.max(0, Math.floor(Number(config?.usedSubmissions || 0)));
+  if (submissionBudget > 0 && usedSubmissions >= submissionBudget) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Cannot activate campaign '${campaignId}' because its submission budget (${usedSubmissions}/${submissionBudget}) is exhausted.`
+    );
+  }
+
+  const rewardBudgetTf = Math.max(0, Math.floor(Number(config?.rewardBudgetTf || 0)));
+  const spentBudgetTf = Math.max(0, Math.floor(Number(config?.spentBudgetTf || 0)));
+  if (rewardBudgetTf > 0 && spentBudgetTf + rewardTf > rewardBudgetTf) {
+    throw new HttpsErrorCtor(
+      "failed-precondition",
+      `Cannot activate campaign '${campaignId}' because its TF reward budget (${spentBudgetTf}/${rewardBudgetTf} TF) cannot fund another ${rewardTf} TF payout.`
+    );
+  }
+}
+
+function validateAndSanitizeCampaignConfigInput(
+  data,
+  networkData,
+  existingConfig,
+  HttpsErrorCtor,
+  nowMillis = Date.now()
+) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new HttpsErrorCtor("invalid-argument", "Campaign tracking configuration payload is required.");
   }
@@ -593,10 +903,21 @@ function validateAndSanitizeCampaignConfigInput(data, networkData, existingConfi
 
   const startDate = validateStrictDateString(data.startDate, "startDate", HttpsErrorCtor);
   const endDate = validateStrictDateString(data.endDate, "endDate", HttpsErrorCtor);
-  const startAtMillis = Number(data.startAtMillis ?? 0);
-  const expiresAtMillis = Number(data.expiresAtMillis ?? 0);
+  if (startDate && endDate && endDate < startDate) {
+    throw new HttpsErrorCtor("invalid-argument", "endDate must be on or after startDate.");
+  }
+
+  let startAtMillis = Number(data.startAtMillis ?? 0);
+  let expiresAtMillis = Number(data.expiresAtMillis ?? 0);
   if (!Number.isFinite(startAtMillis) || startAtMillis < 0 || !Number.isFinite(expiresAtMillis) || expiresAtMillis < 0) {
     throw new HttpsErrorCtor("invalid-argument", "startAtMillis and expiresAtMillis must be non-negative numbers.");
+  }
+  // Keep date strings and UTC millisecond timestamps consistent when millis are omitted/zero
+  if (startDate && startAtMillis === 0) {
+    startAtMillis = parseIsoDateToUtcMillis(startDate, false);
+  }
+  if (endDate && expiresAtMillis === 0) {
+    expiresAtMillis = parseIsoDateToUtcMillis(endDate, true);
   }
   if (startAtMillis > 0 && expiresAtMillis > 0 && expiresAtMillis < startAtMillis) {
     throw new HttpsErrorCtor("invalid-argument", "Campaign expiration time must be >= start time.");
@@ -672,10 +993,18 @@ function validateAndSanitizeCampaignConfigInput(data, networkData, existingConfi
     }
   }
 
+  const existingReqs =
+    existingConfig?.conversionRequirements && typeof existingConfig.conversionRequirements === "object"
+      ? existingConfig.conversionRequirements
+      : {};
   const rawReq = data.conversionRequirements && typeof data.conversionRequirements === "object"
     ? data.conversionRequirements
     : {};
-  const attributionWindowHours = Number(rawReq.attributionWindowHours ?? 72);
+  const hasRawReq = data.conversionRequirements && typeof data.conversionRequirements === "object";
+
+  const attributionWindowHours = Number(
+    rawReq.attributionWindowHours ?? existingReqs.attributionWindowHours ?? 72
+  );
   if (!Number.isInteger(attributionWindowHours) || attributionWindowHours < 1 || attributionWindowHours > 2160) {
     throw new HttpsErrorCtor("invalid-argument", "attributionWindowHours must be an integer between 1 and 2160.");
   }
@@ -685,30 +1014,116 @@ function validateAndSanitizeCampaignConfigInput(data, networkData, existingConfi
       ? true
       : rawReq.requireUniqueClickId !== undefined
         ? Boolean(rawReq.requireUniqueClickId)
-        : true;
+        : existingReqs.requireUniqueClickId !== undefined
+          ? Boolean(existingReqs.requireUniqueClickId)
+          : true;
 
   const requireAdminApproval =
     verificationMode === CAMPAIGN_VERIFICATION_MODES.MANUAL_PROOF
       ? true
-      : Boolean(rawReq.requireAdminApproval);
+      : rawReq.requireAdminApproval !== undefined
+        ? Boolean(rawReq.requireAdminApproval)
+        : Boolean(existingReqs.requireAdminApproval);
+
+  const autoApproveVerifiedPostback = requireAdminApproval
+    ? false
+    : rawReq.autoApproveVerifiedPostback !== undefined
+      ? Boolean(rawReq.autoApproveVerifiedPostback)
+      : existingReqs.autoApproveVerifiedPostback !== undefined
+        ? Boolean(existingReqs.autoApproveVerifiedPostback)
+        : true;
+
+  const requireInstallAttribution =
+    rawReq.requireInstallAttribution !== undefined
+      ? Boolean(rawReq.requireInstallAttribution)
+      : Boolean(existingReqs.requireInstallAttribution);
+
+  const allowMultipleConversions =
+    rawReq.allowMultipleConversions !== undefined
+      ? Boolean(rawReq.allowMultipleConversions)
+      : Boolean(existingReqs.allowMultipleConversions);
+
+  const requireVerifiedCountry =
+    rawReq.requireVerifiedCountry !== undefined
+      ? Boolean(rawReq.requireVerifiedCountry)
+      : Boolean(existingReqs.requireVerifiedCountry);
+
+  // Canonical App Check flag synced to Phase 3B runtime `requireDeviceAttestation`
+  const requireAppCheck =
+    rawReq.requireAppCheck !== undefined
+      ? Boolean(rawReq.requireAppCheck)
+      : data.requireDeviceAttestation !== undefined
+        ? Boolean(data.requireDeviceAttestation)
+        : Boolean(existingReqs.requireAppCheck || existingConfig?.requireDeviceAttestation);
 
   const conversionRequirements = {
     requireUniqueClickId,
-    requireInstallAttribution: Boolean(rawReq.requireInstallAttribution),
-    autoApproveVerifiedPostback: !requireAdminApproval && Boolean(rawReq.autoApproveVerifiedPostback),
+    requireInstallAttribution,
+    autoApproveVerifiedPostback,
     requireAdminApproval,
-    allowMultipleConversions: Boolean(rawReq.allowMultipleConversions),
+    allowMultipleConversions,
     attributionWindowHours,
-    requireVerifiedCountry: Boolean(rawReq.requireVerifiedCountry),
-    requireAppCheck: Boolean(rawReq.requireAppCheck)
+    requireVerifiedCountry,
+    requireAppCheck
   };
 
-  const clickTtlMinutes = Number(data.clickTtlMinutes ?? 60);
+  const clickTtlMinutes = Number(
+    data.clickTtlMinutes !== undefined
+      ? data.clickTtlMinutes
+      : existingConfig?.clickTtlMinutes !== undefined
+        ? existingConfig.clickTtlMinutes
+        : 60
+  );
   if (!Number.isInteger(clickTtlMinutes) || clickTtlMinutes < 1 || clickTtlMinutes > 43200) {
     throw new HttpsErrorCtor("invalid-argument", "clickTtlMinutes must be an integer between 1 and 43200.");
   }
 
-  return {
+  // Preserve or validate Phase 3B runtime-critical click throttling & overbooking fields
+  const runtimeExtras = {};
+  const resolveOptionalNonNegInt = (fieldName, maxVal) => {
+    if (data[fieldName] !== undefined) {
+      const val = Number(data[fieldName]);
+      if (!Number.isInteger(val) || val < 0 || val > maxVal) {
+        throw new HttpsErrorCtor(
+          "invalid-argument",
+          `${fieldName} must be an integer between 0 and ${maxVal}.`
+        );
+      }
+      runtimeExtras[fieldName] = val;
+    } else if (
+      existingConfig &&
+      existingConfig[fieldName] !== undefined &&
+      Number.isFinite(Number(existingConfig[fieldName])) &&
+      Number(existingConfig[fieldName]) >= 0
+    ) {
+      runtimeExtras[fieldName] = Math.floor(Number(existingConfig[fieldName]));
+    }
+  };
+  const resolveOptionalPosInt = (fieldName, maxVal) => {
+    if (data[fieldName] !== undefined) {
+      const val = Number(data[fieldName]);
+      if (!Number.isInteger(val) || val < 1 || val > maxVal) {
+        throw new HttpsErrorCtor(
+          "invalid-argument",
+          `${fieldName} must be an integer between 1 and ${maxVal}.`
+        );
+      }
+      runtimeExtras[fieldName] = val;
+    } else if (
+      existingConfig &&
+      existingConfig[fieldName] !== undefined &&
+      Number.isFinite(Number(existingConfig[fieldName])) &&
+      Number(existingConfig[fieldName]) >= 1
+    ) {
+      runtimeExtras[fieldName] = Math.floor(Number(existingConfig[fieldName]));
+    }
+  };
+
+  resolveOptionalNonNegInt("clickCooldownMs", 86_400_000);
+  resolveOptionalPosInt("maxClicksPerUserPerHour", 10_000);
+  resolveOptionalNonNegInt("clickOverbookingBuffer", 10_000);
+
+  const sanitizedConfig = {
     configId: campaignId,
     campaignId,
     title,
@@ -730,8 +1145,25 @@ function validateAndSanitizeCampaignConfigInput(data, networkData, existingConfi
     allowedDestinationHosts,
     parameterOverrides,
     conversionRequirements,
-    clickTtlMinutes
+    requireDeviceAttestation: requireAppCheck,
+    clickTtlMinutes,
+    ...runtimeExtras
   };
+
+  if (isActive) {
+    validateCampaignActivationCompatibility({
+      config: {
+        ...sanitizedConfig,
+        usedSubmissions: existingUsedSubmissions,
+        spentBudgetTf: existingSpentBudgetTf
+      },
+      networkData,
+      nowMillis,
+      HttpsErrorCtor
+    });
+  }
+
+  return sanitizedConfig;
 }
 
 function toSafeAdminCampaignConfigDto(docData = {}, fallbackId = "") {
@@ -740,6 +1172,7 @@ function toSafeAdminCampaignConfigDto(docData = {}, fallbackId = "") {
     ? docData.conversionRequirements
     : {};
   const rewardTf = Math.max(0, Math.floor(Number(clean.rewardTf || 0)));
+  const requireAppCheck = Boolean(reqs.requireAppCheck || clean.requireDeviceAttestation);
 
   return {
     configId: String(clean.configId || fallbackId || "").trim(),
@@ -774,13 +1207,17 @@ function toSafeAdminCampaignConfigDto(docData = {}, fallbackId = "") {
     conversionRequirements: {
       requireUniqueClickId: reqs.requireUniqueClickId !== false,
       requireInstallAttribution: Boolean(reqs.requireInstallAttribution),
-      autoApproveVerifiedPostback: Boolean(reqs.autoApproveVerifiedPostback),
+      autoApproveVerifiedPostback:
+        reqs.autoApproveVerifiedPostback !== undefined
+          ? Boolean(reqs.autoApproveVerifiedPostback)
+          : !Boolean(reqs.requireAdminApproval),
       requireAdminApproval: Boolean(reqs.requireAdminApproval),
       allowMultipleConversions: Boolean(reqs.allowMultipleConversions),
       attributionWindowHours: Math.max(1, Math.floor(Number(reqs.attributionWindowHours || 72))),
       requireVerifiedCountry: Boolean(reqs.requireVerifiedCountry),
-      requireAppCheck: Boolean(reqs.requireAppCheck)
+      requireAppCheck
     },
+    requireDeviceAttestation: requireAppCheck,
     clickTtlMinutes: Math.max(1, Math.floor(Number(clean.clickTtlMinutes || 60))),
     createdAtMillis: toMillisValue(docData.createdAt),
     updatedAtMillis: toMillisValue(docData.updatedAt)
@@ -792,18 +1229,25 @@ function resolveAnalyticsDateWindow(data = {}, nowMillis = Date.now(), HttpsErro
   const dayMs = 24 * 60 * 60 * 1000;
 
   if (dateRange === "ALL") {
-    return { dateRange: "ALL", startAtMillis: 0, endAtMillis: nowMillis };
+    return { dateRange: "ALL", startAtMillis: 0, endAtMillis: nowMillis, timezone: ANALYTICS_TIMEZONE };
   }
   if (dateRange === "TODAY") {
-    const startOfDayUtc = new Date(nowMillis);
-    startOfDayUtc.setUTCHours(0, 0, 0, 0);
-    return { dateRange: "TODAY", startAtMillis: startOfDayUtc.getTime(), endAtMillis: nowMillis };
+    // Align daily reporting window to Asia/Kolkata (IST, UTC+05:30), consistent with TaskFlow admin dates.
+    const istShifted = new Date(nowMillis + IST_OFFSET_MS);
+    istShifted.setUTCHours(0, 0, 0, 0);
+    const startOfDayIstMillis = istShifted.getTime() - IST_OFFSET_MS;
+    return {
+      dateRange: "TODAY",
+      startAtMillis: startOfDayIstMillis,
+      endAtMillis: nowMillis,
+      timezone: ANALYTICS_TIMEZONE
+    };
   }
   if (dateRange === "7D") {
-    return { dateRange: "7D", startAtMillis: nowMillis - 7 * dayMs, endAtMillis: nowMillis };
+    return { dateRange: "7D", startAtMillis: nowMillis - 7 * dayMs, endAtMillis: nowMillis, timezone: ANALYTICS_TIMEZONE };
   }
   if (dateRange === "30D") {
-    return { dateRange: "30D", startAtMillis: nowMillis - 30 * dayMs, endAtMillis: nowMillis };
+    return { dateRange: "30D", startAtMillis: nowMillis - 30 * dayMs, endAtMillis: nowMillis, timezone: ANALYTICS_TIMEZONE };
   }
   if (dateRange === "CUSTOM") {
     const startAtMillis = Number(data.startAtMillis || 0);
@@ -811,7 +1255,12 @@ function resolveAnalyticsDateWindow(data = {}, nowMillis = Date.now(), HttpsErro
     if (!Number.isFinite(startAtMillis) || !Number.isFinite(endAtMillis) || startAtMillis < 0 || endAtMillis < startAtMillis) {
       throw new HttpsErrorCtor("invalid-argument", "Invalid CUSTOM date range window.");
     }
-    return { dateRange: "CUSTOM", startAtMillis: Math.floor(startAtMillis), endAtMillis: Math.floor(endAtMillis) };
+    return {
+      dateRange: "CUSTOM",
+      startAtMillis: Math.floor(startAtMillis),
+      endAtMillis: Math.floor(endAtMillis),
+      timezone: ANALYTICS_TIMEZONE
+    };
   }
   throw new HttpsErrorCtor(
     "invalid-argument",
@@ -830,32 +1279,65 @@ function computeApprovalRatePercent(approved, totalConversions) {
   return Math.round((approved / totalConversions) * 1000) / 10;
 }
 
+function resolveReversalRecoverySplit(conv, rewardTf) {
+  const cleanReward = Math.max(0, Math.floor(Number(rewardTf || 0)));
+  const hasRecovered =
+    conv.recoveredCoins !== undefined &&
+    conv.recoveredCoins !== null &&
+    Number.isFinite(Number(conv.recoveredCoins));
+  const hasShortfall =
+    conv.shortfallCoins !== undefined &&
+    conv.shortfallCoins !== null &&
+    Number.isFinite(Number(conv.shortfallCoins));
+
+  if (hasRecovered && hasShortfall) {
+    const recoveredTf = Math.min(cleanReward, Math.max(0, Math.floor(Number(conv.recoveredCoins))));
+    const shortfallTf = Math.min(
+      cleanReward - recoveredTf,
+      Math.max(0, Math.floor(Number(conv.shortfallCoins)))
+    );
+    return { recoveredTf, shortfallTf };
+  }
+  if (hasRecovered) {
+    const recoveredTf = Math.min(cleanReward, Math.max(0, Math.floor(Number(conv.recoveredCoins))));
+    return { recoveredTf, shortfallTf: Math.max(0, cleanReward - recoveredTf) };
+  }
+  if (hasShortfall) {
+    const shortfallTf = Math.min(cleanReward, Math.max(0, Math.floor(Number(conv.shortfallCoins))));
+    return { recoveredTf: Math.max(0, cleanReward - shortfallTf), shortfallTf };
+  }
+  // Legacy reversal record without explicit recovery fields: assume full recovery
+  return { recoveredTf: cleanReward, shortfallTf: 0 };
+}
+
 /**
- * Pure server-side reversal-aware analytics aggregator.
- * Clearly distinguishes gross credited TF (`rewardCredited === true`) from reversed TF
- * and net TF after reversals (`grossCreditedTf - reversedTf`, clamped >= 0).
- * Never emits clickId, externalTransactionId, userId, or secret values.
+ * Pure server-side reversal-aware analytics aggregator matching Phase 3C ledger semantics:
+ * - Credits attributed to `verifiedAt`/`creditedAt` (fallback `createdAt`).
+ * - Reversals attributed to `reversedAt` (fallback `updatedAt`/`createdAt`).
+ * - Reports Gross Credited TF, Reversed TF, Actually Recovered TF, Unrecovered Shortfall TF,
+ *   and accurate signed Net TF (`grossCreditedTf - reversedTf`) without clamping negative periods to 0.
+ * - Explicitly surfaces orphaned campaign/network buckets so summary totals always reconcile
+ *   with campaignPerformance and networkPerformance sums.
+ * - Never emits clickId, externalTransactionId, userId, or secret values.
  */
 function computeCampaignTrackingAnalytics({
   campaigns = [],
   networks = [],
   clicks = [],
   conversions = [],
-  window = { dateRange: "ALL", startAtMillis: 0, endAtMillis: Date.now() },
+  window = { dateRange: "ALL", startAtMillis: 0, endAtMillis: Date.now(), timezone: ANALYTICS_TIMEZONE },
   pageSize = DEFAULT_PAGE_SIZE,
   campaignCursor = "",
   networkCursor = ""
 }) {
-  const networkById = new Map();
-  for (const n of networks) {
-    const id = String(n.networkId || "").trim();
-    if (id) networkById.set(id, n);
-  }
+  const registeredCampaignIds = new Set();
+  const registeredNetworkIds = new Set();
 
   const campaignMap = new Map();
   for (const c of campaigns) {
     const id = String(c.campaignId || c.configId || "").trim();
     if (!id) continue;
+    registeredCampaignIds.add(id);
     const rewardBudgetTf = Math.max(0, Math.floor(Number(c.rewardBudgetTf || 0)));
     const spentBudgetTf = Math.max(0, Math.floor(Number(c.spentBudgetTf || 0)));
     const submissionBudget = Math.max(0, Math.floor(Number(c.submissionBudget || 0)));
@@ -873,6 +1355,7 @@ function computeCampaignTrackingAnalytics({
       networkId: String(c.networkId || ""),
       verificationMode: String(c.verificationMode || ""),
       isActive: c.isActive === true,
+      isOrphaned: false,
       rewardTf: Math.max(0, Math.floor(Number(c.rewardTf || 0))),
       clicksCount: 0,
       totalConversions: 0,
@@ -882,6 +1365,8 @@ function computeCampaignTrackingAnalytics({
       reversedConversions: 0,
       grossCreditedTf: 0,
       reversedTf: 0,
+      recoveredTf: 0,
+      shortfallTf: 0,
       netCreditedTf: 0,
       submissionBudget,
       usedSubmissions,
@@ -896,11 +1381,13 @@ function computeCampaignTrackingAnalytics({
   for (const n of networks) {
     const id = String(n.networkId || "").trim();
     if (!id) continue;
+    registeredNetworkIds.add(id);
     networkMap.set(id, {
       networkId: id,
       name: String(n.name || id),
       adapterType: String(n.adapterType || ""),
       isActive: n.isActive === true,
+      isOrphaned: false,
       campaignsCount: 0,
       clicksCount: 0,
       totalConversions: 0,
@@ -910,18 +1397,91 @@ function computeCampaignTrackingAnalytics({
       reversedConversions: 0,
       grossCreditedTf: 0,
       reversedTf: 0,
+      recoveredTf: 0,
+      shortfallTf: 0,
       netCreditedTf: 0
     });
   }
 
+  const getOrCreateCampaignBucket = (rawCampaignId, fallbackNetworkId = "") => {
+    const id = String(rawCampaignId || "").trim() || ORPHANED_CAMPAIGN_SENTINEL;
+    if (campaignMap.has(id)) return campaignMap.get(id);
+    const bucket = {
+      campaignId: id,
+      title:
+        id === ORPHANED_CAMPAIGN_SENTINEL
+          ? "Orphaned / Unattributed Campaign"
+          : `Orphaned Campaign (${id})`,
+      networkId: String(fallbackNetworkId || "").trim() || ORPHANED_NETWORK_SENTINEL,
+      verificationMode: "ORPHANED",
+      isActive: false,
+      isOrphaned: true,
+      rewardTf: 0,
+      clicksCount: 0,
+      totalConversions: 0,
+      pendingConversions: 0,
+      approvedConversions: 0,
+      rejectedConversions: 0,
+      reversedConversions: 0,
+      grossCreditedTf: 0,
+      reversedTf: 0,
+      recoveredTf: 0,
+      shortfallTf: 0,
+      netCreditedTf: 0,
+      submissionBudget: 0,
+      usedSubmissions: 0,
+      reservedClickSlots: 0,
+      rewardBudgetTf: 0,
+      spentBudgetTf: 0,
+      budgetUtilizationPercent: null
+    };
+    campaignMap.set(id, bucket);
+    return bucket;
+  };
+
+  const getOrCreateNetworkBucket = (rawNetworkId) => {
+    const id = String(rawNetworkId || "").trim() || ORPHANED_NETWORK_SENTINEL;
+    if (networkMap.has(id)) return networkMap.get(id);
+    const bucket = {
+      networkId: id,
+      name:
+        id === ORPHANED_NETWORK_SENTINEL
+          ? "Orphaned / Unattributed Network"
+          : `Orphaned Network (${id})`,
+      adapterType: "ORPHANED",
+      isActive: false,
+      isOrphaned: true,
+      campaignsCount: 0,
+      clicksCount: 0,
+      totalConversions: 0,
+      pendingConversions: 0,
+      approvedConversions: 0,
+      rejectedConversions: 0,
+      reversedConversions: 0,
+      grossCreditedTf: 0,
+      reversedTf: 0,
+      recoveredTf: 0,
+      shortfallTf: 0,
+      netCreditedTf: 0
+    };
+    networkMap.set(id, bucket);
+    return bucket;
+  };
+
   for (const c of campaignMap.values()) {
-    if (c.networkId && networkMap.has(c.networkId)) {
+    if (!c.isOrphaned && c.networkId && networkMap.has(c.networkId)) {
       networkMap.get(c.networkId).campaignsCount += 1;
     }
   }
 
   let totalClicks = 0;
+  let orphanedClicksCount = 0;
+  const seenClickIds = new Set();
   for (const clk of clicks) {
+    const clkId = String(clk.clickId || clk._docId || "").trim();
+    if (clkId && seenClickIds.has(clkId)) continue;
+    if (clkId) seenClickIds.add(clkId);
+
     const clkMs = Math.max(
       toMillisValue(clk.createdAt),
       Number(clk.createdAtMillis || 0),
@@ -933,11 +1493,12 @@ function computeCampaignTrackingAnalytics({
     totalClicks += 1;
     const cId = String(clk.campaignId || "").trim();
     const nId = String(clk.networkId || "").trim();
-    if (cId && campaignMap.has(cId)) {
-      campaignMap.get(cId).clicksCount += 1;
-    }
-    if (nId && networkMap.has(nId)) {
-      networkMap.get(nId).clicksCount += 1;
+    const campBucket = getOrCreateCampaignBucket(cId, nId);
+    const netBucket = getOrCreateNetworkBucket(nId);
+    campBucket.clicksCount += 1;
+    netBucket.clicksCount += 1;
+    if (campBucket.isOrphaned || netBucket.isOrphaned) {
+      orphanedClicksCount += 1;
     }
   }
 
@@ -947,6 +1508,11 @@ function computeCampaignTrackingAnalytics({
   let reversedConversions = 0;
   let grossCreditedTf = 0;
   let reversedTf = 0;
+  let recoveredTf = 0;
+  let shortfallTf = 0;
+  let orphanedConversionsCount = 0;
+  let orphanedGrossCreditedTf = 0;
+  let orphanedReversedTf = 0;
 
   // Deduplicate conversion records by conversionId to guarantee no double-counting or double-subtraction
   const seenConversionIds = new Set();
@@ -955,59 +1521,117 @@ function computeCampaignTrackingAnalytics({
     if (convId && seenConversionIds.has(convId)) continue;
     if (convId) seenConversionIds.add(convId);
 
-    const convMs = Math.max(
-      toMillisValue(conv.createdAt),
-      toMillisValue(conv.verifiedAt),
-      toMillisValue(conv.updatedAt),
-      Number(conv.createdAtMillis || 0)
-    );
-    if (!isTimestampInRange(convMs, window.startAtMillis, window.endAtMillis, window.dateRange)) {
-      continue;
-    }
-
     const state = String(conv.state || "").trim().toUpperCase();
     const rewardTf = Math.max(0, Math.floor(Number(conv.rewardTf || 0)));
     const wasCredited = conv.rewardCredited === true;
+
+    const createdTs =
+      toMillisValue(conv.createdAt) || Number(conv.createdAtMillis || 0);
+    const creditTs =
+      toMillisValue(conv.verifiedAt) ||
+      toMillisValue(conv.creditedAt) ||
+      createdTs;
+    const rejectedTs =
+      toMillisValue(conv.rejectedAt) ||
+      toMillisValue(conv.updatedAt) ||
+      createdTs;
+    const reversalTs =
+      toMillisValue(conv.reversedAt) ||
+      toMillisValue(conv.updatedAt) ||
+      creditTs;
+
     const cId = String(conv.campaignId || "").trim();
     const nId = String(conv.networkId || "").trim();
-    const campBucket = cId ? campaignMap.get(cId) : null;
-    const netBucket = nId ? networkMap.get(nId) : null;
-
-    if (campBucket) campBucket.totalConversions += 1;
-    if (netBucket) netBucket.totalConversions += 1;
+    const isOrphanedRecord =
+      !cId || !registeredCampaignIds.has(cId) || !nId || !registeredNetworkIds.has(nId);
 
     if (state === CAMPAIGN_CONVERSION_STATES.PENDING) {
+      if (!isTimestampInRange(createdTs, window.startAtMillis, window.endAtMillis, window.dateRange)) {
+        continue;
+      }
+      const campBucket = getOrCreateCampaignBucket(cId, nId);
+      const netBucket = getOrCreateNetworkBucket(nId);
       pendingConversions += 1;
-      if (campBucket) campBucket.pendingConversions += 1;
-      if (netBucket) netBucket.pendingConversions += 1;
+      campBucket.totalConversions += 1;
+      campBucket.pendingConversions += 1;
+      netBucket.totalConversions += 1;
+      netBucket.pendingConversions += 1;
+      if (isOrphanedRecord) orphanedConversionsCount += 1;
     } else if (state === CAMPAIGN_CONVERSION_STATES.APPROVED) {
+      if (!isTimestampInRange(creditTs, window.startAtMillis, window.endAtMillis, window.dateRange)) {
+        continue;
+      }
+      const campBucket = getOrCreateCampaignBucket(cId, nId);
+      const netBucket = getOrCreateNetworkBucket(nId);
       approvedConversions += 1;
-      if (campBucket) campBucket.approvedConversions += 1;
-      if (netBucket) netBucket.approvedConversions += 1;
+      campBucket.totalConversions += 1;
+      campBucket.approvedConversions += 1;
+      netBucket.totalConversions += 1;
+      netBucket.approvedConversions += 1;
+      if (isOrphanedRecord) orphanedConversionsCount += 1;
       if (wasCredited) {
         grossCreditedTf += rewardTf;
-        if (campBucket) campBucket.grossCreditedTf += rewardTf;
-        if (netBucket) netBucket.grossCreditedTf += rewardTf;
+        campBucket.grossCreditedTf += rewardTf;
+        netBucket.grossCreditedTf += rewardTf;
+        if (isOrphanedRecord) orphanedGrossCreditedTf += rewardTf;
       }
     } else if (state === CAMPAIGN_CONVERSION_STATES.REJECTED) {
+      if (!isTimestampInRange(rejectedTs, window.startAtMillis, window.endAtMillis, window.dateRange)) {
+        continue;
+      }
+      const campBucket = getOrCreateCampaignBucket(cId, nId);
+      const netBucket = getOrCreateNetworkBucket(nId);
       rejectedConversions += 1;
-      if (campBucket) campBucket.rejectedConversions += 1;
-      if (netBucket) netBucket.rejectedConversions += 1;
+      campBucket.totalConversions += 1;
+      campBucket.rejectedConversions += 1;
+      netBucket.totalConversions += 1;
+      netBucket.rejectedConversions += 1;
+      if (isOrphanedRecord) orphanedConversionsCount += 1;
     } else if (state === CAMPAIGN_CONVERSION_STATES.REVERSED) {
-      reversedConversions += 1;
-      if (campBucket) campBucket.reversedConversions += 1;
-      if (netBucket) netBucket.reversedConversions += 1;
-      if (wasCredited) {
-        // Reversed conversions had previously been credited; include in gross credited AND reversed so net = gross - reversed.
+      const creditInRange =
+        wasCredited &&
+        isTimestampInRange(creditTs, window.startAtMillis, window.endAtMillis, window.dateRange);
+      const reversalInRange = isTimestampInRange(
+        reversalTs,
+        window.startAtMillis,
+        window.endAtMillis,
+        window.dateRange
+      );
+      if (!creditInRange && !reversalInRange) {
+        continue;
+      }
+      const campBucket = getOrCreateCampaignBucket(cId, nId);
+      const netBucket = getOrCreateNetworkBucket(nId);
+
+      // Credit attributed strictly to its actual verifiedAt/creditedAt window
+      if (creditInRange) {
         grossCreditedTf += rewardTf;
-        reversedTf += rewardTf;
-        if (campBucket) {
-          campBucket.grossCreditedTf += rewardTf;
+        campBucket.grossCreditedTf += rewardTf;
+        netBucket.grossCreditedTf += rewardTf;
+        if (isOrphanedRecord) orphanedGrossCreditedTf += rewardTf;
+      }
+
+      // Reversal attributed strictly to its actual reversedAt window
+      if (reversalInRange) {
+        reversedConversions += 1;
+        campBucket.totalConversions += 1;
+        campBucket.reversedConversions += 1;
+        netBucket.totalConversions += 1;
+        netBucket.reversedConversions += 1;
+        if (isOrphanedRecord) orphanedConversionsCount += 1;
+
+        if (wasCredited) {
+          const { recoveredTf: rec, shortfallTf: sf } = resolveReversalRecoverySplit(conv, rewardTf);
+          reversedTf += rewardTf;
+          recoveredTf += rec;
+          shortfallTf += sf;
           campBucket.reversedTf += rewardTf;
-        }
-        if (netBucket) {
-          netBucket.grossCreditedTf += rewardTf;
+          campBucket.recoveredTf += rec;
+          campBucket.shortfallTf += sf;
           netBucket.reversedTf += rewardTf;
+          netBucket.recoveredTf += rec;
+          netBucket.shortfallTf += sf;
+          if (isOrphanedRecord) orphanedReversedTf += rewardTf;
         }
       }
     }
@@ -1015,37 +1639,55 @@ function computeCampaignTrackingAnalytics({
 
   const totalConversions =
     pendingConversions + approvedConversions + rejectedConversions + reversedConversions;
-  const netCreditedTf = Math.max(0, grossCreditedTf - reversedTf);
+  // Signed net TF after reversals (can legitimately be negative if reversals exceed credits in the period)
+  const netCreditedTf = grossCreditedTf - reversedTf;
+  const netWalletImpactTf = grossCreditedTf - recoveredTf;
 
   const campaignRows = Array.from(campaignMap.values())
-    .map((row) => ({
-      ...row,
-      netCreditedTf: Math.max(0, row.grossCreditedTf - row.reversedTf),
-      grossCreditedCents: tfToBalanceCents(row.grossCreditedTf),
-      netCreditedCents: tfToBalanceCents(Math.max(0, row.grossCreditedTf - row.reversedTf)),
-      approvalRatePercent: computeApprovalRatePercent(row.approvedConversions, row.totalConversions)
-    }))
+    .map((row) => {
+      const rowNetTf = row.grossCreditedTf - row.reversedTf;
+      return {
+        ...row,
+        netCreditedTf: rowNetTf,
+        grossCreditedCents: tfToBalanceCents(row.grossCreditedTf),
+        reversedCents: tfToBalanceCents(row.reversedTf),
+        recoveredCents: tfToBalanceCents(row.recoveredTf),
+        shortfallCents: tfToBalanceCents(row.shortfallTf),
+        netCreditedCents: signedTfToBalanceCents(rowNetTf),
+        approvalRatePercent: computeApprovalRatePercent(row.approvedConversions, row.totalConversions)
+      };
+    })
     .sort((a, b) => a.campaignId.localeCompare(b.campaignId));
 
   const networkRows = Array.from(networkMap.values())
-    .map((row) => ({
-      ...row,
-      netCreditedTf: Math.max(0, row.grossCreditedTf - row.reversedTf),
-      grossCreditedCents: tfToBalanceCents(row.grossCreditedTf),
-      netCreditedCents: tfToBalanceCents(Math.max(0, row.grossCreditedTf - row.reversedTf)),
-      approvalRatePercent: computeApprovalRatePercent(row.approvedConversions, row.totalConversions)
-    }))
+    .map((row) => {
+      const rowNetTf = row.grossCreditedTf - row.reversedTf;
+      return {
+        ...row,
+        netCreditedTf: rowNetTf,
+        grossCreditedCents: tfToBalanceCents(row.grossCreditedTf),
+        reversedCents: tfToBalanceCents(row.reversedTf),
+        recoveredCents: tfToBalanceCents(row.recoveredTf),
+        shortfallCents: tfToBalanceCents(row.shortfallTf),
+        netCreditedCents: signedTfToBalanceCents(rowNetTf),
+        approvalRatePercent: computeApprovalRatePercent(row.approvedConversions, row.totalConversions)
+      };
+    })
     .sort((a, b) => a.networkId.localeCompare(b.networkId));
+
+  const orphanedCampaignCount = campaignRows.filter((c) => c.isOrphaned).length;
+  const orphanedNetworkCount = networkRows.filter((n) => n.isOrphaned).length;
 
   return {
     dateRange: window.dateRange,
+    timezone: window.timezone || ANALYTICS_TIMEZONE,
     startAtMillis: window.startAtMillis,
     endAtMillis: window.endAtMillis,
     summary: {
-      totalCampaigns: campaignMap.size,
-      activeCampaigns: Array.from(campaignMap.values()).filter((c) => c.isActive).length,
-      totalNetworks: networkMap.size,
-      activeNetworks: Array.from(networkMap.values()).filter((n) => n.isActive).length,
+      totalCampaigns: registeredCampaignIds.size,
+      activeCampaigns: Array.from(campaignMap.values()).filter((c) => !c.isOrphaned && c.isActive).length,
+      totalNetworks: registeredNetworkIds.size,
+      activeNetworks: Array.from(networkMap.values()).filter((n) => !n.isOrphaned && n.isActive).length,
       totalClicks,
       totalConversions,
       pendingConversions,
@@ -1056,9 +1698,22 @@ function computeCampaignTrackingAnalytics({
       hasConversionData: totalConversions > 0,
       grossCreditedTf,
       reversedTf,
+      recoveredTf,
+      shortfallTf,
       netCreditedTf,
+      netWalletImpactTf,
       grossCreditedCents: tfToBalanceCents(grossCreditedTf),
-      netCreditedCents: tfToBalanceCents(netCreditedTf)
+      reversedCents: tfToBalanceCents(reversedTf),
+      recoveredCents: tfToBalanceCents(recoveredTf),
+      shortfallCents: tfToBalanceCents(shortfallTf),
+      netCreditedCents: signedTfToBalanceCents(netCreditedTf),
+      netWalletImpactCents: signedTfToBalanceCents(netWalletImpactTf),
+      orphanedClicksCount,
+      orphanedConversionsCount,
+      orphanedGrossCreditedTf,
+      orphanedReversedTf,
+      orphanedCampaignCount,
+      orphanedNetworkCount
     },
     campaignPerformance: paginateSortedArray(
       campaignRows,
@@ -1075,15 +1730,179 @@ function computeCampaignTrackingAnalytics({
   };
 }
 
-async function readCollectionBounded(firestoreDb, collectionName, limitCount = MAX_ANALYTICS_SCAN_LIMIT) {
-  const colRef = firestoreDb.collection(collectionName);
-  const queryRef = typeof colRef.limit === "function" ? colRef.limit(limitCount) : colRef;
-  const snap = await queryRef.get();
+function mapSnapshotDocs(snap) {
   const docs = snap?.docs || [];
   return docs.map((d) => ({
     _docId: d.id,
     ...(typeof d.data === "function" ? d.data() || {} : {})
   }));
+}
+
+/**
+ * Paginates a Firestore query or collection in bounded batches using cursor `startAfter`
+ * when supported, probing `maxLimit + 1` so `truncated` is true if and only if strictly
+ * more than `maxLimit` documents exist.
+ */
+async function executePaginatedQuery(baseQuery, maxLimit, batchSize = DEFAULT_SCAN_BATCH_SIZE) {
+  const safeMax = Math.max(1, Math.floor(Number(maxLimit || MAX_ANALYTICS_SCAN_LIMIT)));
+  const safeBatch = Math.min(safeMax + 1, Math.max(1, Math.floor(Number(batchSize || DEFAULT_SCAN_BATCH_SIZE))));
+
+  const canCursorPaginate =
+    typeof baseQuery.startAfter === "function" && typeof baseQuery.limit === "function";
+
+  if (!canCursorPaginate) {
+    const q = typeof baseQuery.limit === "function" ? baseQuery.limit(safeMax + 1) : baseQuery;
+    const snap = await q.get();
+    const mapped = mapSnapshotDocs(snap);
+    const truncated = mapped.length > safeMax;
+    return {
+      docs: truncated ? mapped.slice(0, safeMax) : mapped,
+      truncated
+    };
+  }
+
+  const collected = [];
+  let lastDocSnap = null;
+  let truncated = false;
+
+  while (collected.length <= safeMax) {
+    const remainingToProbe = safeMax + 1 - collected.length;
+    const fetchSize = Math.min(safeBatch, remainingToProbe);
+    let q = baseQuery;
+    if (lastDocSnap) {
+      q = q.startAfter(lastDocSnap);
+    }
+    q = q.limit(fetchSize);
+    const snap = await q.get();
+    const rawDocs = snap?.docs || [];
+    if (rawDocs.length === 0) {
+      break;
+    }
+    for (const d of rawDocs) {
+      collected.push({
+        _docId: d.id,
+        ...(typeof d.data === "function" ? d.data() || {} : {})
+      });
+    }
+    lastDocSnap = rawDocs[rawDocs.length - 1];
+    if (collected.length > safeMax) {
+      truncated = true;
+      break;
+    }
+    if (rawDocs.length < fetchSize) {
+      break;
+    }
+  }
+
+  return {
+    docs: truncated ? collected.slice(0, safeMax) : collected,
+    truncated
+  };
+}
+
+async function readCollectionBounded(
+  firestoreDb,
+  collectionName,
+  limitCount = MAX_ANALYTICS_SCAN_LIMIT,
+  batchSize = DEFAULT_SCAN_BATCH_SIZE
+) {
+  const colRef = firestoreDb.collection(collectionName);
+  const orderedRef = typeof colRef.orderBy === "function" ? colRef.orderBy("__name__") : colRef;
+  return executePaginatedQuery(orderedRef, limitCount, batchSize);
+}
+
+/**
+ * Reads clicks for the requested analytics window using indexed single-field timestamp range
+ * queries (`createdAt >= start && createdAt <= end`) when Firestore query APIs are available,
+ * falling back to bounded paginated scanning for ALL or minimal mocks.
+ */
+async function readClicksForWindow(firestoreDb, window, maxLimit, batchSize) {
+  const colRef = firestoreDb.collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS);
+  if (
+    window.dateRange !== "ALL" &&
+    typeof colRef.where === "function" &&
+    typeof colRef.orderBy === "function"
+  ) {
+    const rangeQuery = colRef
+      .where("createdAt", ">=", new Date(window.startAtMillis))
+      .where("createdAt", "<=", new Date(window.endAtMillis))
+      .orderBy("createdAt", "desc");
+    const result = await executePaginatedQuery(rangeQuery, maxLimit, batchSize);
+    return { ...result, queryStrategy: "INDEXED_TIMESTAMP_RANGE" };
+  }
+  const result = await readCollectionBounded(
+    firestoreDb,
+    CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS,
+    maxLimit,
+    batchSize
+  );
+  return { ...result, queryStrategy: "BOUNDED_COLLECTION_SCAN" };
+}
+
+/**
+ * Reads conversions relevant to the requested analytics window using single-field indexed
+ * timestamp range queries across `createdAt`, `verifiedAt`, `rejectedAt`, and `reversedAt`,
+ * deduplicated by document ID so cross-period credits, rejections, and reversals
+ * (e.g., created in Period A, rejected or reversed in Period B) are always discovered accurately
+ * without full-collection scans.
+ */
+async function readConversionsForWindow(firestoreDb, window, maxLimit, batchSize) {
+  const colRef = firestoreDb.collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CONVERSIONS);
+  if (
+    window.dateRange !== "ALL" &&
+    typeof colRef.where === "function" &&
+    typeof colRef.orderBy === "function"
+  ) {
+    const startDate = new Date(window.startAtMillis);
+    const endDate = new Date(window.endAtMillis);
+    const fields = ["createdAt", "verifiedAt", "rejectedAt", "reversedAt"];
+    const results = await Promise.all(
+      fields.map((field) =>
+        executePaginatedQuery(
+          colRef.where(field, ">=", startDate).where(field, "<=", endDate).orderBy(field, "desc"),
+          maxLimit,
+          batchSize
+        )
+      )
+    );
+    const dedup = new Map();
+    let truncated = false;
+    for (const res of results) {
+      if (res.truncated) truncated = true;
+      for (const doc of res.docs) {
+        const key = String(doc.conversionId || doc._docId || "").trim();
+        if (key && !dedup.has(key)) {
+          dedup.set(key, doc);
+        }
+      }
+    }
+    return {
+      docs: Array.from(dedup.values()),
+      truncated,
+      queryStrategy: "INDEXED_TIMESTAMP_RANGE"
+    };
+  }
+  const result = await readCollectionBounded(
+    firestoreDb,
+    CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CONVERSIONS,
+    maxLimit,
+    batchSize
+  );
+  return { ...result, queryStrategy: "BOUNDED_COLLECTION_SCAN" };
+}
+
+async function findActiveDependentCampaignsInTransaction(firestoreDb, transaction, networkId) {
+  const configsCol = firestoreDb.collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS);
+  if (typeof configsCol.where === "function") {
+    const query = configsCol.where("networkId", "==", networkId).where("isActive", "==", true);
+    const snap = await transaction.get(query);
+    return mapSnapshotDocs(snap).filter((c) => c.isActive === true && String(c.networkId || "").trim() === networkId);
+  }
+  // Fallback for lightweight unit-test mocks without `.where()`
+  const snap = await configsCol.get();
+  return mapSnapshotDocs(snap).filter(
+    (c) => c.isActive === true && String(c.networkId || "").trim() === networkId
+  );
 }
 
 function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefaultServerTimestamp, HttpsError }) {
@@ -1096,6 +1915,49 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
     );
 
     const data = request.data || {};
+    const exactNetworkId = String(data.networkId || "").trim();
+    if (exactNetworkId) {
+      if (!VALID_ID_REGEX.test(exactNetworkId)) {
+        throw new HttpsError("invalid-argument", "Invalid networkId lookup filter.");
+      }
+      const docSnap = await firestoreDb
+        .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS)
+        .doc(exactNetworkId)
+        .get();
+      let activeCampaignsCount = 0;
+      if (docSnap.exists) {
+        const configsCol = firestoreDb.collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS);
+        if (typeof configsCol.where === "function") {
+          const activeSnap = await configsCol
+            .where("networkId", "==", exactNetworkId)
+            .where("isActive", "==", true)
+            .get();
+          activeCampaignsCount = mapSnapshotDocs(activeSnap).filter(
+            (c) => c.isActive === true && String(c.networkId || "").trim() === exactNetworkId
+          ).length;
+        } else {
+          const allSnap = await configsCol.get();
+          activeCampaignsCount = mapSnapshotDocs(allSnap).filter(
+            (c) => c.isActive === true && String(c.networkId || "").trim() === exactNetworkId
+          ).length;
+        }
+      }
+      const items = docSnap.exists
+        ? [{ ...toSafeAdminNetworkDto(docSnap.data() || {}, docSnap.id), activeCampaignsCount }]
+        : [];
+      return {
+        success: true,
+        items,
+        nextCursor: "",
+        hasMore: false,
+        totalCount: items.length,
+        truncated: false,
+        registeredSecretKeys: [...ALLOWED_CAMPAIGN_SECRET_KEYS],
+        supportedSignatureAlgorithms: [...SUPPORTED_SIGNATURE_ALGORITHMS],
+        supportedSigningModes: [...SUPPORTED_HMAC_SIGNING_MODES]
+      };
+    }
+
     const pageSize = clampPageSize(data.pageSize);
     const cursor = String(data.cursor || "").trim();
     const filterAdapterType = String(data.adapterType || "").trim().toUpperCase();
@@ -1106,14 +1968,40 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
       throw new HttpsError("invalid-argument", `Invalid adapterType filter '${filterAdapterType}'.`);
     }
 
-    const rawDocs = await readCollectionBounded(
-      firestoreDb,
-      CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS,
-      500
-    );
+    const networkScanLimit = Math.max(1, Number(deps.maxNetworksScanLimit || MAX_NETWORKS_SCAN_LIMIT));
+    const campaignScanLimit = Math.max(1, Number(deps.maxCampaignsScanLimit || MAX_CAMPAIGNS_SCAN_LIMIT));
+    const scanBatchSize = Math.max(1, Number(deps.scanBatchSize || DEFAULT_SCAN_BATCH_SIZE));
+    const [{ docs: rawDocs, truncated }, { docs: campaignDocs }] = await Promise.all([
+      readCollectionBounded(
+        firestoreDb,
+        CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS,
+        networkScanLimit,
+        scanBatchSize
+      ),
+      readCollectionBounded(
+        firestoreDb,
+        CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS,
+        campaignScanLimit,
+        scanBatchSize
+      )
+    ]);
+
+    const activeCountByNetwork = new Map();
+    for (const cfg of campaignDocs) {
+      if (cfg.isActive !== true) continue;
+      const nId = String(cfg.networkId || "").trim();
+      if (!nId) continue;
+      activeCountByNetwork.set(nId, (activeCountByNetwork.get(nId) || 0) + 1);
+    }
 
     const filtered = rawDocs
-      .map((doc) => toSafeAdminNetworkDto(doc, doc._docId))
+      .map((doc) => {
+        const dto = toSafeAdminNetworkDto(doc, doc._docId);
+        return {
+          ...dto,
+          activeCampaignsCount: activeCountByNetwork.get(dto.networkId) || 0
+        };
+      })
       .filter((item) => {
         if (filterAdapterType && item.adapterType !== filterAdapterType) return false;
         if (filterActive !== null && item.isActive !== filterActive) return false;
@@ -1129,6 +2017,7 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
     return {
       success: true,
       ...page,
+      truncated,
       registeredSecretKeys: [...ALLOWED_CAMPAIGN_SECRET_KEYS],
       supportedSignatureAlgorithms: [...SUPPORTED_SIGNATURE_ALGORITHMS],
       supportedSigningModes: [...SUPPORTED_HMAC_SIGNING_MODES]
@@ -1152,10 +2041,11 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
       throw new HttpsError("invalid-argument", "mode must be CREATE, UPDATE, or UPSERT.");
     }
 
-    const sanitized = validateAndSanitizeNetworkInput(data, HttpsError);
+    // Preliminary validation (strictly before opening transaction)
+    const preValidated = validateAndSanitizeNetworkInput(data, HttpsError);
     const networkRef = firestoreDb
       .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS)
-      .doc(sanitized.networkId);
+      .doc(preValidated.networkId);
     const logRef = firestoreDb.collection("admin_logs").doc();
 
     const saved = await firestoreDb.runTransaction(async (transaction) => {
@@ -1163,18 +2053,43 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
       if (mode === "CREATE" && existingSnap.exists) {
         throw new HttpsError(
           "already-exists",
-          `Campaign network '${sanitized.networkId}' already exists.`
+          `Campaign network '${preValidated.networkId}' already exists.`
         );
       }
       if (mode === "UPDATE" && !existingSnap.exists) {
         throw new HttpsError(
           "not-found",
-          `Campaign network '${sanitized.networkId}' does not exist.`
+          `Campaign network '${preValidated.networkId}' does not exist.`
         );
       }
       const existingData = existingSnap.exists ? existingSnap.data() || {} : null;
 
+      // Re-sanitize with existingData so Phase 3B/3C fields (adapterId, signaturePrefix, idempotencyParam) are preserved
+      const sanitized = validateAndSanitizeNetworkInput(data, HttpsError, existingData);
+
+      // Guard against silently invalidating active dependent campaigns during network edits
+      if (existingSnap.exists) {
+        const activeDependents = await findActiveDependentCampaignsInTransaction(
+          firestoreDb,
+          transaction,
+          sanitized.networkId
+        );
+        if (activeDependents.length > 0) {
+          for (const depCamp of activeDependents) {
+            validateCampaignActivationCompatibility({
+              config: depCamp,
+              networkData: sanitized,
+              nowMillis,
+              HttpsErrorCtor: HttpsError,
+              skipScheduleAndBudget: true
+            });
+          }
+        }
+      }
+
+      const preservedExtras = extractPreservedSafeFields(existingData, MANAGED_NETWORK_TOP_LEVEL_KEYS);
       const docToWrite = {
+        ...preservedExtras,
         ...sanitized,
         createdBy: existingData?.createdBy || adminInfo.uid,
         updatedBy: adminInfo.uid,
@@ -1287,10 +2202,13 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
       throw new HttpsError("invalid-argument", `Invalid verificationMode filter '${filterMode}'.`);
     }
 
-    const rawDocs = await readCollectionBounded(
+    const campaignScanLimit = Math.max(1, Number(deps.maxCampaignsScanLimit || MAX_CAMPAIGNS_SCAN_LIMIT));
+    const scanBatchSize = Math.max(1, Number(deps.scanBatchSize || DEFAULT_SCAN_BATCH_SIZE));
+    const { docs: rawDocs, truncated } = await readCollectionBounded(
       firestoreDb,
       CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS,
-      1000
+      campaignScanLimit,
+      scanBatchSize
     );
 
     const filtered = rawDocs
@@ -1310,7 +2228,8 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
     const page = paginateSortedArray(filtered, pageSize, cursor, (item) => item.campaignId);
     return {
       success: true,
-      ...page
+      ...page,
+      truncated
     };
   }
 
@@ -1373,7 +2292,8 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
         data,
         networkData,
         existingData,
-        HttpsError
+        HttpsError,
+        nowMillis
       );
 
       // Preserve server-authoritative runtime counters (never let client reset budgets/clicks)
@@ -1382,7 +2302,14 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
       const reservedClickSlots = Math.max(0, Math.floor(Number(existingData?.reservedClickSlots || 0)));
       const issuedClicksCount = Math.max(0, Math.floor(Number(existingData?.issuedClicksCount || 0)));
 
+      // Preserve any additional safe non-secret Phase 3B/3C runtime fields on existing config
+      const preservedExtras = extractPreservedSafeFields(
+        existingData,
+        MANAGED_CAMPAIGN_CONFIG_TOP_LEVEL_KEYS
+      );
+
       const docToWrite = {
+        ...preservedExtras,
         ...sanitized,
         usedSubmissions,
         spentBudgetTf,
@@ -1492,12 +2419,13 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
           .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS)
           .doc(networkId);
         const networkSnap = await transaction.get(networkRef);
-        if (!networkSnap.exists || networkSnap.data()?.isActive !== true) {
-          throw new HttpsError(
-            "failed-precondition",
-            `Cannot activate campaign while network '${networkId}' is missing or disabled.`
-          );
-        }
+        const networkData = networkSnap.exists ? { ...(networkSnap.data() || {}), networkId } : null;
+        validateCampaignActivationCompatibility({
+          config: { ...prev, campaignId },
+          networkData,
+          nowMillis,
+          HttpsErrorCtor: HttpsError
+        });
       }
 
       transaction.update(configRef, {
@@ -1551,32 +2479,62 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
     const campaignCursor = String(data.campaignCursor || "").trim();
     const networkCursor = String(data.networkCursor || "").trim();
 
-    const [campaigns, networks, clicks, conversions] = await Promise.all([
-      readCollectionBounded(firestoreDb, CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS, 1000),
-      readCollectionBounded(firestoreDb, CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS, 500),
-      readCollectionBounded(firestoreDb, CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS, MAX_ANALYTICS_SCAN_LIMIT),
-      readCollectionBounded(firestoreDb, CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CONVERSIONS, MAX_ANALYTICS_SCAN_LIMIT)
+    const maxAnalyticsScan = Math.max(1, Number(deps.maxAnalyticsScanLimit || MAX_ANALYTICS_SCAN_LIMIT));
+    const maxCampaignsScan = Math.max(1, Number(deps.maxCampaignsScanLimit || MAX_CAMPAIGNS_SCAN_LIMIT));
+    const maxNetworksScan = Math.max(1, Number(deps.maxNetworksScanLimit || MAX_NETWORKS_SCAN_LIMIT));
+    const scanBatchSize = Math.max(1, Number(deps.scanBatchSize || DEFAULT_SCAN_BATCH_SIZE));
+
+    const [campaignsRes, networksRes, clicksRes, conversionsRes] = await Promise.all([
+      readCollectionBounded(
+        firestoreDb,
+        CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS,
+        maxCampaignsScan,
+        scanBatchSize
+      ),
+      readCollectionBounded(
+        firestoreDb,
+        CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS,
+        maxNetworksScan,
+        scanBatchSize
+      ),
+      readClicksForWindow(firestoreDb, window, maxAnalyticsScan, scanBatchSize),
+      readConversionsForWindow(firestoreDb, window, maxAnalyticsScan, scanBatchSize)
     ]);
 
     const analytics = computeCampaignTrackingAnalytics({
-      campaigns,
-      networks,
-      clicks,
-      conversions,
+      campaigns: campaignsRes.docs,
+      networks: networksRes.docs,
+      clicks: clicksRes.docs,
+      conversions: conversionsRes.docs,
       window,
       pageSize,
       campaignCursor,
       networkCursor
     });
 
+    const isTruncated = Boolean(
+      clicksRes.truncated ||
+      conversionsRes.truncated ||
+      campaignsRes.truncated ||
+      networksRes.truncated
+    );
+
     return {
       success: true,
       ...analytics,
       scanLimits: {
-        clicksScanLimit: MAX_ANALYTICS_SCAN_LIMIT,
-        conversionsScanLimit: MAX_ANALYTICS_SCAN_LIMIT,
-        clicksTruncated: clicks.length >= MAX_ANALYTICS_SCAN_LIMIT,
-        conversionsTruncated: conversions.length >= MAX_ANALYTICS_SCAN_LIMIT
+        clicksScanLimit: maxAnalyticsScan,
+        conversionsScanLimit: maxAnalyticsScan,
+        campaignsScanLimit: maxCampaignsScan,
+        networksScanLimit: maxNetworksScan,
+        clicksScanned: clicksRes.docs.length,
+        conversionsScanned: conversionsRes.docs.length,
+        clicksTruncated: Boolean(clicksRes.truncated),
+        conversionsTruncated: Boolean(conversionsRes.truncated),
+        campaignsTruncated: Boolean(campaignsRes.truncated),
+        networksTruncated: Boolean(networksRes.truncated),
+        isTruncated,
+        queryStrategy: conversionsRes.queryStrategy || clicksRes.queryStrategy || "BOUNDED_COLLECTION_SCAN"
       }
     };
   }
@@ -1596,6 +2554,11 @@ module.exports = {
   SUPPORTED_SIGNATURE_ALGORITHMS,
   SUPPORTED_HMAC_SIGNING_MODES,
   SUPPORTED_HMAC_ENCODINGS,
+  ANALYTICS_TIMEZONE,
+  ORPHANED_CAMPAIGN_SENTINEL,
+  ORPHANED_NETWORK_SENTINEL,
+  parseIsoDateToUtcMillis,
+  validateCampaignActivationCompatibility,
   validateAndSanitizeNetworkInput,
   validateAndSanitizeCampaignConfigInput,
   toSafeAdminNetworkDto,
