@@ -453,6 +453,16 @@ private fun AuthenticatedWorkspace(
   val userSupportTickets by viewModel.userSupportTicketsState.collectAsStateWithLifecycle()
   val adminSupportTickets by viewModel.adminSupportTicketsState.collectAsStateWithLifecycle()
   val isOpeningCampaignLink by viewModel.isOpeningCampaignLink.collectAsStateWithLifecycle()
+  val campaignTrackingAdminState by viewModel.campaignTrackingAdminState.collectAsStateWithLifecycle()
+
+  androidx.compose.runtime.LaunchedEffect(activePortal, activeAdminTab, isAdminAuthorized) {
+    if (isAdminAuthorized &&
+      activePortal == PortalLoginTarget.ADMIN_DASHBOARD &&
+      activeAdminTab == AdminTab.CAMPAIGN_TRACKING
+    ) {
+      viewModel.refreshCampaignTrackingAdminData()
+    }
+  }
 
   BackHandler(
     enabled =
@@ -1454,7 +1464,37 @@ private fun AuthenticatedWorkspace(
                 adminReply = adminReply,
                 onResult = onResult
               )
-            }
+            },
+            campaignTrackingAdminState = campaignTrackingAdminState,
+            onRefreshCampaignTracking = { viewModel.refreshCampaignTrackingAdminData() },
+            onSelectCampaignTrackingDateRange = { range ->
+              viewModel.loadCampaignTrackingDashboard(dateRange = range)
+            },
+            onLoadMoreCampaignAnalytics = {
+              viewModel.loadCampaignTrackingDashboard(appendCampaigns = true)
+            },
+            onLoadMoreNetworkAnalytics = {
+              viewModel.loadCampaignTrackingDashboard(appendNetworks = true)
+            },
+            onLoadMoreCampaignNetworks = {
+              viewModel.loadCampaignTrackingNetworks(loadMore = true)
+            },
+            onLoadMoreCampaignConfigs = {
+              viewModel.loadCampaignTrackingConfigs(loadMore = true)
+            },
+            onSaveCampaignNetwork = { item, isEdit, onDone ->
+              viewModel.upsertCampaignTrackingNetwork(item = item, isEdit = isEdit, onSuccess = onDone)
+            },
+            onToggleCampaignNetworkStatus = { networkId, isActive ->
+              viewModel.setCampaignTrackingNetworkStatus(networkId = networkId, isActive = isActive)
+            },
+            onSaveCampaignTrackingConfig = { item, isEdit, onDone ->
+              viewModel.upsertCampaignTrackingConfig(item = item, isEdit = isEdit, onSuccess = onDone)
+            },
+            onToggleCampaignTrackingConfigStatus = { campaignId, isActive ->
+              viewModel.setCampaignTrackingConfigStatus(campaignId = campaignId, isActive = isActive)
+            },
+            onClearCampaignTrackingFeedback = { viewModel.clearCampaignTrackingFeedback() }
           )
         }
       }

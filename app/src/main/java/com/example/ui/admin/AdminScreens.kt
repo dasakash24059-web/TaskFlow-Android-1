@@ -96,8 +96,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.AdminActivityLog
+import com.example.data.model.AdminCampaignNetworkItem
+import com.example.data.model.AdminCampaignTrackingConfigItem
+import com.example.data.model.AdminCampaignTrackingUiState
 import com.example.data.model.AdminNotificationItem
 import com.example.data.model.AppItem
+import com.example.data.model.CampaignAnalyticsDateRange
 import com.example.data.model.CampaignItem
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.ManualBonusRecord
@@ -226,7 +230,19 @@ fun AdminDashboardScreen(
    onTogglePromoCodeActive: (String, Boolean) -> Unit = { _, _ -> },
    onCreditManualBonus: (String, Long, String) -> Unit = { _, _, _ -> },
    supportTickets: List<com.example.data.model.SupportTicket> = emptyList(),
-   onUpdateSupportTicket: (String, String, String, (Boolean) -> Unit) -> Unit = { _, _, _, cb -> cb(true) }
+   onUpdateSupportTicket: (String, String, String, (Boolean) -> Unit) -> Unit = { _, _, _, cb -> cb(true) },
+   campaignTrackingAdminState: AdminCampaignTrackingUiState = AdminCampaignTrackingUiState(),
+   onRefreshCampaignTracking: () -> Unit = {},
+   onSelectCampaignTrackingDateRange: (CampaignAnalyticsDateRange) -> Unit = {},
+   onLoadMoreCampaignAnalytics: () -> Unit = {},
+   onLoadMoreNetworkAnalytics: () -> Unit = {},
+   onLoadMoreCampaignNetworks: () -> Unit = {},
+   onLoadMoreCampaignConfigs: () -> Unit = {},
+   onSaveCampaignNetwork: (AdminCampaignNetworkItem, Boolean, () -> Unit) -> Unit = { _, _, onDone -> onDone() },
+   onToggleCampaignNetworkStatus: (String, Boolean) -> Unit = { _, _ -> },
+   onSaveCampaignTrackingConfig: (AdminCampaignTrackingConfigItem, Boolean, () -> Unit) -> Unit = { _, _, onDone -> onDone() },
+   onToggleCampaignTrackingConfigStatus: (String, Boolean) -> Unit = { _, _ -> },
+   onClearCampaignTrackingFeedback: () -> Unit = {}
 ) {
   if (!isAdminAuthorized) {
     UnauthorizedAdminGate(currentUserEmail = currentUserEmail)
@@ -740,6 +756,22 @@ fun AdminDashboardScreen(
               onCreateCampaignFull = onCreateCampaignFull,
               onUpdateCampaignStatus = onUpdateCampaignStatus,
               onUpdateCampaignDetails = onUpdateCampaignDetails
+            )
+          }
+          AdminTab.CAMPAIGN_TRACKING -> {
+            AdminCampaignTrackingSection(
+              state = campaignTrackingAdminState,
+              onRefreshAll = onRefreshCampaignTracking,
+              onSelectDateRange = onSelectCampaignTrackingDateRange,
+              onLoadMoreCampaignAnalytics = onLoadMoreCampaignAnalytics,
+              onLoadMoreNetworkAnalytics = onLoadMoreNetworkAnalytics,
+              onLoadMoreNetworks = onLoadMoreCampaignNetworks,
+              onLoadMoreConfigs = onLoadMoreCampaignConfigs,
+              onSaveNetwork = onSaveCampaignNetwork,
+              onToggleNetworkStatus = onToggleCampaignNetworkStatus,
+              onSaveCampaignConfig = onSaveCampaignTrackingConfig,
+              onToggleCampaignConfigStatus = onToggleCampaignTrackingConfigStatus,
+              onClearFeedback = onClearCampaignTrackingFeedback
             )
           }
           AdminTab.COINS_REWARDS -> {

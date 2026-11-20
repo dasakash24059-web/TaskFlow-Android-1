@@ -22,6 +22,7 @@ const {
   buildSafeTrackingUrl,
   CampaignNetworkAdapterRegistry
 } = require("./campaign_tracking");
+const { createCampaignAdminHandlers } = require("./campaign_admin");
 
 let onRequest;
 let onCall;
@@ -5878,5 +5879,35 @@ exports._campaignConversionHandlers = {
   ALLOWED_CAMPAIGN_SECRET_KEYS
 };
 
+// =========================================================================
+// PHASE 3D — ADMIN CAMPAIGN TRACKING CONFIGURATION & ANALYTICS ENDPOINTS
+// =========================================================================
+const campaignAdminHandlers = createCampaignAdminHandlers({
+  verifyAdminAccess,
+  getDefaultDb: () => db,
+  getDefaultServerTimestamp,
+  HttpsError
+});
 
-
+exports.adminListCampaignNetworks = onCall(async (request) =>
+  campaignAdminHandlers.handleAdminListCampaignNetworks(request)
+);
+exports.adminUpsertCampaignNetwork = onCall(async (request) =>
+  campaignAdminHandlers.handleAdminUpsertCampaignNetwork(request)
+);
+exports.adminSetCampaignNetworkStatus = onCall(async (request) =>
+  campaignAdminHandlers.handleAdminSetCampaignNetworkStatus(request)
+);
+exports.adminListCampaignTrackingConfigs = onCall(async (request) =>
+  campaignAdminHandlers.handleAdminListCampaignTrackingConfigs(request)
+);
+exports.adminUpsertCampaignTrackingConfig = onCall(async (request) =>
+  campaignAdminHandlers.handleAdminUpsertCampaignTrackingConfig(request)
+);
+exports.adminSetCampaignTrackingStatus = onCall(async (request) =>
+  campaignAdminHandlers.handleAdminSetCampaignTrackingStatus(request)
+);
+exports.adminGetCampaignTrackingDashboard = onCall(async (request) =>
+  campaignAdminHandlers.handleAdminGetCampaignTrackingDashboard(request)
+);
+exports._campaignAdminHandlers = campaignAdminHandlers;

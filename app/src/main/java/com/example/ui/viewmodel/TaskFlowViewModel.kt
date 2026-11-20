@@ -6,10 +6,17 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
+import com.example.data.model.AdminCampaignNetworkItem
+import com.example.data.model.AdminCampaignTrackingConfigItem
+import com.example.data.model.AdminCampaignTrackingUiState
 import com.example.data.model.AdminNotificationItem
+import com.example.data.model.AdminPaginatedSlice
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
+import com.example.data.model.CampaignAnalyticsDateRange
 import com.example.data.model.CampaignItem
 import com.example.data.model.DailyCheckInConstants
+import com.example.data.model.validateAdminCampaignConfigForm
+import com.example.data.model.validateAdminNetworkForm
 import com.example.data.model.DailyCheckInState
 import com.example.data.model.DemoWithdrawalRequest
 import com.example.data.model.ManualBonusRecord
@@ -109,6 +116,7 @@ enum class AdminTab {
   USERS,
   TASKS,
   CAMPAIGNS,
+  CAMPAIGN_TRACKING,
   WITHDRAWALS,
   COINS_REWARDS,
   SUPPORT,
@@ -191,6 +199,10 @@ class TaskFlowViewModel(
 
   private val _showSecuritySheet = MutableStateFlow(false)
   val showSecuritySheet: StateFlow<Boolean> = _showSecuritySheet.asStateFlow()
+
+  private val _campaignTrackingAdminState = MutableStateFlow(AdminCampaignTrackingUiState())
+  val campaignTrackingAdminState: StateFlow<AdminCampaignTrackingUiState> =
+    _campaignTrackingAdminState.asStateFlow()
 
   val isAdminAuthorized: StateFlow<Boolean> =
     repository
@@ -3313,6 +3325,406 @@ class TaskFlowViewModel(
       } finally {
         _isBusy.value = false
       }
+    }
+  }
+
+  // =========================================================================
+  // PHASE 3D — ADMIN CAMPAIGN TRACKING CONFIGURATION & ANALYTICS
+  // =========================================================================
+
+  fun clearCampaignTrackingFeedback() {
+    _campaignTrackingAdminState.update {
+      it.copy(feedbackMessage = null, feedbackIsError = false)
+    }
+  }
+
+  fun refreshCampaignTrackingAdminData(
+    dateRange: CampaignAnalyticsDateRange = _campaignTrackingAdminState.value.selectedDateRange
+  ) {
+    if (!isAdminAuthorized.value) {
+      _campaignTrackingAdminState.update {
+        it.copy(
+          dashboardError = "Admin authorization required to access Campaign Tracking.",
+          networksError = "Admin authorization required.",
+          configsError = "Admin authorization required."
+        )
+      }
+      return
+    }
+    loadCampaignTrackingDashboard(dateRange = dateRange)
+    loadCampaignTrackingNetworks(loadMore = false)
+    loadCampaignTrackingConfigs(loadMore = false)
+  }
+
+  fun loadCampaignTrackingDashboard(
+    dateRange: CampaignAnalyticsDateRange = _campaignTrackingAdminState.value.selectedDateRange,
+    appendCampaigns: Boolean = false,
+    appendNetworks: Boolean = false
+  ) {
+    if (!isAdminAuthorized.value) {
+      _campaignTrackingAdminState.update {
+        it.copy(
+          isLoadingDashboard = false,
+          dashboardError = "Only authorized administrators can view Campaign Tracking analytics."
+        )
+      }
+      return
+    }
+    val current = _campaignTrackingAdminState.value
+    val campaignCursor = if (appendCampaigns) current.campaignPerformance.nextCursor else ""
+    val networkCursor = if (appendNetworks) current.networkPerformance.nextCursor else ""
+    _campaignTrackingAdminState.update {
+      it.copy(
+        isLoadingDashboard = true,
+        dashboardError = null,
+        selectedDateRange = dateRange
+      )
+    }
+    viewModelScope.launch {
+      repository
+        .adminGetCampaignTrackingDashboard(
+          dateRange = dateRange,
+          pageSize = 20,
+          campaignCursor = campaignCursor,
+          networkCursor = networkCursor
+        )
+        .onSuccess { result ->
+          _campaignTrackingAdminState.update { prev ->
+            val mergedCampaigns =
+              if (appendCampaigns) {
+                val existingIds = prev.campaignPerformance.items.mapTo(mutableSetOf()) { it.campaignId }
+                val combined =
+                  prev.campaignPerformance.items +
+                    result.campaignPerformance.items.filterNot { existingIds.contains(it.campaignId) }
+                result.campaignPerformance.copy(items = combined)
+              } else {
+                result.campaignPerformance
+              }
+            val mergedNetworks =
+              if (appendNetworks) {
+                val existingIds = prev.networkPerformance.items.mapTo(mutableSetOf()) { it.networkId }
+                val combined =
+                  prev.networkPerformance.items +
+                    result.networkPerformance.items.filterNot { existingIds.contains(it.networkId) }
+                result.networkPerformance.copy(items = combined)
+              } else {
+                result.networkPerformance
+              }
+            prev.copy(
+              isLoadingDashboard = false,
+              dashboardError = null,
+              hasLoadedDashboard = true,
+              selectedDateRange = dateRange,
+              summary = result.summary,
+              campaignPerformance = mergedCampaigns,
+              networkPerformance = mergedNetworks
+            )
+          }
+        }
+        .onFailure { err ->
+          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
+            ?: "Failed to load campaign tracking analytics."
+          _campaignTrackingAdminState.update {
+            it.copy(
+              isLoadingDashboard = false,
+              dashboardError = msg
+            )
+          }
+        }
+    }
+  }
+
+  fun loadCampaignTrackingNetworks(loadMore: Boolean = false) {
+    if (!isAdminAuthorized.value) {
+      _campaignTrackingAdminState.update {
+        it.copy(
+          isLoadingNetworks = false,
+          networksError = "Only authorized administrators can manage campaign networks."
+        )
+      }
+      return
+    }
+    val cursor = if (loadMore) _campaignTrackingAdminState.value.networks.nextCursor else ""
+    _campaignTrackingAdminState.update {
+      it.copy(isLoadingNetworks = true, networksError = null)
+    }
+    viewModelScope.launch {
+      repository
+        .adminListCampaignNetworks(pageSize = 20, cursor = cursor)
+        .onSuccess { page ->
+          _campaignTrackingAdminState.update { prev ->
+            val merged =
+              if (loadMore) {
+                val existingIds = prev.networks.items.mapTo(mutableSetOf()) { it.networkId }
+                page.copy(items = prev.networks.items + page.items.filterNot { existingIds.contains(it.networkId) })
+              } else {
+                page
+              }
+            prev.copy(
+              isLoadingNetworks = false,
+              networksError = null,
+              networks = merged
+            )
+          }
+        }
+        .onFailure { err ->
+          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
+            ?: "Failed to load campaign networks."
+          _campaignTrackingAdminState.update {
+            it.copy(isLoadingNetworks = false, networksError = msg)
+          }
+        }
+    }
+  }
+
+  fun loadCampaignTrackingConfigs(loadMore: Boolean = false) {
+    if (!isAdminAuthorized.value) {
+      _campaignTrackingAdminState.update {
+        it.copy(
+          isLoadingConfigs = false,
+          configsError = "Only authorized administrators can manage campaign configurations."
+        )
+      }
+      return
+    }
+    val cursor = if (loadMore) _campaignTrackingAdminState.value.configs.nextCursor else ""
+    _campaignTrackingAdminState.update {
+      it.copy(isLoadingConfigs = true, configsError = null)
+    }
+    viewModelScope.launch {
+      repository
+        .adminListCampaignTrackingConfigs(pageSize = 20, cursor = cursor)
+        .onSuccess { page ->
+          _campaignTrackingAdminState.update { prev ->
+            val merged =
+              if (loadMore) {
+                val existingIds = prev.configs.items.mapTo(mutableSetOf()) { it.campaignId }
+                page.copy(items = prev.configs.items + page.items.filterNot { existingIds.contains(it.campaignId) })
+              } else {
+                page
+              }
+            prev.copy(
+              isLoadingConfigs = false,
+              configsError = null,
+              configs = merged
+            )
+          }
+        }
+        .onFailure { err ->
+          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
+            ?: "Failed to load campaign tracking configurations."
+          _campaignTrackingAdminState.update {
+            it.copy(isLoadingConfigs = false, configsError = msg)
+          }
+        }
+    }
+  }
+
+  fun upsertCampaignTrackingNetwork(
+    item: AdminCampaignNetworkItem,
+    isEdit: Boolean,
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value) {
+      _campaignTrackingAdminState.update {
+        it.copy(
+          feedbackMessage = "Only authorized administrators can configure campaign networks.",
+          feedbackIsError = true
+        )
+      }
+      return
+    }
+    val validationErrors = validateAdminNetworkForm(item)
+    if (validationErrors.isNotEmpty()) {
+      _campaignTrackingAdminState.update {
+        it.copy(feedbackMessage = validationErrors.first(), feedbackIsError = true)
+      }
+      return
+    }
+    _campaignTrackingAdminState.update {
+      it.copy(isSaving = true, feedbackMessage = null, feedbackIsError = false)
+    }
+    viewModelScope.launch {
+      repository
+        .adminUpsertCampaignNetwork(item = item, mode = if (isEdit) "UPDATE" else "CREATE")
+        .onSuccess { saved ->
+          _campaignTrackingAdminState.update { prev ->
+            val updatedItems =
+              if (prev.networks.items.any { it.networkId == saved.networkId }) {
+                prev.networks.items.map { if (it.networkId == saved.networkId) saved else it }
+              } else {
+                listOf(saved) + prev.networks.items
+              }
+            prev.copy(
+              isSaving = false,
+              networks = prev.networks.copy(
+                items = updatedItems,
+                totalCount = maxOf(prev.networks.totalCount, updatedItems.size)
+              ),
+              feedbackMessage =
+                if (isEdit) "Updated network '${saved.name}'."
+                else "Registered network '${saved.name}'.",
+              feedbackIsError = false
+            )
+          }
+          loadCampaignTrackingDashboard()
+          onSuccess()
+        }
+        .onFailure { err ->
+          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
+            ?: "Failed to save campaign network."
+          _campaignTrackingAdminState.update {
+            it.copy(isSaving = false, feedbackMessage = msg, feedbackIsError = true)
+          }
+        }
+    }
+  }
+
+  fun setCampaignTrackingNetworkStatus(networkId: String, isActive: Boolean) {
+    if (!isAdminAuthorized.value) {
+      _campaignTrackingAdminState.update {
+        it.copy(
+          feedbackMessage = "Only authorized administrators can change network status.",
+          feedbackIsError = true
+        )
+      }
+      return
+    }
+    _campaignTrackingAdminState.update {
+      it.copy(isSaving = true, feedbackMessage = null, feedbackIsError = false)
+    }
+    viewModelScope.launch {
+      repository
+        .adminSetCampaignNetworkStatus(networkId = networkId, isActive = isActive)
+        .onSuccess { updated ->
+          _campaignTrackingAdminState.update { prev ->
+            prev.copy(
+              isSaving = false,
+              networks = prev.networks.copy(
+                items = prev.networks.items.map {
+                  if (it.networkId == updated.networkId) updated else it
+                }
+              ),
+              feedbackMessage =
+                if (updated.isActive) "Enabled network '${updated.name}'."
+                else "Disabled network '${updated.name}'.",
+              feedbackIsError = false
+            )
+          }
+          loadCampaignTrackingDashboard()
+        }
+        .onFailure { err ->
+          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
+            ?: "Failed to update campaign network status."
+          _campaignTrackingAdminState.update {
+            it.copy(isSaving = false, feedbackMessage = msg, feedbackIsError = true)
+          }
+        }
+    }
+  }
+
+  fun upsertCampaignTrackingConfig(
+    item: AdminCampaignTrackingConfigItem,
+    isEdit: Boolean,
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value) {
+      _campaignTrackingAdminState.update {
+        it.copy(
+          feedbackMessage = "Only authorized administrators can configure campaigns.",
+          feedbackIsError = true
+        )
+      }
+      return
+    }
+    val selectedNetwork =
+      _campaignTrackingAdminState.value.networks.items.firstOrNull { it.networkId == item.networkId.trim() }
+    val validationErrors = validateAdminCampaignConfigForm(item, selectedNetwork)
+    if (validationErrors.isNotEmpty()) {
+      _campaignTrackingAdminState.update {
+        it.copy(feedbackMessage = validationErrors.first(), feedbackIsError = true)
+      }
+      return
+    }
+    _campaignTrackingAdminState.update {
+      it.copy(isSaving = true, feedbackMessage = null, feedbackIsError = false)
+    }
+    viewModelScope.launch {
+      repository
+        .adminUpsertCampaignTrackingConfig(item = item, mode = if (isEdit) "UPDATE" else "CREATE")
+        .onSuccess { saved ->
+          _campaignTrackingAdminState.update { prev ->
+            val updatedItems =
+              if (prev.configs.items.any { it.campaignId == saved.campaignId }) {
+                prev.configs.items.map { if (it.campaignId == saved.campaignId) saved else it }
+              } else {
+                listOf(saved) + prev.configs.items
+              }
+            prev.copy(
+              isSaving = false,
+              configs = prev.configs.copy(
+                items = updatedItems,
+                totalCount = maxOf(prev.configs.totalCount, updatedItems.size)
+              ),
+              feedbackMessage =
+                if (isEdit) "Updated campaign '${saved.title}'."
+                else "Created campaign '${saved.title}'.",
+              feedbackIsError = false
+            )
+          }
+          loadCampaignTrackingDashboard()
+          onSuccess()
+        }
+        .onFailure { err ->
+          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
+            ?: "Failed to save campaign tracking configuration."
+          _campaignTrackingAdminState.update {
+            it.copy(isSaving = false, feedbackMessage = msg, feedbackIsError = true)
+          }
+        }
+    }
+  }
+
+  fun setCampaignTrackingConfigStatus(campaignId: String, isActive: Boolean) {
+    if (!isAdminAuthorized.value) {
+      _campaignTrackingAdminState.update {
+        it.copy(
+          feedbackMessage = "Only authorized administrators can change campaign status.",
+          feedbackIsError = true
+        )
+      }
+      return
+    }
+    _campaignTrackingAdminState.update {
+      it.copy(isSaving = true, feedbackMessage = null, feedbackIsError = false)
+    }
+    viewModelScope.launch {
+      repository
+        .adminSetCampaignTrackingStatus(campaignId = campaignId, isActive = isActive)
+        .onSuccess { updated ->
+          _campaignTrackingAdminState.update { prev ->
+            prev.copy(
+              isSaving = false,
+              configs = prev.configs.copy(
+                items = prev.configs.items.map {
+                  if (it.campaignId == updated.campaignId) updated else it
+                }
+              ),
+              feedbackMessage =
+                if (updated.isActive) "Activated campaign '${updated.title}'."
+                else "Paused campaign '${updated.title}'.",
+              feedbackIsError = false
+            )
+          }
+          loadCampaignTrackingDashboard()
+        }
+        .onFailure { err ->
+          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
+            ?: "Failed to update campaign status."
+          _campaignTrackingAdminState.update {
+            it.copy(isSaving = false, feedbackMessage = msg, feedbackIsError = true)
+          }
+        }
     }
   }
 }

@@ -7,9 +7,14 @@ import android.net.Uri
 import android.util.Base64
 import android.util.Log
 import com.example.data.model.AdminActivityLog
+import com.example.data.model.AdminCampaignDashboardResult
+import com.example.data.model.AdminCampaignNetworkItem
+import com.example.data.model.AdminCampaignTrackingConfigItem
 import com.example.data.model.AdminNotificationItem
+import com.example.data.model.AdminPaginatedSlice
 import com.example.data.model.AppItem
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
+import com.example.data.model.CampaignAnalyticsDateRange
 import com.example.data.model.CampaignItem
 import com.example.data.model.CampaignTrackingCollections
 import com.example.data.model.CampaignVerificationMode
@@ -331,6 +336,49 @@ interface RewardCloudFunctionsClient {
   ): IssuedCampaignClickResult = IssuedCampaignClickResult(
     campaignId = campaignId
   )
+
+  suspend fun adminListCampaignNetworks(
+    pageSize: Int = 20,
+    cursor: String = "",
+    search: String = ""
+  ): AdminPaginatedSlice<AdminCampaignNetworkItem> = AdminPaginatedSlice()
+
+  suspend fun adminUpsertCampaignNetwork(
+    item: AdminCampaignNetworkItem,
+    mode: String = "UPSERT"
+  ): AdminCampaignNetworkItem = item
+
+  suspend fun adminSetCampaignNetworkStatus(
+    networkId: String,
+    isActive: Boolean
+  ): AdminCampaignNetworkItem = AdminCampaignNetworkItem(networkId = networkId, isActive = isActive)
+
+  suspend fun adminListCampaignTrackingConfigs(
+    pageSize: Int = 20,
+    cursor: String = "",
+    search: String = ""
+  ): AdminPaginatedSlice<AdminCampaignTrackingConfigItem> = AdminPaginatedSlice()
+
+  suspend fun adminUpsertCampaignTrackingConfig(
+    item: AdminCampaignTrackingConfigItem,
+    mode: String = "UPSERT"
+  ): AdminCampaignTrackingConfigItem = item
+
+  suspend fun adminSetCampaignTrackingStatus(
+    campaignId: String,
+    isActive: Boolean
+  ): AdminCampaignTrackingConfigItem = AdminCampaignTrackingConfigItem(
+    configId = campaignId,
+    campaignId = campaignId,
+    isActive = isActive
+  )
+
+  suspend fun adminGetCampaignTrackingDashboard(
+    dateRange: String = CampaignAnalyticsDateRange.LAST_30_DAYS.wireValue,
+    pageSize: Int = 20,
+    campaignCursor: String = "",
+    networkCursor: String = ""
+  ): AdminCampaignDashboardResult = AdminCampaignDashboardResult(dateRange = dateRange)
 
   fun getOrAssignSessionRewardCoins(sessionId: String): Long = 0L
 
@@ -1483,11 +1531,18 @@ class FirebaseRewardCloudFunctionsClient(
       } catch (e: CancellationException) {
         throw e
       } catch (e: Throwable) {
-        val isServerOnlyTelegramCall =
+        val isServerOnlyCallable =
           functionName == "verifyTelegramTaskMembership" ||
             functionName == "claimTelegramTaskReward" ||
-            functionName == "createCampaignClick"
-        if (!isServerOnlyTelegramCall && isCloudFunctionMissing(e)) {
+            functionName == "createCampaignClick" ||
+            functionName == "adminListCampaignNetworks" ||
+            functionName == "adminUpsertCampaignNetwork" ||
+            functionName == "adminSetCampaignNetworkStatus" ||
+            functionName == "adminListCampaignTrackingConfigs" ||
+            functionName == "adminUpsertCampaignTrackingConfig" ||
+            functionName == "adminSetCampaignTrackingStatus" ||
+            functionName == "adminGetCampaignTrackingDashboard"
+        if (!isServerOnlyCallable && isCloudFunctionMissing(e)) {
           handleLocalCallableFallback(functionName, payload)
         } else {
           throw e
@@ -2483,6 +2538,173 @@ class FirebaseRewardCloudFunctionsClient(
       expiresAtMillis = (dataMap["expiresAtMillis"] as? Number)?.toLong() ?: 0L,
       deduplicated = dataMap["deduplicated"] as? Boolean ?: false
     )
+  }
+
+  override suspend fun adminListCampaignNetworks(
+    pageSize: Int,
+    cursor: String,
+    search: String
+  ): AdminPaginatedSlice<AdminCampaignNetworkItem> = withTimeout(20_000L) {
+    val payload = mutableMapOf<String, Any>("pageSize" to pageSize.coerceIn(1, 50))
+    if (cursor.isNotBlank()) payload["cursor"] = cursor.trim()
+    if (search.isNotBlank()) payload["search"] = search.trim()
+    val responseData = try {
+      invokeRewardCallable("adminListCampaignNetworks", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to load campaign networks."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from adminListCampaignNetworks.")
+    CampaignAdminParsers.parseNetworkPage(dataMap)
+  }
+
+  override suspend fun adminUpsertCampaignNetwork(
+    item: AdminCampaignNetworkItem,
+    mode: String
+  ): AdminCampaignNetworkItem = withTimeout(20_000L) {
+    val payload = CampaignAdminParsers.toUpsertNetworkPayload(item, mode)
+    val responseData = try {
+      invokeRewardCallable("adminUpsertCampaignNetwork", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to save campaign network."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from adminUpsertCampaignNetwork.")
+    val networkMap = dataMap["network"] as? Map<*, *>
+      ?: throw IllegalStateException("Server did not return saved network configuration.")
+    CampaignAdminParsers.parseNetwork(networkMap)
+  }
+
+  override suspend fun adminSetCampaignNetworkStatus(
+    networkId: String,
+    isActive: Boolean
+  ): AdminCampaignNetworkItem = withTimeout(20_000L) {
+    val payload = mapOf(
+      "networkId" to networkId.trim(),
+      "isActive" to isActive
+    )
+    val responseData = try {
+      invokeRewardCallable("adminSetCampaignNetworkStatus", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to update campaign network status."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from adminSetCampaignNetworkStatus.")
+    val networkMap = dataMap["network"] as? Map<*, *>
+      ?: throw IllegalStateException("Server did not return updated network status.")
+    CampaignAdminParsers.parseNetwork(networkMap)
+  }
+
+  override suspend fun adminListCampaignTrackingConfigs(
+    pageSize: Int,
+    cursor: String,
+    search: String
+  ): AdminPaginatedSlice<AdminCampaignTrackingConfigItem> = withTimeout(20_000L) {
+    val payload = mutableMapOf<String, Any>("pageSize" to pageSize.coerceIn(1, 50))
+    if (cursor.isNotBlank()) payload["cursor"] = cursor.trim()
+    if (search.isNotBlank()) payload["search"] = search.trim()
+    val responseData = try {
+      invokeRewardCallable("adminListCampaignTrackingConfigs", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to load campaign tracking configurations."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from adminListCampaignTrackingConfigs.")
+    CampaignAdminParsers.parseCampaignConfigPage(dataMap)
+  }
+
+  override suspend fun adminUpsertCampaignTrackingConfig(
+    item: AdminCampaignTrackingConfigItem,
+    mode: String
+  ): AdminCampaignTrackingConfigItem = withTimeout(20_000L) {
+    val payload = CampaignAdminParsers.toUpsertCampaignConfigPayload(item, mode)
+    val responseData = try {
+      invokeRewardCallable("adminUpsertCampaignTrackingConfig", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to save campaign tracking configuration."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from adminUpsertCampaignTrackingConfig.")
+    val configMap = dataMap["config"] as? Map<*, *>
+      ?: throw IllegalStateException("Server did not return saved campaign configuration.")
+    CampaignAdminParsers.parseCampaignConfig(configMap)
+  }
+
+  override suspend fun adminSetCampaignTrackingStatus(
+    campaignId: String,
+    isActive: Boolean
+  ): AdminCampaignTrackingConfigItem = withTimeout(20_000L) {
+    val payload = mapOf(
+      "campaignId" to campaignId.trim(),
+      "isActive" to isActive
+    )
+    val responseData = try {
+      invokeRewardCallable("adminSetCampaignTrackingStatus", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to update campaign status."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from adminSetCampaignTrackingStatus.")
+    val configMap = dataMap["config"] as? Map<*, *>
+      ?: throw IllegalStateException("Server did not return updated campaign status.")
+    CampaignAdminParsers.parseCampaignConfig(configMap)
+  }
+
+  override suspend fun adminGetCampaignTrackingDashboard(
+    dateRange: String,
+    pageSize: Int,
+    campaignCursor: String,
+    networkCursor: String
+  ): AdminCampaignDashboardResult = withTimeout(25_000L) {
+    val payload = mutableMapOf<String, Any>(
+      "dateRange" to dateRange.trim().uppercase(Locale.US).ifEmpty { "30D" },
+      "pageSize" to pageSize.coerceIn(1, 50)
+    )
+    if (campaignCursor.isNotBlank()) payload["campaignCursor"] = campaignCursor.trim()
+    if (networkCursor.isNotBlank()) payload["networkCursor"] = networkCursor.trim()
+    val responseData = try {
+      invokeRewardCallable("adminGetCampaignTrackingDashboard", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to load campaign tracking analytics."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from adminGetCampaignTrackingDashboard.")
+    CampaignAdminParsers.parseDashboardResult(dataMap)
   }
 }
 
@@ -6659,6 +6881,98 @@ class TaskFlowRepository(
       taskId = taskId.trim(),
       devicePlatform = devicePlatform.trim().uppercase(Locale.US).ifEmpty { "ANDROID" },
       idempotencyKey = idempotencyKey.trim()
+    )
+  }
+
+  // =========================================================================
+  // UNIVERSAL CAMPAIGN TRACKING ENGINE — PHASE 3D ADMIN CONFIG & ANALYTICS
+  // =========================================================================
+
+  suspend fun adminListCampaignNetworks(
+    pageSize: Int = 20,
+    cursor: String = "",
+    search: String = ""
+  ): Result<AdminPaginatedSlice<AdminCampaignNetworkItem>> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    rewardFunctionsClient.adminListCampaignNetworks(
+      pageSize = pageSize,
+      cursor = cursor.trim(),
+      search = search.trim()
+    )
+  }
+
+  suspend fun adminUpsertCampaignNetwork(
+    item: AdminCampaignNetworkItem,
+    mode: String = "UPSERT"
+  ): Result<AdminCampaignNetworkItem> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    rewardFunctionsClient.adminUpsertCampaignNetwork(item = item, mode = mode)
+  }
+
+  suspend fun adminSetCampaignNetworkStatus(
+    networkId: String,
+    isActive: Boolean
+  ): Result<AdminCampaignNetworkItem> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    require(networkId.trim().isNotEmpty()) { "Valid networkId is required." }
+    rewardFunctionsClient.adminSetCampaignNetworkStatus(
+      networkId = networkId.trim(),
+      isActive = isActive
+    )
+  }
+
+  suspend fun adminListCampaignTrackingConfigs(
+    pageSize: Int = 20,
+    cursor: String = "",
+    search: String = ""
+  ): Result<AdminPaginatedSlice<AdminCampaignTrackingConfigItem>> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    rewardFunctionsClient.adminListCampaignTrackingConfigs(
+      pageSize = pageSize,
+      cursor = cursor.trim(),
+      search = search.trim()
+    )
+  }
+
+  suspend fun adminUpsertCampaignTrackingConfig(
+    item: AdminCampaignTrackingConfigItem,
+    mode: String = "UPSERT"
+  ): Result<AdminCampaignTrackingConfigItem> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    rewardFunctionsClient.adminUpsertCampaignTrackingConfig(item = item, mode = mode)
+  }
+
+  suspend fun adminSetCampaignTrackingStatus(
+    campaignId: String,
+    isActive: Boolean
+  ): Result<AdminCampaignTrackingConfigItem> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    require(campaignId.trim().isNotEmpty()) { "Valid campaignId is required." }
+    rewardFunctionsClient.adminSetCampaignTrackingStatus(
+      campaignId = campaignId.trim(),
+      isActive = isActive
+    )
+  }
+
+  suspend fun adminGetCampaignTrackingDashboard(
+    dateRange: CampaignAnalyticsDateRange = CampaignAnalyticsDateRange.LAST_30_DAYS,
+    pageSize: Int = 20,
+    campaignCursor: String = "",
+    networkCursor: String = ""
+  ): Result<AdminCampaignDashboardResult> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    rewardFunctionsClient.adminGetCampaignTrackingDashboard(
+      dateRange = dateRange.wireValue,
+      pageSize = pageSize,
+      campaignCursor = campaignCursor.trim(),
+      networkCursor = networkCursor.trim()
     )
   }
 }

@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -193,6 +194,13 @@ val ADMIN_10_MAIN_SECTIONS: List<AdminNavSectionItem> =
       defaultSubtitle = "Budgets, quotas & status"
     ),
     AdminNavSectionItem(
+      tab = AdminTab.CAMPAIGN_TRACKING,
+      label = "Campaign Tracking",
+      icon = Icons.Default.TrackChanges,
+      tag = "admin_section_campaign_tracking",
+      defaultSubtitle = "S2S networks, configs & analytics"
+    ),
+    AdminNavSectionItem(
       tab = AdminTab.WITHDRAWALS,
       label = "Withdrawals",
       icon = Icons.Default.AccountBalanceWallet,
@@ -306,6 +314,7 @@ fun AdminControlCenterHomeScreen(
         AdminTab.USERS to "${users.size} Total • $pendingUsersCount Pending",
         AdminTab.TASKS to "$activeTasksCount Active • ${tasks.size} Total",
         AdminTab.CAMPAIGNS to "$activeCampaignsCount Active • ${campaigns.size} Total",
+        AdminTab.CAMPAIGN_TRACKING to "S2S Networks, Configs & Net TF",
         AdminTab.WITHDRAWALS to "$pendingWithdrawalsCount Pending • ${withdrawalRequests.size} Total",
         AdminTab.COINS_REWARDS to "${formatCoins(totalDistributedCoins)} Paid",
         AdminTab.ANALYTICS to "Daily, Weekly & Monthly",
