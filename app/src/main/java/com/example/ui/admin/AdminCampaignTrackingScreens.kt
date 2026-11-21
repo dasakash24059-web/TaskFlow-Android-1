@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Analytics
@@ -62,9 +63,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.model.AdminCampaignConversionItem
 import com.example.data.model.AdminCampaignNetworkItem
 import com.example.data.model.AdminCampaignTrackingConfigItem
 import com.example.data.model.AdminCampaignTrackingUiState
+import com.example.data.model.AdminConversionReviewAction
+import com.example.data.model.AdminConversionStatusFilter
 import com.example.data.model.CampaignAnalyticsDateRange
 import com.example.data.model.CampaignAnalyticsScanLimits
 import com.example.data.model.CampaignPerformanceRow
@@ -82,6 +86,7 @@ private enum class CampaignTrackingSubTab(val label: String, val tag: String) {
   OVERVIEW("Overview", "campaign_tracking_tab_overview"),
   NETWORKS("Networks", "campaign_tracking_tab_networks"),
   CAMPAIGNS("Campaigns", "campaign_tracking_tab_campaigns"),
+  CONVERSIONS("Conversions", "campaign_tracking_tab_conversions"),
   ANALYTICS("Analytics", "campaign_tracking_tab_analytics")
 }
 
@@ -107,7 +112,12 @@ fun AdminCampaignTrackingSection(
   onSaveCampaignConfig: (AdminCampaignTrackingConfigItem, Boolean, () -> Unit) -> Unit,
   onToggleCampaignConfigStatus: (String, Boolean) -> Unit,
   onClearFeedback: () -> Unit,
-  onEnsureNetworkLoaded: (String) -> Unit = {}
+  onEnsureNetworkLoaded: (String) -> Unit = {},
+  onSelectConversionsStatusFilter: (AdminConversionStatusFilter) -> Unit = {},
+  onApplyConversionsFilters: (String, String) -> Unit = { _, _ -> },
+  onRefreshConversions: () -> Unit = {},
+  onLoadMoreConversions: () -> Unit = {},
+  onReviewConversion: (AdminCampaignConversionItem, AdminConversionReviewAction, String, () -> Unit) -> Unit = { _, _, _, onDone -> onDone() }
 ) {
   val tfColors = taskFlowColors()
   var activeSubTab by rememberSaveable { mutableStateOf(CampaignTrackingSubTab.OVERVIEW) }
@@ -372,6 +382,23 @@ fun AdminCampaignTrackingSection(
           },
           onLoadMore = onLoadMoreConfigs
         )
+      }
+      CampaignTrackingSubTab.CONVERSIONS -> {
+        Column(
+          modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 14.dp)
+        ) {
+          CampaignTrackingConversionsQueueTab(
+            state = state,
+            onSelectStatusFilter = onSelectConversionsStatusFilter,
+            onApplyFilters = onApplyConversionsFilters,
+            onRefresh = onRefreshConversions,
+            onLoadMore = onLoadMoreConversions,
+            onReviewConversion = onReviewConversion
+          )
+        }
       }
       CampaignTrackingSubTab.ANALYTICS -> {
         CampaignTrackingAnalyticsTab(

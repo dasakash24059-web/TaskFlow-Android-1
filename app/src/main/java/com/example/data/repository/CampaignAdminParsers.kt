@@ -1,9 +1,11 @@
 package com.example.data.repository
 
+import com.example.data.model.AdminCampaignConversionItem
 import com.example.data.model.AdminCampaignConversionRequirements
 import com.example.data.model.AdminCampaignDashboardResult
 import com.example.data.model.AdminCampaignNetworkItem
 import com.example.data.model.AdminCampaignTrackingConfigItem
+import com.example.data.model.AdminConversionReviewResult
 import com.example.data.model.AdminNetworkSignatureConfig
 import com.example.data.model.AdminPaginatedSlice
 import com.example.data.model.CampaignAnalyticsDateRange
@@ -17,6 +19,9 @@ import com.example.data.model.NetworkParameterMapping
 import com.example.data.model.NetworkPerformanceRow
 import com.example.data.model.NetworkSignatureAlgorithm
 import com.example.data.model.REGISTERED_CAMPAIGN_SECRET_KEYS
+import com.example.data.model.UserTrackedCampaignItem
+import com.example.data.model.UserTrackedRewardActivityCounts
+import com.example.data.model.UserTrackedRewardActivityItem
 import com.example.data.model.coinsToCents
 
 internal object CampaignAdminParsers {
@@ -401,5 +406,182 @@ internal object CampaignAdminParsers {
         "requireAppCheck" to item.conversionRequirements.requireAppCheck
       ),
       "clickTtlMinutes" to item.clickTtlMinutes
+    )
+
+  // ============================================================================
+  // PHASE 3E.1 — USER TRACKED CAMPAIGNS & READ-ONLY ACTIVITY PARSERS
+  // ============================================================================
+
+  fun parseUserTrackedCampaign(map: Map<*, *>): UserTrackedCampaignItem {
+    val rewardTf = map.long("rewardTf").coerceAtLeast(0L)
+    val rawRemaining = map["remainingSubmissions"] as? Number
+    return UserTrackedCampaignItem(
+      campaignId = map.str("campaignId"),
+      title = map.str("title", map.str("campaignId")),
+      description = map.str("description"),
+      category = map.str("category", "Tracked Offer"),
+      rewardTf = rewardTf,
+      rewardCents = map.long("rewardCents", coinsToCents(rewardTf)),
+      verificationMode = map.str("verificationMode", CampaignVerificationMode.AFFILIATE_POSTBACK.name),
+      requiresAdminApproval = map.bool("requiresAdminApproval"),
+      attributionWindowHours = map.int("attributionWindowHours", 72),
+      expiresAtMillis = map.long("expiresAtMillis"),
+      remainingSubmissions = rawRemaining?.toLong()?.coerceAtLeast(0L),
+      userStatus = map.str("userStatus", "AVAILABLE").uppercase(),
+      canClick = map.bool("canClick", true),
+      allowMultipleConversions = map.bool("allowMultipleConversions")
+    )
+  }
+
+  data class ParsedUserTrackedCampaignsPage(
+    val accountApproved: Boolean,
+    val slice: AdminPaginatedSlice<UserTrackedCampaignItem>
+  )
+
+  fun parseUserTrackedCampaignsPage(dataMap: Map<*, *>): ParsedUserTrackedCampaignsPage {
+    val rawItems = dataMap["items"] as? List<*> ?: emptyList<Any>()
+    val items = rawItems.mapNotNull { (it as? Map<*, *>)?.let(::parseUserTrackedCampaign) }
+    return ParsedUserTrackedCampaignsPage(
+      accountApproved = dataMap.bool("accountApproved", true),
+      slice = AdminPaginatedSlice(
+        items = items,
+        nextCursor = dataMap.str("nextCursor"),
+        hasMore = dataMap.bool("hasMore"),
+        totalCount = dataMap.int("totalCount", items.size),
+        truncated = dataMap.bool("truncated")
+      )
+    )
+  }
+
+  fun parseUserTrackedActivityItem(map: Map<*, *>): UserTrackedRewardActivityItem {
+    val rewardTf = map.long("rewardTf").coerceAtLeast(0L)
+    val status = map.str("status", "PENDING").uppercase()
+    val defaultLabel = when (status) {
+      "APPROVED" -> "Approved"
+      "REJECTED" -> "Rejected"
+      "REVERSED" -> "Reversed"
+      else -> "Pending Verification"
+    }
+    return UserTrackedRewardActivityItem(
+      activityId = map.str("activityId"),
+      campaignId = map.str("campaignId"),
+      campaignTitle = map.str("campaignTitle", map.str("campaignId", "Tracked Campaign")),
+      status = status,
+      statusLabel = map.str("statusLabel", defaultLabel),
+      rewardTf = rewardTf,
+      rewardCents = map.long("rewardCents", coinsToCents(rewardTf)),
+      rewardCredited = map.bool("rewardCredited"),
+      createdAtMillis = map.long("createdAtMillis"),
+      verifiedAtMillis = map.long("verifiedAtMillis"),
+      rejectedAtMillis = map.long("rejectedAtMillis"),
+      reversedAtMillis = map.long("reversedAtMillis"),
+      updatedAtMillis = map.long("updatedAtMillis")
+    )
+  }
+
+  data class ParsedUserTrackedActivityPage(
+    val counts: UserTrackedRewardActivityCounts,
+    val slice: AdminPaginatedSlice<UserTrackedRewardActivityItem>
+  )
+
+  fun parseUserTrackedActivityPage(dataMap: Map<*, *>): ParsedUserTrackedActivityPage {
+    val rawItems = dataMap["items"] as? List<*> ?: emptyList<Any>()
+    val items = rawItems.mapNotNull { (it as? Map<*, *>)?.let(::parseUserTrackedActivityItem) }
+    val countsMap = dataMap["counts"] as? Map<*, *> ?: emptyMap<String, Any>()
+    val counts = UserTrackedRewardActivityCounts(
+      pending = countsMap.int("pending").coerceAtLeast(0),
+      approved = countsMap.int("approved").coerceAtLeast(0),
+      rejected = countsMap.int("rejected").coerceAtLeast(0),
+      reversed = countsMap.int("reversed").coerceAtLeast(0)
+    )
+    return ParsedUserTrackedActivityPage(
+      counts = counts,
+      slice = AdminPaginatedSlice(
+        items = items,
+        nextCursor = dataMap.str("nextCursor"),
+        hasMore = dataMap.bool("hasMore"),
+        totalCount = dataMap.int("totalCount", items.size),
+        truncated = dataMap.bool("truncated")
+      )
+    )
+  }
+
+  // ============================================================================
+  // PHASE 3E.2 — ADMIN CONVERSION MODERATION QUEUE PARSERS
+  // ============================================================================
+
+  fun parseAdminConversionItem(map: Map<*, *>): AdminCampaignConversionItem {
+    val rewardTf = map.long("rewardTf").coerceAtLeast(0L)
+    val recoveredTf = map.long("recoveredTf").coerceAtLeast(0L)
+    val shortfallTf = map.long("shortfallTf").coerceAtLeast(0L)
+    val expectedRecTf = map.long("expectedRecoverableTf").coerceAtLeast(0L)
+    val estShortfallTf = map.long("estimatedShortfallTf").coerceAtLeast(0L)
+    return AdminCampaignConversionItem(
+      moderationId = map.str("moderationId"),
+      displayRef = map.str("displayRef"),
+      campaignId = map.str("campaignId"),
+      campaignTitle = map.str("campaignTitle", map.str("campaignId")),
+      networkId = map.str("networkId"),
+      networkName = map.str("networkName", map.str("networkId")),
+      userId = map.str("userId"),
+      userDisplayName = map.str("userDisplayName", "TaskFlow Member"),
+      verificationMode = map.str("verificationMode"),
+      state = map.str("state", "PENDING").uppercase(),
+      rewardTf = rewardTf,
+      rewardCents = map.long("rewardCents", coinsToCents(rewardTf)),
+      rewardCredited = map.bool("rewardCredited"),
+      recoveredTf = recoveredTf,
+      recoveredCents = map.long("recoveredCents", coinsToCents(recoveredTf)),
+      shortfallTf = shortfallTf,
+      shortfallCents = map.long("shortfallCents", coinsToCents(shortfallTf)),
+      expectedRecoverableTf = expectedRecTf,
+      expectedRecoverableCents = map.long("expectedRecoverableCents", coinsToCents(expectedRecTf)),
+      estimatedShortfallTf = estShortfallTf,
+      estimatedShortfallCents = map.long("estimatedShortfallCents", coinsToCents(estShortfallTf)),
+      statusReason = map.str("statusReason"),
+      sourceCallbackType = map.str("sourceCallbackType"),
+      approvedByAdminId = map.str("approvedByAdminId"),
+      rejectedByAdminId = map.str("rejectedByAdminId"),
+      reversedByAdminId = map.str("reversedByAdminId"),
+      createdAtMillis = map.long("createdAtMillis"),
+      verifiedAtMillis = map.long("verifiedAtMillis"),
+      rejectedAtMillis = map.long("rejectedAtMillis"),
+      reversedAtMillis = map.long("reversedAtMillis"),
+      updatedAtMillis = map.long("updatedAtMillis")
+    )
+  }
+
+  data class ParsedAdminConversionsPage(
+    val slice: AdminPaginatedSlice<AdminCampaignConversionItem>,
+    val scanLimit: Int
+  )
+
+  fun parseAdminConversionsPage(dataMap: Map<*, *>): ParsedAdminConversionsPage {
+    val rawItems = dataMap["items"] as? List<*> ?: emptyList<Any>()
+    val items = rawItems.mapNotNull { (it as? Map<*, *>)?.let(::parseAdminConversionItem) }
+    return ParsedAdminConversionsPage(
+      slice = AdminPaginatedSlice(
+        items = items,
+        nextCursor = dataMap.str("nextCursor"),
+        hasMore = dataMap.bool("hasMore"),
+        totalCount = dataMap.int("totalCount", items.size),
+        truncated = dataMap.bool("truncated")
+      ),
+      scanLimit = dataMap.int("scanLimit", 2000).coerceAtLeast(1)
+    )
+  }
+
+  fun parseAdminConversionReviewResult(dataMap: Map<*, *>): AdminConversionReviewResult =
+    AdminConversionReviewResult(
+      moderationId = dataMap.str("moderationId"),
+      campaignId = dataMap.str("campaignId"),
+      networkId = dataMap.str("networkId"),
+      userId = dataMap.str("userId"),
+      state = dataMap.str("state").uppercase(),
+      duplicate = dataMap.bool("duplicate"),
+      rewardTf = dataMap.long("rewardTf").coerceAtLeast(0L),
+      rewardCredited = dataMap.bool("rewardCredited"),
+      recoveredCoins = dataMap.long("recoveredCoins").coerceAtLeast(0L),
+      shortfallCoins = dataMap.long("shortfallCoins").coerceAtLeast(0L)
     )
 }

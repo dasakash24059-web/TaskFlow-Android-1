@@ -122,11 +122,13 @@ import com.example.ui.user.UpiRedemptionScreen
 import com.example.ui.user.UserHomeScreen
 import com.example.ui.user.UserProfileScreen
 import com.example.ui.user.UserTaskDetailScreen
+import com.example.ui.user.UserTrackedRewardActivityScreen
 import com.example.ui.user.UserTrackingScreen
 import com.example.ui.user.UserWalletScreen
 import com.example.ui.user.WithdrawalConfirmationScreen
 import com.example.ui.user.WithdrawalHistoryScreen
 import com.example.ui.user.WithdrawalMainScreen
+import com.example.util.CampaignUrlLauncher
 import com.example.ui.viewmodel.AdminTab
 import com.example.ui.viewmodel.ProfileSubScreen
 import com.example.ui.viewmodel.TaskFlowViewModel
@@ -454,6 +456,9 @@ private fun AuthenticatedWorkspace(
   val adminSupportTickets by viewModel.adminSupportTicketsState.collectAsStateWithLifecycle()
   val isOpeningCampaignLink by viewModel.isOpeningCampaignLink.collectAsStateWithLifecycle()
   val campaignTrackingAdminState by viewModel.campaignTrackingAdminState.collectAsStateWithLifecycle()
+  val userTrackedCampaignsState by viewModel.userTrackedCampaignsState.collectAsStateWithLifecycle()
+  val userTrackedActivityState by viewModel.userTrackedActivityState.collectAsStateWithLifecycle()
+  val isTrackedActivityScreenVisible by viewModel.isTrackedActivityScreenVisible.collectAsStateWithLifecycle()
 
   androidx.compose.runtime.LaunchedEffect(activePortal, activeAdminTab, isAdminAuthorized) {
     if (isAdminAuthorized &&
@@ -464,9 +469,21 @@ private fun AuthenticatedWorkspace(
     }
   }
 
+  androidx.compose.runtime.LaunchedEffect(activePortal, activeUserTab, isOfferWallScreenVisible) {
+    if (
+      (activePortal == PortalLoginTarget.USER_APP || !isAdminAuthorized) &&
+      (isOfferWallScreenVisible || activeUserTab == UserTab.TRACKING) &&
+      !userTrackedCampaignsState.hasLoaded &&
+      !userTrackedCampaignsState.isLoading
+    ) {
+      viewModel.loadUserEligibleTrackedCampaigns(loadMore = false)
+    }
+  }
+
   BackHandler(
     enabled =
       selectedTaskId != null ||
+        isTrackedActivityScreenVisible ||
         (activePortal == PortalLoginTarget.USER_APP &&
           activeUserTab == UserTab.HOME &&
           (isScratchCardScreenVisible || isPromoCodeScreenVisible || isDailyCheckInScreenVisible || isSpinScreenVisible || isOfferWallScreenVisible)) ||
@@ -478,6 +495,7 @@ private fun AuthenticatedWorkspace(
   ) {
     when {
       selectedTaskId != null -> viewModel.selectTask(null)
+      isTrackedActivityScreenVisible -> viewModel.setTrackedActivityScreenVisible(false)
       activePortal == PortalLoginTarget.USER_APP &&
         activeUserTab == UserTab.HOME &&
         isScratchCardScreenVisible ->
@@ -789,7 +807,21 @@ private fun AuthenticatedWorkspace(
             }
           val selectedTask = mergedTasks.firstOrNull { it.id == selectedTaskId }
 
-          if (selectedTask != null) {
+          if (isTrackedActivityScreenVisible) {
+            UserTrackedRewardActivityScreen(
+              state = userTrackedActivityState,
+              onSelectStatusFilter = { filter ->
+                viewModel.loadUserTrackedRewardActivity(statusFilter = filter, loadMore = false)
+              },
+              onRefresh = {
+                viewModel.loadUserTrackedRewardActivity(loadMore = false)
+              },
+              onLoadMore = {
+                viewModel.loadUserTrackedRewardActivity(loadMore = true)
+              },
+              onBack = { viewModel.setTrackedActivityScreenVisible(false) }
+            )
+          } else if (selectedTask != null) {
             val currentApprovalStatus =
               (userProfileState as? UiState.Success)?.data?.approvalStatus ?: "approved"
             UserTaskDetailScreen(
@@ -911,7 +943,21 @@ private fun AuthenticatedWorkspace(
                     onSelectOffer = { taskId ->
                       viewModel.setOfferWallScreenVisible(false)
                       viewModel.selectTask(taskId)
-                    }
+                    },
+                    trackedCampaignsState = userTrackedCampaignsState,
+                    onRefreshTrackedCampaigns = {
+                      viewModel.loadUserEligibleTrackedCampaigns(loadMore = false)
+                    },
+                    onLoadMoreTrackedCampaigns = {
+                      viewModel.loadUserEligibleTrackedCampaigns(loadMore = true)
+                    },
+                    onLaunchTrackedCampaign = { campaign ->
+                      viewModel.launchTrackedCampaign(campaign) { trackingUrl ->
+                        CampaignUrlLauncher.openTrackedCampaignUrl(context, trackingUrl)
+                      }
+                    },
+                    onDismissTrackedFeedback = { viewModel.clearTrackedCampaignFeedback() },
+                    onOpenTrackedActivity = { viewModel.setTrackedActivityScreenVisible(true) }
                   )
                 } else {
                   UserHomeScreen(
@@ -1035,7 +1081,14 @@ private fun AuthenticatedWorkspace(
                   },
                   onClaimTelegramTask = { tgTask ->
                     viewModel.claimTelegramTask(tgTask.effectiveTaskId)
-                  }
+                  },
+                  trackedCampaignsState = userTrackedCampaignsState,
+                  onLaunchTrackedCampaign = { campaign ->
+                    viewModel.launchTrackedCampaign(campaign) { trackingUrl ->
+                      CampaignUrlLauncher.openTrackedCampaignUrl(context, trackingUrl)
+                    }
+                  },
+                  onOpenTrackedActivity = { viewModel.setTrackedActivityScreenVisible(true) }
                 )
               }
               UserTab.WALLET -> {
@@ -1497,6 +1550,30 @@ private fun AuthenticatedWorkspace(
             onClearCampaignTrackingFeedback = { viewModel.clearCampaignTrackingFeedback() },
             onEnsureCampaignNetworkLoaded = { networkId ->
               viewModel.ensureCampaignNetworkLoaded(networkId)
+            },
+            onSelectCampaignConversionsStatusFilter = { filter ->
+              viewModel.loadAdminCampaignConversions(status = filter, loadMore = false)
+            },
+            onApplyCampaignConversionsFilters = { campaignId, networkId ->
+              viewModel.loadAdminCampaignConversions(
+                campaignId = campaignId,
+                networkId = networkId,
+                loadMore = false
+              )
+            },
+            onRefreshCampaignConversions = {
+              viewModel.loadAdminCampaignConversions(loadMore = false)
+            },
+            onLoadMoreCampaignConversions = {
+              viewModel.loadAdminCampaignConversions(loadMore = true)
+            },
+            onReviewCampaignConversion = { item, action, reason, onDone ->
+              viewModel.reviewAdminCampaignConversion(
+                item = item,
+                action = action,
+                reason = reason,
+                onSuccess = onDone
+              )
             }
           )
         }

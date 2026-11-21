@@ -143,6 +143,32 @@ function buildExternalTxnLockId(networkId, externalTransactionId) {
 }
 
 /**
+ * Computes a deterministic, non-reversible opaque moderation identifier for a conversion
+ * document ID so Admin moderation APIs never expose raw `clickId` values embedded in `conv_<clickId>`.
+ */
+function buildConversionModerationId(conversionId) {
+  const clean = String(conversionId || "").trim();
+  const digest = crypto
+    .createHash("sha256")
+    .update(`taskflow_mod::${clean}`, "utf8")
+    .digest("hex");
+  return `mod_${digest.slice(0, 24)}`;
+}
+
+/**
+ * Computes a deterministic, non-reversible opaque user activity identifier so end-user
+ * reward activity responses never leak `clickId` or internal conversion keys.
+ */
+function buildUserActivityId(conversionId) {
+  const clean = String(conversionId || "").trim();
+  const digest = crypto
+    .createHash("sha256")
+    .update(`taskflow_act::${clean}`, "utf8")
+    .digest("hex");
+  return `act_${digest.slice(0, 24)}`;
+}
+
+/**
  * Converts TF tokens to INR paise using authoritative ratio: 125 TF = ₹1 (100 paise).
  */
 function tfToBalanceCents(rewardTf) {
@@ -950,6 +976,8 @@ module.exports = {
   stripPrivateTrackingFields,
   generateSecureClickId,
   buildExternalTxnLockId,
+  buildConversionModerationId,
+  buildUserActivityId,
   tfToBalanceCents,
   signedTfToBalanceCents,
   MAX_DESTINATION_URL_LENGTH,

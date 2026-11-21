@@ -318,6 +318,14 @@ data class AdminCampaignTrackingUiState(
   val isLoadingConfigs: Boolean = false,
   val configsError: String? = null,
   val configs: AdminPaginatedSlice<AdminCampaignTrackingConfigItem> = AdminPaginatedSlice(),
+  val isLoadingConversions: Boolean = false,
+  val conversionsError: String? = null,
+  val conversionsFilterStatus: AdminConversionStatusFilter = AdminConversionStatusFilter.PENDING,
+  val conversionsFilterCampaignId: String = "",
+  val conversionsFilterNetworkId: String = "",
+  val conversions: AdminPaginatedSlice<AdminCampaignConversionItem> = AdminPaginatedSlice(),
+  val conversionsScanLimit: Int = 2000,
+  val reviewingModerationId: String? = null,
   val isSaving: Boolean = false,
   val feedbackMessage: String? = null,
   val feedbackIsError: Boolean = false
@@ -521,3 +529,180 @@ fun formatApprovalRateDisplay(ratePercent: Double?, totalConversions: Long): Str
   if (totalConversions <= 0L || ratePercent == null) return "N/A"
   return String.format(Locale.US, "%.1f%%", ratePercent)
 }
+
+// ============================================================================
+// PHASE 3E.1 — USER TRACKED CAMPAIGN DISCOVERY & READ-ONLY REWARD ACTIVITY
+// ============================================================================
+
+data class UserTrackedCampaignItem(
+  val campaignId: String = "",
+  val title: String = "",
+  val description: String = "",
+  val category: String = "Tracked Offer",
+  val rewardTf: Long = 0L,
+  val rewardCents: Long = 0L,
+  val verificationMode: String = CampaignVerificationMode.AFFILIATE_POSTBACK.name,
+  val requiresAdminApproval: Boolean = false,
+  val attributionWindowHours: Int = 72,
+  val expiresAtMillis: Long = 0L,
+  val remainingSubmissions: Long? = null,
+  val userStatus: String = "AVAILABLE", // AVAILABLE, PENDING, COMPLETED
+  val canClick: Boolean = true,
+  val allowMultipleConversions: Boolean = false
+)
+
+data class UserTrackedCampaignsUiState(
+  val isLoading: Boolean = false,
+  val error: String? = null,
+  val hasLoaded: Boolean = false,
+  val accountApproved: Boolean = true,
+  val items: List<UserTrackedCampaignItem> = emptyList(),
+  val nextCursor: String = "",
+  val hasMore: Boolean = false,
+  val totalCount: Int = 0,
+  val launchingCampaignId: String? = null,
+  val feedbackMessage: String? = null,
+  val feedbackIsError: Boolean = false
+)
+
+data class UserTrackedRewardActivityItem(
+  val activityId: String = "",
+  val campaignId: String = "",
+  val campaignTitle: String = "",
+  val status: String = "PENDING", // PENDING, APPROVED, REJECTED, REVERSED
+  val statusLabel: String = "Pending Verification",
+  val rewardTf: Long = 0L,
+  val rewardCents: Long = 0L,
+  val rewardCredited: Boolean = false,
+  val createdAtMillis: Long = 0L,
+  val verifiedAtMillis: Long = 0L,
+  val rejectedAtMillis: Long = 0L,
+  val reversedAtMillis: Long = 0L,
+  val updatedAtMillis: Long = 0L
+)
+
+data class UserTrackedRewardActivityCounts(
+  val pending: Int = 0,
+  val approved: Int = 0,
+  val rejected: Int = 0,
+  val reversed: Int = 0
+) {
+  val total: Int get() = pending + approved + rejected + reversed
+}
+
+data class UserTrackedRewardActivityUiState(
+  val isLoading: Boolean = false,
+  val error: String? = null,
+  val hasLoaded: Boolean = false,
+  val selectedStatusFilter: String = "ALL", // ALL, PENDING, APPROVED, REJECTED, REVERSED
+  val items: List<UserTrackedRewardActivityItem> = emptyList(),
+  val counts: UserTrackedRewardActivityCounts = UserTrackedRewardActivityCounts(),
+  val nextCursor: String = "",
+  val hasMore: Boolean = false,
+  val totalCount: Int = 0,
+  val truncated: Boolean = false
+)
+
+/**
+ * Translates server-side `createCampaignClick` failure messages into clear, user-actionable
+ * copy covering cooldown, budget exhaustion, expiry, geo-ineligibility, account approval,
+ * authentication, and App Check / device attestation errors.
+ */
+fun formatUserCampaignClickError(rawMessage: String?): String {
+  val msg = rawMessage?.trim().orEmpty()
+  if (msg.isEmpty()) return "Unable to start this tracked offer right now. Please try again shortly."
+  val lower = msg.lowercase(Locale.US)
+  return when {
+    lower.contains("unauthenticated") || lower.contains("sign in") || lower.contains("authentication") ->
+      "Please sign in again to start this tracked offer."
+    lower.contains("app check") || lower.contains("attestation") || lower.contains("device verification") ->
+      "Device security verification failed. Please update TaskFlow from Play Store and try again."
+    lower.contains("not approved") || lower.contains("approval") ->
+      "Your account must be approved before participating in tracked reward offers."
+    lower.contains("cooldown") || lower.contains("too many") || lower.contains("rate limit") || lower.contains("wait") ->
+      "Please wait a moment before starting this offer again (cooldown active)."
+    lower.contains("budget") || lower.contains("exhausted") || lower.contains("slots") || lower.contains("full") ->
+      "This offer has reached its reward budget limit and is no longer accepting new entries."
+    lower.contains("expired") || lower.contains("not started") || lower.contains("ended") ->
+      "This tracked offer is currently outside its active schedule."
+    lower.contains("country") || lower.contains("region") || lower.contains("geo") ->
+      "This offer is not available in your verified region."
+    lower.contains("already completed") || lower.contains("already converted") ->
+      "You have already completed this tracked offer."
+    lower.contains("inactive") || lower.contains("paused") || lower.contains("disabled") ->
+      "This offer is currently paused. Please choose another active offer."
+    else -> msg
+  }
+}
+
+// ============================================================================
+// PHASE 3E.2 — ADMIN CONVERSION MODERATION QUEUE MODELS
+// ============================================================================
+
+enum class AdminConversionStatusFilter(
+  val wireValue: String,
+  val label: String
+) {
+  PENDING("PENDING", "Pending"),
+  APPROVED("APPROVED", "Approved"),
+  REJECTED("REJECTED", "Rejected"),
+  REVERSED("REVERSED", "Reversed"),
+  ALL("ALL", "All")
+}
+
+enum class AdminConversionReviewAction(
+  val wireValue: String,
+  val label: String
+) {
+  APPROVE("APPROVE", "Approve"),
+  REJECT("REJECT", "Reject"),
+  REVERSE("REVERSE", "Reverse")
+}
+
+data class AdminCampaignConversionItem(
+  val moderationId: String = "",
+  val displayRef: String = "",
+  val campaignId: String = "",
+  val campaignTitle: String = "",
+  val networkId: String = "",
+  val networkName: String = "",
+  val userId: String = "",
+  val userDisplayName: String = "",
+  val verificationMode: String = "",
+  val state: String = "PENDING",
+  val rewardTf: Long = 0L,
+  val rewardCents: Long = 0L,
+  val rewardCredited: Boolean = false,
+  val recoveredTf: Long = 0L,
+  val recoveredCents: Long = 0L,
+  val shortfallTf: Long = 0L,
+  val shortfallCents: Long = 0L,
+  val expectedRecoverableTf: Long = 0L,
+  val expectedRecoverableCents: Long = 0L,
+  val estimatedShortfallTf: Long = 0L,
+  val estimatedShortfallCents: Long = 0L,
+  val statusReason: String = "",
+  val sourceCallbackType: String = "",
+  val approvedByAdminId: String = "",
+  val rejectedByAdminId: String = "",
+  val reversedByAdminId: String = "",
+  val createdAtMillis: Long = 0L,
+  val verifiedAtMillis: Long = 0L,
+  val rejectedAtMillis: Long = 0L,
+  val reversedAtMillis: Long = 0L,
+  val updatedAtMillis: Long = 0L
+)
+
+data class AdminConversionReviewResult(
+  val moderationId: String = "",
+  val campaignId: String = "",
+  val networkId: String = "",
+  val userId: String = "",
+  val state: String = "",
+  val duplicate: Boolean = false,
+  val rewardTf: Long = 0L,
+  val rewardCredited: Boolean = false,
+  val recoveredCoins: Long = 0L,
+  val shortfallCoins: Long = 0L
+)
+

@@ -6,15 +6,23 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
+import com.example.data.model.AdminCampaignConversionItem
 import com.example.data.model.AdminCampaignNetworkItem
 import com.example.data.model.AdminCampaignTrackingConfigItem
 import com.example.data.model.AdminCampaignTrackingUiState
+import com.example.data.model.AdminConversionReviewAction
+import com.example.data.model.AdminConversionStatusFilter
 import com.example.data.model.AdminNotificationItem
 import com.example.data.model.AdminPaginatedSlice
 import com.example.data.model.BOOTSTRAPPED_ADMIN_EMAIL
 import com.example.data.model.CampaignAnalyticsDateRange
 import com.example.data.model.CampaignItem
 import com.example.data.model.DailyCheckInConstants
+import com.example.data.model.UserTrackedCampaignItem
+import com.example.data.model.UserTrackedCampaignsUiState
+import com.example.data.model.UserTrackedRewardActivityUiState
+import com.example.data.model.formatUserCampaignClickError
+import com.example.data.model.isValidCampaignTrackingUrl
 import com.example.data.model.validateAdminCampaignConfigForm
 import com.example.data.model.validateAdminNetworkForm
 import com.example.data.model.DailyCheckInState
@@ -193,6 +201,18 @@ class TaskFlowViewModel(
 
   private val _isOpeningCampaignLink = MutableStateFlow(false)
   val isOpeningCampaignLink: StateFlow<Boolean> = _isOpeningCampaignLink.asStateFlow()
+
+  private val _userTrackedCampaignsState = MutableStateFlow(UserTrackedCampaignsUiState())
+  val userTrackedCampaignsState: StateFlow<UserTrackedCampaignsUiState> =
+    _userTrackedCampaignsState.asStateFlow()
+
+  private val _userTrackedActivityState = MutableStateFlow(UserTrackedRewardActivityUiState())
+  val userTrackedActivityState: StateFlow<UserTrackedRewardActivityUiState> =
+    _userTrackedActivityState.asStateFlow()
+
+  private val _isTrackedActivityScreenVisible = MutableStateFlow(false)
+  val isTrackedActivityScreenVisible: StateFlow<Boolean> =
+    _isTrackedActivityScreenVisible.asStateFlow()
 
   private val _uploadProgress = MutableStateFlow<Int?>(null)
   val uploadProgress: StateFlow<Int?> = _uploadProgress.asStateFlow()
@@ -3354,6 +3374,7 @@ class TaskFlowViewModel(
     loadCampaignTrackingDashboard(dateRange = dateRange)
     loadCampaignTrackingNetworks(loadMore = false)
     loadCampaignTrackingConfigs(loadMore = false)
+    loadAdminCampaignConversions(loadMore = false)
   }
 
   fun loadCampaignTrackingDashboard(
@@ -3805,6 +3826,365 @@ class TaskFlowViewModel(
             ?: "Failed to update campaign status."
           _campaignTrackingAdminState.update {
             it.copy(isSaving = false, feedbackMessage = msg, feedbackIsError = true)
+          }
+        }
+    }
+  }
+
+  // =========================================================================
+  // PHASE 3E.1 — USER TRACKED CAMPAIGN DISCOVERY, CLICK & READ-ONLY ACTIVITY
+  // =========================================================================
+
+  fun setTrackedActivityScreenVisible(visible: Boolean) {
+    _isTrackedActivityScreenVisible.value = visible
+    if (visible) {
+      loadUserTrackedRewardActivity(
+        statusFilter = _userTrackedActivityState.value.selectedStatusFilter,
+        loadMore = false
+      )
+    }
+  }
+
+  fun clearTrackedCampaignFeedback() {
+    _userTrackedCampaignsState.update {
+      it.copy(feedbackMessage = null, feedbackIsError = false)
+    }
+  }
+
+  fun loadUserEligibleTrackedCampaigns(loadMore: Boolean = false) {
+    val current = _userTrackedCampaignsState.value
+    if (current.isLoading) return
+    val cursor = if (loadMore) current.nextCursor else ""
+    if (loadMore && cursor.isBlank()) return
+
+    _userTrackedCampaignsState.update { it.copy(isLoading = true, error = null) }
+    viewModelScope.launch {
+      repository
+        .listUserEligibleTrackedCampaigns(
+          devicePlatform = "ANDROID",
+          pageSize = 20,
+          cursor = cursor
+        )
+        .onSuccess { (accountApproved, slice) ->
+          _userTrackedCampaignsState.update { prev ->
+            val merged =
+              if (loadMore) {
+                (prev.items + slice.items).distinctBy { it.campaignId }
+              } else {
+                slice.items
+              }
+            prev.copy(
+              isLoading = false,
+              error = null,
+              hasLoaded = true,
+              accountApproved = accountApproved,
+              items = merged,
+              nextCursor = slice.nextCursor,
+              hasMore = slice.hasMore,
+              totalCount = slice.totalCount
+            )
+          }
+        }
+        .onFailure { err ->
+          _userTrackedCampaignsState.update {
+            it.copy(
+              isLoading = false,
+              error = formatUserCampaignClickError(err.localizedMessage)
+            )
+          }
+        }
+    }
+  }
+
+  /**
+   * Server-authoritative click issuance for Phase 3E.1 tracked campaigns.
+   * Never generates click IDs or tracking URLs locally, never credits TF on click,
+   * and fails closed if click issuance or HTTPS URL validation fails.
+   */
+  fun launchTrackedCampaign(
+    campaign: UserTrackedCampaignItem,
+    onTrackingUrlReady: (String) -> Unit
+  ) {
+    if (campaign.campaignId.isBlank()) return
+    if (_userTrackedCampaignsState.value.launchingCampaignId != null) return
+    if (!campaign.canClick) {
+      _userTrackedCampaignsState.update {
+        it.copy(
+          feedbackMessage =
+            if (campaign.userStatus == "COMPLETED") "You have already completed this tracked offer."
+            else "This offer is currently unavailable.",
+          feedbackIsError = true
+        )
+      }
+      return
+    }
+
+    _userTrackedCampaignsState.update {
+      it.copy(
+        launchingCampaignId = campaign.campaignId,
+        feedbackMessage = null,
+        feedbackIsError = false
+      )
+    }
+    viewModelScope.launch {
+      try {
+        repository
+          .createCampaignClick(
+            campaignId = campaign.campaignId,
+            devicePlatform = "ANDROID",
+            idempotencyKey = UUID.randomUUID().toString()
+          )
+          .onSuccess { issued ->
+            if (!isValidCampaignTrackingUrl(issued.trackingUrl)) {
+              // Fail closed if server ever returns an invalid or non-HTTPS URL
+              _userTrackedCampaignsState.update {
+                it.copy(
+                  feedbackMessage = "Unable to open offer: tracking URL failed security validation.",
+                  feedbackIsError = true
+                )
+              }
+            } else {
+              _userTrackedCampaignsState.update {
+                it.copy(
+                  feedbackMessage = "Opening tracked offer. Complete all steps to earn +${campaign.rewardTf} TF after verification.",
+                  feedbackIsError = false
+                )
+              }
+              onTrackingUrlReady(issued.trackingUrl)
+            }
+          }
+          .onFailure { err ->
+            _userTrackedCampaignsState.update {
+              it.copy(
+                feedbackMessage = formatUserCampaignClickError(err.localizedMessage),
+                feedbackIsError = true
+              )
+            }
+          }
+      } finally {
+        _userTrackedCampaignsState.update { it.copy(launchingCampaignId = null) }
+      }
+    }
+  }
+
+  fun loadUserTrackedRewardActivity(
+    statusFilter: String = _userTrackedActivityState.value.selectedStatusFilter,
+    loadMore: Boolean = false
+  ) {
+    val current = _userTrackedActivityState.value
+    if (current.isLoading) return
+    val normalizedFilter = statusFilter.trim().uppercase().ifEmpty { "ALL" }
+    val cursor = if (loadMore && normalizedFilter == current.selectedStatusFilter) current.nextCursor else ""
+    if (loadMore && cursor.isBlank()) return
+
+    _userTrackedActivityState.update {
+      it.copy(
+        isLoading = true,
+        error = null,
+        selectedStatusFilter = normalizedFilter
+      )
+    }
+    viewModelScope.launch {
+      repository
+        .listUserTrackedRewardActivity(
+          status = normalizedFilter,
+          pageSize = 20,
+          cursor = cursor
+        )
+        .onSuccess { (counts, slice) ->
+          _userTrackedActivityState.update { prev ->
+            val merged =
+              if (loadMore && prev.selectedStatusFilter == normalizedFilter) {
+                (prev.items + slice.items).distinctBy { it.activityId }
+              } else {
+                slice.items
+              }
+            prev.copy(
+              isLoading = false,
+              error = null,
+              hasLoaded = true,
+              selectedStatusFilter = normalizedFilter,
+              items = merged,
+              counts = counts,
+              nextCursor = slice.nextCursor,
+              hasMore = slice.hasMore,
+              totalCount = slice.totalCount,
+              truncated = slice.truncated
+            )
+          }
+        }
+        .onFailure { err ->
+          _userTrackedActivityState.update {
+            it.copy(
+              isLoading = false,
+              error = err.localizedMessage?.takeIf(String::isNotBlank)
+                ?: "Failed to load tracked reward activity."
+            )
+          }
+        }
+    }
+  }
+
+  // =========================================================================
+  // PHASE 3E.2 — ADMIN CONVERSION MODERATION QUEUE
+  // =========================================================================
+
+  fun loadAdminCampaignConversions(
+    status: AdminConversionStatusFilter = _campaignTrackingAdminState.value.conversionsFilterStatus,
+    campaignId: String = _campaignTrackingAdminState.value.conversionsFilterCampaignId,
+    networkId: String = _campaignTrackingAdminState.value.conversionsFilterNetworkId,
+    loadMore: Boolean = false
+  ) {
+    if (!isAdminAuthorized.value) {
+      _campaignTrackingAdminState.update {
+        it.copy(
+          isLoadingConversions = false,
+          conversionsError = "Only authorized administrators can view conversion moderation."
+        )
+      }
+      return
+    }
+    val current = _campaignTrackingAdminState.value
+    val cleanCamp = campaignId.trim()
+    val cleanNet = networkId.trim()
+    val sameFilters =
+      current.conversionsFilterStatus == status &&
+        current.conversionsFilterCampaignId == cleanCamp &&
+        current.conversionsFilterNetworkId == cleanNet
+    val cursor = if (loadMore && sameFilters) current.conversions.nextCursor else ""
+    if (loadMore && cursor.isBlank()) return
+
+    _campaignTrackingAdminState.update {
+      it.copy(
+        isLoadingConversions = true,
+        conversionsError = null,
+        conversionsFilterStatus = status,
+        conversionsFilterCampaignId = cleanCamp,
+        conversionsFilterNetworkId = cleanNet
+      )
+    }
+    viewModelScope.launch {
+      repository
+        .adminListCampaignConversions(
+          status = status,
+          campaignId = cleanCamp,
+          networkId = cleanNet,
+          pageSize = 20,
+          cursor = cursor
+        )
+        .onSuccess { (slice, scanLimit) ->
+          _campaignTrackingAdminState.update { prev ->
+            val mergedItems =
+              if (loadMore && sameFilters) {
+                (prev.conversions.items + slice.items).distinctBy { it.moderationId }
+              } else {
+                slice.items
+              }
+            prev.copy(
+              isLoadingConversions = false,
+              conversionsError = null,
+              conversions = slice.copy(items = mergedItems),
+              conversionsScanLimit = scanLimit
+            )
+          }
+        }
+        .onFailure { err ->
+          _campaignTrackingAdminState.update {
+            it.copy(
+              isLoadingConversions = false,
+              conversionsError = err.localizedMessage?.takeIf(String::isNotBlank)
+                ?: "Failed to load campaign conversions."
+            )
+          }
+        }
+    }
+  }
+
+  fun reviewAdminCampaignConversion(
+    item: AdminCampaignConversionItem,
+    action: AdminConversionReviewAction,
+    reason: String,
+    onSuccess: () -> Unit = {}
+  ) {
+    if (!isAdminAuthorized.value) {
+      _campaignTrackingAdminState.update {
+        it.copy(
+          feedbackMessage = "Only authorized administrators can moderate campaign conversions.",
+          feedbackIsError = true
+        )
+      }
+      return
+    }
+    val cleanReason = reason.trim()
+    if (cleanReason.isEmpty()) {
+      _campaignTrackingAdminState.update {
+        it.copy(
+          feedbackMessage = "A moderation reason is required before submitting ${action.label}.",
+          feedbackIsError = true
+        )
+      }
+      return
+    }
+    // Duplicate submission guard
+    if (_campaignTrackingAdminState.value.reviewingModerationId != null) {
+      return
+    }
+
+    _campaignTrackingAdminState.update {
+      it.copy(
+        reviewingModerationId = item.moderationId,
+        feedbackMessage = null,
+        feedbackIsError = false
+      )
+    }
+    viewModelScope.launch {
+      repository
+        .adminReviewCampaignConversion(
+          moderationId = item.moderationId,
+          action = action,
+          reason = cleanReason,
+          expectedState = item.state
+        )
+        .onSuccess { res ->
+          val feedback = when (action) {
+            AdminConversionReviewAction.APPROVE ->
+              "Approved ${item.displayRef}: +${formatCoins(res.rewardTf)} credited to user wallet."
+            AdminConversionReviewAction.REJECT ->
+              "Rejected ${item.displayRef}."
+            AdminConversionReviewAction.REVERSE ->
+              if (res.shortfallCoins > 0L) {
+                "Reversed ${item.displayRef}: recovered ${formatCoins(res.recoveredCoins)} (shortfall ${formatCoins(res.shortfallCoins)})."
+              } else {
+                "Reversed ${item.displayRef}: recovered ${formatCoins(res.recoveredCoins)}."
+              }
+          }
+          _campaignTrackingAdminState.update {
+            it.copy(
+              reviewingModerationId = null,
+              feedbackMessage = feedback,
+              feedbackIsError = false
+            )
+          }
+          // Refresh both moderation queue AND dashboard analytics atomically after mutation
+          loadAdminCampaignConversions(loadMore = false)
+          loadCampaignTrackingDashboard()
+          onSuccess()
+        }
+        .onFailure { err ->
+          val msg = err.localizedMessage?.takeIf(String::isNotBlank)
+            ?: "Failed to complete moderation action."
+          _campaignTrackingAdminState.update {
+            it.copy(
+              reviewingModerationId = null,
+              feedbackMessage = msg,
+              feedbackIsError = true
+            )
+          }
+          // Refresh queue automatically when a stale-state conflict occurs
+          if (msg.contains("already changed", ignoreCase = true) ||
+            msg.contains("state", ignoreCase = true)
+          ) {
+            loadAdminCampaignConversions(loadMore = false)
           }
         }
     }

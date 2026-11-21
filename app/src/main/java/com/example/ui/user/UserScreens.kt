@@ -3398,7 +3398,11 @@ fun UserTrackingScreen(
   isTelegramBusy: Boolean = false,
   onJoinTelegramTask: (TelegramTaskItem) -> Unit = {},
   onVerifyTelegramTask: (TelegramTaskItem) -> Unit = {},
-  onClaimTelegramTask: (TelegramTaskItem) -> Unit = {}
+  onClaimTelegramTask: (TelegramTaskItem) -> Unit = {},
+  trackedCampaignsState: com.example.data.model.UserTrackedCampaignsUiState =
+    com.example.data.model.UserTrackedCampaignsUiState(),
+  onLaunchTrackedCampaign: (com.example.data.model.UserTrackedCampaignItem) -> Unit = {},
+  onOpenTrackedActivity: () -> Unit = {}
 ) {
   val rawTasks = (tasksState as? UiState.Success)?.data ?: emptyList()
   // Exclude deactivated or quota-exhausted pending tasks so closed/exhausted tasks are never available for new user submissions
@@ -3444,11 +3448,25 @@ fun UserTrackingScreen(
         .padding(horizontal = 18.dp, vertical = 14.dp)
         .testTag("available_tasks_screen")
   ) {
-    Text(
-      text = "Available Tasks",
-      style = MaterialTheme.typography.headlineMedium,
-      fontWeight = FontWeight.SemiBold
-    )
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Text(
+        text = "Available Tasks",
+        style = MaterialTheme.typography.headlineMedium,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.weight(1f)
+      )
+      OutlinedButton(
+        onClick = onOpenTrackedActivity,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.testTag("user_tracking_open_tracked_activity_button")
+      ) {
+        Text("Tracked Activity", style = MaterialTheme.typography.labelMedium)
+      }
+    }
     Spacer(modifier = Modifier.height(4.dp))
     Text(
       text = "Select any task card to view full instructions, open the link, and submit proof.",
@@ -3480,7 +3498,11 @@ fun UserTrackingScreen(
 
     Spacer(modifier = Modifier.height(14.dp))
 
-    if (filteredTasks.isEmpty() && !showTelegramTaskCard) {
+    val showTrackedCampaignsSection =
+      trackedCampaignsState.items.isNotEmpty() &&
+        (selectedFilter.equals("all", ignoreCase = true) || selectedFilter.equals(TaskStatus.PENDING, ignoreCase = true))
+
+    if (filteredTasks.isEmpty() && !showTelegramTaskCard && !showTrackedCampaignsSection) {
       Box(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         contentAlignment = Alignment.Center
@@ -3512,6 +3534,28 @@ fun UserTrackingScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
       ) {
+        if (showTrackedCampaignsSection) {
+          item(key = "user_tracking_tracked_campaigns_header") {
+            Text(
+              text = "Verified Tracked Offers (${trackedCampaignsState.items.size})",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.primary
+            )
+          }
+          items(
+            trackedCampaignsState.items,
+            key = { "tracking_tab_camp_${it.campaignId}" }
+          ) { campaign ->
+            TrackedCampaignOfferCard(
+              campaign = campaign,
+              accountApproved = trackedCampaignsState.accountApproved,
+              isLaunching = trackedCampaignsState.launchingCampaignId == campaign.campaignId,
+              anyLaunching = trackedCampaignsState.launchingCampaignId != null,
+              onStartOffer = { onLaunchTrackedCampaign(campaign) }
+            )
+          }
+        }
         if (showTelegramTaskCard && nextTelegramTask != null) {
           item(key = "telegram_task_${nextTelegramTask.effectiveTaskId}") {
             TelegramJoinTaskCard(

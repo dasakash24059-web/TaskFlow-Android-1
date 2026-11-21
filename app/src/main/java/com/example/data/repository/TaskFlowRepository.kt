@@ -7,9 +7,13 @@ import android.net.Uri
 import android.util.Base64
 import android.util.Log
 import com.example.data.model.AdminActivityLog
+import com.example.data.model.AdminCampaignConversionItem
 import com.example.data.model.AdminCampaignDashboardResult
 import com.example.data.model.AdminCampaignNetworkItem
 import com.example.data.model.AdminCampaignTrackingConfigItem
+import com.example.data.model.AdminConversionReviewAction
+import com.example.data.model.AdminConversionReviewResult
+import com.example.data.model.AdminConversionStatusFilter
 import com.example.data.model.AdminNotificationItem
 import com.example.data.model.AdminPaginatedSlice
 import com.example.data.model.AppItem
@@ -50,6 +54,9 @@ import com.example.data.model.TransactionRecord
 import com.example.data.model.TransactionType
 import com.example.data.model.UserProfile
 import com.example.data.model.UserTaskProgress
+import com.example.data.model.UserTrackedCampaignItem
+import com.example.data.model.UserTrackedRewardActivityCounts
+import com.example.data.model.UserTrackedRewardActivityItem
 import com.example.data.model.WithdrawalAvailabilityConfig
 import com.example.data.model.WithdrawalCatalog
 import com.example.data.model.WithdrawalMethod
@@ -380,6 +387,35 @@ interface RewardCloudFunctionsClient {
     campaignCursor: String = "",
     networkCursor: String = ""
   ): AdminCampaignDashboardResult = AdminCampaignDashboardResult(dateRange = dateRange)
+
+  suspend fun listUserEligibleTrackedCampaigns(
+    devicePlatform: String = "ANDROID",
+    category: String = "",
+    pageSize: Int = 20,
+    cursor: String = ""
+  ): Pair<Boolean, AdminPaginatedSlice<UserTrackedCampaignItem>> = true to AdminPaginatedSlice()
+
+  suspend fun listUserTrackedRewardActivity(
+    status: String = "ALL",
+    pageSize: Int = 20,
+    cursor: String = ""
+  ): Pair<UserTrackedRewardActivityCounts, AdminPaginatedSlice<UserTrackedRewardActivityItem>> =
+    UserTrackedRewardActivityCounts() to AdminPaginatedSlice()
+
+  suspend fun adminListCampaignConversions(
+    status: String = AdminConversionStatusFilter.PENDING.wireValue,
+    campaignId: String = "",
+    networkId: String = "",
+    pageSize: Int = 20,
+    cursor: String = ""
+  ): Pair<AdminPaginatedSlice<AdminCampaignConversionItem>, Int> = AdminPaginatedSlice<AdminCampaignConversionItem>() to 2000
+
+  suspend fun adminReviewCampaignConversion(
+    moderationId: String,
+    action: String,
+    reason: String,
+    expectedState: String = ""
+  ): AdminConversionReviewResult = AdminConversionReviewResult(moderationId = moderationId, state = action)
 
   fun getOrAssignSessionRewardCoins(sessionId: String): Long = 0L
 
@@ -2708,6 +2744,120 @@ class FirebaseRewardCloudFunctionsClient(
     val dataMap = responseData as? Map<*, *>
       ?: throw IllegalStateException("Empty response from adminGetCampaignTrackingDashboard.")
     CampaignAdminParsers.parseDashboardResult(dataMap)
+  }
+
+  override suspend fun listUserEligibleTrackedCampaigns(
+    devicePlatform: String,
+    category: String,
+    pageSize: Int,
+    cursor: String
+  ): Pair<Boolean, AdminPaginatedSlice<UserTrackedCampaignItem>> = withTimeout(20_000L) {
+    val payload = mutableMapOf<String, Any>(
+      "devicePlatform" to devicePlatform.trim().uppercase(Locale.US).ifEmpty { "ANDROID" },
+      "pageSize" to pageSize.coerceIn(1, 50)
+    )
+    if (category.isNotBlank()) payload["category"] = category.trim()
+    if (cursor.isNotBlank()) payload["cursor"] = cursor.trim()
+    val responseData = try {
+      invokeRewardCallable("listUserEligibleTrackedCampaigns", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to load eligible tracked offers."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from listUserEligibleTrackedCampaigns.")
+    val parsed = CampaignAdminParsers.parseUserTrackedCampaignsPage(dataMap)
+    parsed.accountApproved to parsed.slice
+  }
+
+  override suspend fun listUserTrackedRewardActivity(
+    status: String,
+    pageSize: Int,
+    cursor: String
+  ): Pair<UserTrackedRewardActivityCounts, AdminPaginatedSlice<UserTrackedRewardActivityItem>> =
+    withTimeout(20_000L) {
+      val payload = mutableMapOf<String, Any>(
+        "status" to status.trim().uppercase(Locale.US).ifEmpty { "ALL" },
+        "pageSize" to pageSize.coerceIn(1, 50)
+      )
+      if (cursor.isNotBlank()) payload["cursor"] = cursor.trim()
+      val responseData = try {
+        invokeRewardCallable("listUserTrackedRewardActivity", payload)
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Throwable) {
+        throw IllegalStateException(
+          extractCloudFunctionErrorMessage(e, "Failed to load tracked reward activity."),
+          e
+        )
+      }
+      val dataMap = responseData as? Map<*, *>
+        ?: throw IllegalStateException("Empty response from listUserTrackedRewardActivity.")
+      val parsed = CampaignAdminParsers.parseUserTrackedActivityPage(dataMap)
+      parsed.counts to parsed.slice
+    }
+
+  override suspend fun adminListCampaignConversions(
+    status: String,
+    campaignId: String,
+    networkId: String,
+    pageSize: Int,
+    cursor: String
+  ): Pair<AdminPaginatedSlice<AdminCampaignConversionItem>, Int> = withTimeout(25_000L) {
+    val payload = mutableMapOf<String, Any>(
+      "status" to status.trim().uppercase(Locale.US).ifEmpty { "ALL" },
+      "pageSize" to pageSize.coerceIn(1, 50)
+    )
+    if (campaignId.isNotBlank()) payload["campaignId"] = campaignId.trim()
+    if (networkId.isNotBlank()) payload["networkId"] = networkId.trim()
+    if (cursor.isNotBlank()) payload["cursor"] = cursor.trim()
+    val responseData = try {
+      invokeRewardCallable("adminListCampaignConversions", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to load conversion moderation queue."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from adminListCampaignConversions.")
+    val parsed = CampaignAdminParsers.parseAdminConversionsPage(dataMap)
+    parsed.slice to parsed.scanLimit
+  }
+
+  override suspend fun adminReviewCampaignConversion(
+    moderationId: String,
+    action: String,
+    reason: String,
+    expectedState: String
+  ): AdminConversionReviewResult = withTimeout(20_000L) {
+    val payload = mutableMapOf<String, Any>(
+      "moderationId" to moderationId.trim(),
+      "action" to action.trim().uppercase(Locale.US),
+      "reason" to reason.trim()
+    )
+    if (expectedState.isNotBlank()) {
+      payload["expectedState"] = expectedState.trim().uppercase(Locale.US)
+    }
+    val responseData = try {
+      invokeRewardCallable("reviewCampaignConversion", payload)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to process conversion moderation action."),
+        e
+      )
+    }
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from reviewCampaignConversion.")
+    CampaignAdminParsers.parseAdminConversionReviewResult(dataMap)
   }
 }
 
@@ -6992,6 +7142,87 @@ class TaskFlowRepository(
       pageSize = pageSize,
       campaignCursor = campaignCursor.trim(),
       networkCursor = networkCursor.trim()
+    )
+  }
+
+  // =========================================================================
+  // PHASE 3E.1 — USER TRACKED CAMPAIGN DISCOVERY & READ-ONLY ACTIVITY
+  // =========================================================================
+
+  suspend fun listUserEligibleTrackedCampaigns(
+    devicePlatform: String = "ANDROID",
+    category: String = "",
+    pageSize: Int = 20,
+    cursor: String = ""
+  ): Result<Pair<Boolean, AdminPaginatedSlice<UserTrackedCampaignItem>>> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Sign-in required to view tracked campaigns." }
+    rewardFunctionsClient.listUserEligibleTrackedCampaigns(
+      devicePlatform = devicePlatform.trim().uppercase(Locale.US).ifEmpty { "ANDROID" },
+      category = category.trim(),
+      pageSize = pageSize,
+      cursor = cursor.trim()
+    )
+  }
+
+  suspend fun listUserTrackedRewardActivity(
+    status: String = "ALL",
+    pageSize: Int = 20,
+    cursor: String = ""
+  ): Result<Pair<UserTrackedRewardActivityCounts, AdminPaginatedSlice<UserTrackedRewardActivityItem>>> =
+    runCatching {
+      val authUid = authenticatedUidProvider()?.trim().orEmpty()
+      require(authUid.isNotBlank()) { "Sign-in required to view tracked reward activity." }
+      rewardFunctionsClient.listUserTrackedRewardActivity(
+        status = status.trim().uppercase(Locale.US).ifEmpty { "ALL" },
+        pageSize = pageSize,
+        cursor = cursor.trim()
+      )
+    }
+
+  // =========================================================================
+  // PHASE 3E.2 — ADMIN CONVERSION MODERATION QUEUE
+  // =========================================================================
+
+  suspend fun adminListCampaignConversions(
+    status: AdminConversionStatusFilter = AdminConversionStatusFilter.PENDING,
+    campaignId: String = "",
+    networkId: String = "",
+    pageSize: Int = 20,
+    cursor: String = ""
+  ): Result<Pair<AdminPaginatedSlice<AdminCampaignConversionItem>, Int>> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    rewardFunctionsClient.adminListCampaignConversions(
+      status = status.wireValue,
+      campaignId = campaignId.trim(),
+      networkId = networkId.trim(),
+      pageSize = pageSize,
+      cursor = cursor.trim()
+    )
+  }
+
+  suspend fun adminReviewCampaignConversion(
+    moderationId: String,
+    action: AdminConversionReviewAction,
+    reason: String,
+    expectedState: String = ""
+  ): Result<AdminConversionReviewResult> = runCatching {
+    val authUid = authenticatedUidProvider()?.trim().orEmpty()
+    require(authUid.isNotBlank()) { "Admin sign-in required." }
+    val cleanModId = moderationId.trim()
+    require(cleanModId.startsWith("mod_") && cleanModId.length == 28) {
+      "Valid moderation reference is required."
+    }
+    val cleanReason = reason.trim()
+    require(cleanReason.isNotEmpty()) {
+      "A moderation reason is required."
+    }
+    rewardFunctionsClient.adminReviewCampaignConversion(
+      moderationId = cleanModId,
+      action = action.wireValue,
+      reason = cleanReason,
+      expectedState = expectedState.trim().uppercase(Locale.US)
     )
   }
 }

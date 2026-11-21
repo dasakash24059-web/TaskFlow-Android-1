@@ -243,7 +243,17 @@ fun AdminDashboardScreen(
    onSaveCampaignTrackingConfig: (AdminCampaignTrackingConfigItem, Boolean, () -> Unit) -> Unit = { _, _, onDone -> onDone() },
    onToggleCampaignTrackingConfigStatus: (String, Boolean) -> Unit = { _, _ -> },
    onClearCampaignTrackingFeedback: () -> Unit = {},
-   onEnsureCampaignNetworkLoaded: (String) -> Unit = {}
+   onEnsureCampaignNetworkLoaded: (String) -> Unit = {},
+   onSelectCampaignConversionsStatusFilter: (com.example.data.model.AdminConversionStatusFilter) -> Unit = {},
+   onApplyCampaignConversionsFilters: (String, String) -> Unit = { _, _ -> },
+   onRefreshCampaignConversions: () -> Unit = {},
+   onLoadMoreCampaignConversions: () -> Unit = {},
+   onReviewCampaignConversion: (
+     com.example.data.model.AdminCampaignConversionItem,
+     com.example.data.model.AdminConversionReviewAction,
+     String,
+     () -> Unit
+   ) -> Unit = { _, _, _, onDone -> onDone() }
 ) {
   if (!isAdminAuthorized) {
     UnauthorizedAdminGate(currentUserEmail = currentUserEmail)
@@ -773,7 +783,12 @@ fun AdminDashboardScreen(
               onSaveCampaignConfig = onSaveCampaignTrackingConfig,
               onToggleCampaignConfigStatus = onToggleCampaignTrackingConfigStatus,
               onClearFeedback = onClearCampaignTrackingFeedback,
-              onEnsureNetworkLoaded = onEnsureCampaignNetworkLoaded
+              onEnsureNetworkLoaded = onEnsureCampaignNetworkLoaded,
+              onSelectConversionsStatusFilter = onSelectCampaignConversionsStatusFilter,
+              onApplyConversionsFilters = onApplyCampaignConversionsFilters,
+              onRefreshConversions = onRefreshCampaignConversions,
+              onLoadMoreConversions = onLoadMoreCampaignConversions,
+              onReviewConversion = onReviewCampaignConversion
             )
           }
           AdminTab.COINS_REWARDS -> {

@@ -10,6 +10,7 @@ const {
   canTransitionConversionState,
   generateSecureClickId,
   buildExternalTxnLockId,
+  buildConversionModerationId,
   tfToBalanceCents,
   computeCampaignApprovedWallet,
   computeCampaignReversedWallet,
@@ -23,6 +24,7 @@ const {
   CampaignNetworkAdapterRegistry
 } = require("./campaign_tracking");
 const { createCampaignAdminHandlers } = require("./campaign_admin");
+const { createCampaignUserHandlers } = require("./campaign_user");
 
 let onRequest;
 let onCall;
@@ -4610,7 +4612,11 @@ async function handleCreateCampaignClick(request, deps = {}) {
 
 /**
  * Scheduled/sweep handler to release expired ISSUED campaign clicks and restore
- * `reservedClickSlots` atomically per campaign without requiring composite indexes.
+ * `reservedClickSlots` atomically per campaign.
+ *
+ * Uses the `campaign_clicks (status ASC, expiresAtMillis ASC)` composite index to
+ * avoid query starvation by already-expired or converted historical clicks, isolates
+ * failures per campaign, and logs maintenance telemetry to `admin_logs`.
  */
 async function handleReleaseExpiredCampaignClickReservations(deps = {}) {
   const firestoreDb = deps.db || db;
@@ -4620,12 +4626,14 @@ async function handleReleaseExpiredCampaignClickReservations(deps = {}) {
 
   const clicksCol = firestoreDb.collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS);
   const querySnap = await clicksCol
+    .where("status", "==", "ISSUED")
     .where("expiresAtMillis", "<=", nowMillis)
     .limit(batchLimit)
     .get();
 
+  const rawDocs = querySnap?.docs || [];
   const expiredByCampaign = new Map();
-  for (const docSnap of querySnap?.docs || []) {
+  for (const docSnap of rawDocs) {
     const clickData = typeof docSnap.data === "function" ? docSnap.data() || {} : {};
     if (clickData.status !== "ISSUED") continue;
     const cId = String(clickData.campaignId || "").trim();
@@ -4639,88 +4647,124 @@ async function handleReleaseExpiredCampaignClickReservations(deps = {}) {
   }
 
   let totalReleased = 0;
+  let processedCampaigns = 0;
+  const failedCampaigns = [];
+
   for (const [campaignId, items] of expiredByCampaign.entries()) {
     const configRef = firestoreDb
       .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS)
       .doc(campaignId);
 
-    const releasedForCampaign = await firestoreDb.runTransaction(async (transaction) => {
-      const configSnap = await transaction.get(configRef);
-      if (!configSnap.exists) return 0;
-      const configData = configSnap.data() || {};
+    try {
+      const releasedForCampaign = await firestoreDb.runTransaction(async (transaction) => {
+        const configSnap = await transaction.get(configRef);
+        if (!configSnap.exists) return 0;
+        const configData = configSnap.data() || {};
 
-      const itemReads = await Promise.all(
-        items.map(async (item) => {
-          const clickRef = clicksCol.doc(item.clickId);
-          const guardRef = item.userId
-            ? firestoreDb
-                .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICK_GUARDS)
-                .doc(`${item.userId}__${campaignId}`)
-            : null;
-          const resRef =
-            item.userId && typeof configRef.collection === "function"
-              ? configRef.collection("active_reservations").doc(item.userId)
+        const itemReads = await Promise.all(
+          items.map(async (item) => {
+            const clickRef = clicksCol.doc(item.clickId);
+            const guardRef = item.userId
+              ? firestoreDb
+                  .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICK_GUARDS)
+                  .doc(`${item.userId}__${campaignId}`)
               : null;
+            const resRef =
+              item.userId && typeof configRef.collection === "function"
+                ? configRef.collection("active_reservations").doc(item.userId)
+                : null;
 
-          const [clickSnap, guardSnap, resSnap] = await Promise.all([
-            transaction.get(clickRef),
-            guardRef ? transaction.get(guardRef) : Promise.resolve(null),
-            resRef ? transaction.get(resRef) : Promise.resolve(null)
-          ]);
-          return { item, clickRef, guardRef, resRef, clickSnap, guardSnap, resSnap };
-        })
-      );
+            const [clickSnap, guardSnap, resSnap] = await Promise.all([
+              transaction.get(clickRef),
+              guardRef ? transaction.get(guardRef) : Promise.resolve(null),
+              resRef ? transaction.get(resRef) : Promise.resolve(null)
+            ]);
+            return { item, clickRef, guardRef, resRef, clickSnap, guardSnap, resSnap };
+          })
+        );
 
-      let transitioned = 0;
-      for (const rec of itemReads) {
-        if (!rec.clickSnap.exists) continue;
-        const clickData = rec.clickSnap.data() || {};
-        if (clickData.status !== "ISSUED" || Number(clickData.expiresAtMillis || 0) > nowMillis) {
-          continue;
+        let transitioned = 0;
+        for (const rec of itemReads) {
+          if (!rec.clickSnap.exists) continue;
+          const clickData = rec.clickSnap.data() || {};
+          if (clickData.status !== "ISSUED" || Number(clickData.expiresAtMillis || 0) > nowMillis) {
+            continue;
+          }
+          transitioned += 1;
+          transaction.update(rec.clickRef, {
+            status: "EXPIRED",
+            expiredAt: ts,
+            expiredReason: "SCHEDULED_EXPIRATION_SWEEP"
+          });
+          if (
+            rec.resRef &&
+            rec.resSnap &&
+            rec.resSnap.exists &&
+            rec.resSnap.data()?.clickId === rec.item.clickId &&
+            typeof transaction.delete === "function"
+          ) {
+            transaction.delete(rec.resRef);
+          }
+          if (
+            rec.guardRef &&
+            rec.guardSnap &&
+            rec.guardSnap.exists &&
+            rec.guardSnap.data()?.activeClickId === rec.item.clickId
+          ) {
+            transaction.set(
+              rec.guardRef,
+              { hasActiveReservation: false, updatedAt: ts },
+              { merge: true }
+            );
+          }
         }
-        transitioned += 1;
-        transaction.update(rec.clickRef, {
-          status: "EXPIRED",
-          expiredAt: ts,
-          expiredReason: "SCHEDULED_EXPIRATION_SWEEP"
-        });
-        if (
-          rec.resRef &&
-          rec.resSnap &&
-          rec.resSnap.exists &&
-          rec.resSnap.data()?.clickId === rec.item.clickId &&
-          typeof transaction.delete === "function"
-        ) {
-          transaction.delete(rec.resRef);
-        }
-        if (
-          rec.guardRef &&
-          rec.guardSnap &&
-          rec.guardSnap.exists &&
-          rec.guardSnap.data()?.activeClickId === rec.item.clickId
-        ) {
-          transaction.set(
-            rec.guardRef,
-            { hasActiveReservation: false, updatedAt: ts },
-            { merge: true }
-          );
-        }
-      }
 
-      if (transitioned > 0) {
-        const currentReserved = Math.max(0, Number(configData.reservedClickSlots || 0));
-        transaction.update(configRef, {
-          reservedClickSlots: Math.max(0, currentReserved - transitioned),
-          updatedAt: ts
-        });
-      }
-      return transitioned;
-    });
+        if (transitioned > 0) {
+          const currentReserved = Math.max(0, Number(configData.reservedClickSlots || 0));
+          transaction.update(configRef, {
+            reservedClickSlots: Math.max(0, currentReserved - transitioned),
+            updatedAt: ts
+          });
+        }
+        return transitioned;
+      });
 
-    totalReleased += releasedForCampaign;
+      totalReleased += releasedForCampaign;
+      processedCampaigns += 1;
+    } catch (err) {
+      failedCampaigns.push({
+        campaignId,
+        error: String(err?.message || "Transaction failed").slice(0, 200)
+      });
+    }
   }
 
-  return { success: true, releasedClicks: totalReleased };
+  if ((totalReleased > 0 || failedCampaigns.length > 0) && typeof firestoreDb.collection === "function") {
+    try {
+      const logRef = firestoreDb.collection("admin_logs").doc();
+      if (logRef && typeof logRef.set === "function") {
+        await logRef.set({
+          actionType: "CAMPAIGN_MAINTENANCE",
+          title: `Click Reservation Cleanup (${totalReleased} released)`,
+          details: `Scanned: ${rawDocs.length} • Released: ${totalReleased} • Campaigns: ${processedCampaigns} ok, ${failedCampaigns.length} failed`,
+          targetId: "releaseExpiredCampaignClickReservations",
+          adminId: "SYSTEM_SCHEDULER",
+          timestampMillis: nowMillis,
+          createdAt: ts
+        });
+      }
+    } catch (_) {
+      // Do not fail cleanup sweep if audit log write fails
+    }
+  }
+
+  return {
+    success: failedCampaigns.length === 0,
+    releasedClicks: totalReleased,
+    processedCampaigns,
+    failedCampaigns,
+    scannedDocs: rawDocs.length
+  };
 }
 
 // =========================================================================
@@ -4829,7 +4873,8 @@ async function executeConversionTransitionInTransaction({
   callbackPayoutRaw = "",
   statusReason = "",
   actorAdminInfo = null,
-  isAdminOverride = false
+  isAdminOverride = false,
+  expectedState = ""
 }) {
   const clickRef = firestoreDb
     .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS)
@@ -5032,6 +5077,13 @@ async function executeConversionTransitionInTransaction({
     // Idempotent duplicate replay guard (state matches or terminal duplicate replay)
     if (existingConversion) {
       const currentState = String(existingConversion.state || "").trim();
+      if (expectedState && currentState !== expectedState) {
+        throw new CampaignPostbackHttpError(
+          409,
+          "failed-precondition",
+          `Conversion state has already changed to ${currentState}. Refresh the queue and try again.`
+        );
+      }
       if (currentState === effectiveTargetState) {
         return {
           success: true,
@@ -5055,6 +5107,13 @@ async function executeConversionTransitionInTransaction({
         );
       }
     } else {
+      if (expectedState) {
+        throw new CampaignPostbackHttpError(
+          409,
+          "failed-precondition",
+          "Conversion record no longer matches expected state."
+        );
+      }
       // Brand new conversion creation rules
       if (effectiveTargetState === CAMPAIGN_CONVERSION_STATES.REVERSED) {
         throw new CampaignPostbackHttpError(
@@ -5223,6 +5282,7 @@ async function executeConversionTransitionInTransaction({
 
     const baseConversionFields = {
       conversionId,
+      moderationId: buildConversionModerationId(conversionId),
       clickId,
       userId,
       campaignId,
@@ -5815,6 +5875,45 @@ async function handleReviewCampaignConversion(request, deps = {}) {
 
   let clickId = String(data.clickId || "").trim();
   const conversionId = String(data.conversionId || "").trim();
+  const moderationId = String(data.moderationId || "").trim();
+  const usedModerationIdOnly = Boolean(moderationId && !clickId && !conversionId);
+
+  if (!clickId && !conversionId && moderationId) {
+    if (!/^mod_[a-f0-9]{24}$/.test(moderationId)) {
+      throw new HttpsError("invalid-argument", "Invalid moderationId format.");
+    }
+    const conversionsCol = firestoreDb.collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CONVERSIONS);
+    let matchedDocData = null;
+    if (typeof conversionsCol.where === "function") {
+      const modSnap = await conversionsCol
+        .where("moderationId", "==", moderationId)
+        .limit(1)
+        .get();
+      const firstDoc = modSnap?.docs?.[0];
+      if (firstDoc) {
+        matchedDocData = typeof firstDoc.data === "function" ? firstDoc.data() || {} : {};
+      }
+    }
+    // Bounded fallback for legacy pre-3E conversion documents lacking persisted `moderationId`
+    if (!matchedDocData) {
+      const fallbackQuery =
+        typeof conversionsCol.limit === "function" ? conversionsCol.limit(2000) : conversionsCol;
+      const fallbackSnap = await fallbackQuery.get();
+      for (const docSnap of fallbackSnap?.docs || []) {
+        const d = typeof docSnap.data === "function" ? docSnap.data() || {} : {};
+        const rawId = String(d.conversionId || docSnap.id || "").trim();
+        if (rawId && buildConversionModerationId(rawId) === moderationId) {
+          matchedDocData = d;
+          break;
+        }
+      }
+    }
+    if (!matchedDocData) {
+      throw new HttpsError("not-found", "Conversion record not found.");
+    }
+    clickId = String(matchedDocData.clickId || "").trim();
+  }
+
   if (!clickId && conversionId) {
     if (!CAMPAIGN_ID_REGEX.test(conversionId)) {
       throw new HttpsError("invalid-argument", "Invalid conversionId format.");
@@ -5834,15 +5933,26 @@ async function handleReviewCampaignConversion(request, deps = {}) {
   }
 
   if (!clickId || !CAMPAIGN_ID_REGEX.test(clickId)) {
-    throw new HttpsError("invalid-argument", "A valid conversionId or clickId is required.");
+    throw new HttpsError("invalid-argument", "A valid moderationId, conversionId, or clickId is required.");
   }
 
   const reason = typeof data.reason === "string" ? data.reason.trim().slice(0, 500) : "";
-  if ((action === "REJECT" || action === "REVERSE") && !reason) {
+  if (!reason) {
     throw new HttpsError(
       "invalid-argument",
       `A review reason is required when performing ${action}.`
     );
+  }
+
+  const expectedState = String(data.expectedState || "").trim().toUpperCase();
+  if (
+    expectedState &&
+    expectedState !== CAMPAIGN_CONVERSION_STATES.PENDING &&
+    expectedState !== CAMPAIGN_CONVERSION_STATES.APPROVED &&
+    expectedState !== CAMPAIGN_CONVERSION_STATES.REJECTED &&
+    expectedState !== CAMPAIGN_CONVERSION_STATES.REVERSED
+  ) {
+    throw new HttpsError("invalid-argument", "Invalid expectedState value.");
   }
 
   const targetState =
@@ -5853,7 +5963,7 @@ async function handleReviewCampaignConversion(request, deps = {}) {
         : CAMPAIGN_CONVERSION_STATES.REVERSED;
 
   try {
-    return await executeConversionTransitionInTransaction({
+    const result = await executeConversionTransitionInTransaction({
       firestoreDb,
       nowMillis,
       ts,
@@ -5863,10 +5973,31 @@ async function handleReviewCampaignConversion(request, deps = {}) {
       targetState,
       sourceCallbackType: "ADMIN_REVIEW",
       idempotencyKey: String(data.idempotencyKey || "").trim(),
-      statusReason: reason || `ADMIN_${action}`,
+      statusReason: reason,
       actorAdminInfo: adminInfo,
-      isAdminOverride: true
+      isAdminOverride: true,
+      expectedState
     });
+    const resolvedModerationId = buildConversionModerationId(result.conversionId);
+    if (usedModerationIdOnly) {
+      // Never return raw clickId, conv_<clickId>, or tx IDs embedding clickId to the Admin Moderation Queue client
+      const {
+        clickId: _stripClick,
+        conversionId: _stripConv,
+        idempotencyKey: _stripKey,
+        creditedTransactionId: _stripCreditTx,
+        reversalTransactionId: _stripRevTx,
+        ...safeResult
+      } = result;
+      return {
+        ...safeResult,
+        moderationId: resolvedModerationId
+      };
+    }
+    return {
+      ...result,
+      moderationId: resolvedModerationId
+    };
   } catch (err) {
     if (err instanceof CampaignPostbackHttpError) {
       throw new HttpsError(err.code || "failed-precondition", err.message);
@@ -5887,7 +6018,12 @@ exports.reviewCampaignConversion = onCall(async (request) =>
 );
 if (typeof onSchedule === "function") {
   exports.releaseExpiredCampaignClickReservations = onSchedule(
-    "every 15 minutes",
+    {
+      schedule: "every 15 minutes",
+      timeZone: "Asia/Kolkata",
+      retryCount: 3,
+      maxBackoffSeconds: 120
+    },
     async () => handleReleaseExpiredCampaignClickReservations()
   );
 }
@@ -5905,7 +6041,7 @@ exports._campaignConversionHandlers = {
 };
 
 // =========================================================================
-// PHASE 3D — ADMIN CAMPAIGN TRACKING CONFIGURATION & ANALYTICS ENDPOINTS
+// PHASE 3D & 3E.2 — ADMIN CAMPAIGN TRACKING CONFIGURATION, ANALYTICS & MODERATION
 // =========================================================================
 const campaignAdminHandlers = createCampaignAdminHandlers({
   verifyAdminAccess,
@@ -5935,4 +6071,23 @@ exports.adminSetCampaignTrackingStatus = onCall(async (request) =>
 exports.adminGetCampaignTrackingDashboard = onCall(async (request) =>
   campaignAdminHandlers.handleAdminGetCampaignTrackingDashboard(request)
 );
+exports.adminListCampaignConversions = onCall(async (request) =>
+  campaignAdminHandlers.handleAdminListCampaignConversions(request)
+);
 exports._campaignAdminHandlers = campaignAdminHandlers;
+
+// =========================================================================
+// PHASE 3E.1 — USER CAMPAIGN TRACKING DISCOVERY & READ-ONLY ACTIVITY
+// =========================================================================
+const campaignUserHandlers = createCampaignUserHandlers({
+  getDefaultDb: () => db,
+  HttpsError
+});
+
+exports.listUserEligibleTrackedCampaigns = onCall(async (request) =>
+  campaignUserHandlers.handleListUserEligibleTrackedCampaigns(request)
+);
+exports.listUserTrackedRewardActivity = onCall(async (request) =>
+  campaignUserHandlers.handleListUserTrackedRewardActivity(request)
+);
+exports._campaignUserHandlers = campaignUserHandlers;

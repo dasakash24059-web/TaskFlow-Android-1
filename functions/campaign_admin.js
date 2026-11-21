@@ -23,7 +23,9 @@ const {
   tfToBalanceCents,
   signedTfToBalanceCents,
   toMillisValue,
-  validateDestinationUrl
+  validateDestinationUrl,
+  buildConversionModerationId,
+  computeCampaignReversedWallet
 } = require("./campaign_tracking");
 
 const VALID_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
@@ -67,6 +69,7 @@ const MAX_ANALYTICS_SCAN_LIMIT = 5000;
 const DEFAULT_SCAN_BATCH_SIZE = 500;
 const MAX_NETWORKS_SCAN_LIMIT = 500;
 const MAX_CAMPAIGNS_SCAN_LIMIT = 1000;
+const MAX_CONVERSIONS_QUEUE_SCAN_LIMIT = 2000;
 const IST_OFFSET_MS = 330 * 60 * 1000; // Asia/Kolkata (UTC+05:30, no DST)
 const ANALYTICS_TIMEZONE = "Asia/Kolkata";
 
@@ -2539,6 +2542,199 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
     };
   }
 
+  /**
+   * Phase 3E.2: Admin Conversion Moderation Queue (read-only).
+   * Returns paginated, strictly sanitized conversion moderation items without
+   * exposing `clickId`, raw `conv_<clickId>`, `externalTransactionId`, secrets,
+   * raw signatures, or unnecessary partner metadata.
+   */
+  async function handleAdminListCampaignConversions(request, deps = {}) {
+    const firestoreDb = deps.db || getDefaultDb();
+
+    await verifyAdminAccess(
+      request,
+      firestoreDb,
+      "Only authorized administrators can view campaign conversions."
+    );
+
+    const data = request.data || {};
+    const rawStatus = String(data.status || "ALL").trim().toUpperCase();
+    const allowedStatuses = new Set(["ALL", "PENDING", "APPROVED", "REJECTED", "REVERSED"]);
+    if (!allowedStatuses.has(rawStatus)) {
+      throw new HttpsError(
+        "invalid-argument",
+        "status filter must be one of ALL, PENDING, APPROVED, REJECTED, REVERSED."
+      );
+    }
+
+    const campaignIdFilter = String(data.campaignId || "").trim();
+    if (campaignIdFilter && !VALID_ID_REGEX.test(campaignIdFilter)) {
+      throw new HttpsError("invalid-argument", "Invalid campaignId filter.");
+    }
+
+    const networkIdFilter = String(data.networkId || "").trim();
+    if (networkIdFilter && !VALID_ID_REGEX.test(networkIdFilter)) {
+      throw new HttpsError("invalid-argument", "Invalid networkId filter.");
+    }
+
+    const pageSize = clampPageSize(data.pageSize);
+    const cursor = String(data.cursor || "").trim();
+    const maxScanLimit = Math.max(
+      1,
+      Number(deps.maxConversionsQueueScanLimit || MAX_CONVERSIONS_QUEUE_SCAN_LIMIT)
+    );
+    const scanBatchSize = Math.max(1, Number(deps.scanBatchSize || DEFAULT_SCAN_BATCH_SIZE));
+
+    const colRef = firestoreDb.collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CONVERSIONS);
+    let queryRes;
+    if (rawStatus !== "ALL" && typeof colRef.where === "function") {
+      queryRes = await executePaginatedQuery(
+        colRef.where("state", "==", rawStatus),
+        maxScanLimit,
+        scanBatchSize
+      );
+    } else if (campaignIdFilter && typeof colRef.where === "function") {
+      queryRes = await executePaginatedQuery(
+        colRef.where("campaignId", "==", campaignIdFilter),
+        maxScanLimit,
+        scanBatchSize
+      );
+    } else if (networkIdFilter && typeof colRef.where === "function") {
+      queryRes = await executePaginatedQuery(
+        colRef.where("networkId", "==", networkIdFilter),
+        maxScanLimit,
+        scanBatchSize
+      );
+    } else {
+      queryRes = await readCollectionBounded(
+        firestoreDb,
+        CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CONVERSIONS,
+        maxScanLimit,
+        scanBatchSize
+      );
+    }
+
+    const filtered = [];
+    for (const doc of queryRes.docs) {
+      const state = String(doc.state || "").trim().toUpperCase();
+      if (!isValidConversionState(state)) continue;
+      if (rawStatus !== "ALL" && state !== rawStatus) continue;
+      const cId = String(doc.campaignId || "").trim();
+      if (campaignIdFilter && cId !== campaignIdFilter) continue;
+      const nId = String(doc.networkId || "").trim();
+      if (networkIdFilter && nId !== networkIdFilter) continue;
+
+      const rawId = String(doc.conversionId || doc._docId || "").trim();
+      const modId = String(doc.moderationId || "").trim() || buildConversionModerationId(rawId);
+      const sortTimestampMillis = Math.max(
+        toMillisValue(doc.updatedAt),
+        toMillisValue(doc.reversedAt),
+        toMillisValue(doc.rejectedAt),
+        toMillisValue(doc.verifiedAt),
+        toMillisValue(doc.createdAt)
+      );
+      filtered.push({ doc, modId, sortTimestampMillis });
+    }
+
+    filtered.sort((a, b) => {
+      if (b.sortTimestampMillis !== a.sortTimestampMillis) {
+        return b.sortTimestampMillis - a.sortTimestampMillis;
+      }
+      return a.modId.localeCompare(b.modId);
+    });
+
+    const totalCount = filtered.length;
+    let startIndex = 0;
+    if (cursor) {
+      const cursorIdx = filtered.findIndex((entry) => entry.modId === cursor);
+      if (cursorIdx >= 0) {
+        startIndex = cursorIdx + 1;
+      }
+    }
+
+    const pageEntries = filtered.slice(startIndex, startIndex + pageSize);
+    const hasMore = startIndex + pageEntries.length < totalCount;
+    const nextCursor =
+      hasMore && pageEntries.length > 0 ? pageEntries[pageEntries.length - 1].modId : null;
+
+    // Resolve titles, network names, and user wallet snapshots ONLY for the current page
+    const uniqueCampaignIds = Array.from(
+      new Set(pageEntries.map((e) => String(e.doc.campaignId || "").trim()).filter(Boolean))
+    );
+    const uniqueNetworkIds = Array.from(
+      new Set(pageEntries.map((e) => String(e.doc.networkId || "").trim()).filter(Boolean))
+    );
+    const uniqueUserIds = Array.from(
+      new Set(pageEntries.map((e) => String(e.doc.userId || "").trim()).filter(Boolean))
+    );
+
+    const campaignTitleMap = new Map();
+    const networkNameMap = new Map();
+    const userMap = new Map();
+
+    await Promise.all([
+      ...uniqueCampaignIds.map(async (cId) => {
+        try {
+          const [cfgSnap, pubSnap] = await Promise.all([
+            firestoreDb
+              .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS)
+              .doc(cId)
+              .get(),
+            firestoreDb.collection("campaigns").doc(cId).get()
+          ]);
+          const title = String(
+            (pubSnap?.exists ? pubSnap.data()?.title : "") ||
+              (cfgSnap?.exists ? cfgSnap.data()?.title : "") ||
+              cId
+          ).trim();
+          campaignTitleMap.set(cId, title || cId);
+        } catch (_) {
+          campaignTitleMap.set(cId, cId);
+        }
+      }),
+      ...uniqueNetworkIds.map(async (nId) => {
+        try {
+          const netSnap = await firestoreDb
+            .collection(CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_NETWORKS)
+            .doc(nId)
+            .get();
+          const name = String(netSnap?.exists ? netSnap.data()?.name : nId).trim();
+          networkNameMap.set(nId, name || nId);
+        } catch (_) {
+          networkNameMap.set(nId, nId);
+        }
+      }),
+      ...uniqueUserIds.map(async (uId) => {
+        try {
+          const uSnap = await firestoreDb.collection("users").doc(uId).get();
+          if (uSnap?.exists) {
+            userMap.set(uId, uSnap.data() || {});
+          }
+        } catch (_) {
+          // Ignore individual user fetch failures; fallback gracefully
+        }
+      })
+    ]);
+
+    const items = pageEntries.map((entry) =>
+      toSafeAdminConversionDto(entry.doc, {
+        campaignTitleMap,
+        networkNameMap,
+        userMap
+      })
+    );
+
+    return {
+      success: true,
+      items,
+      nextCursor,
+      hasMore,
+      totalCount,
+      truncated: Boolean(queryRes.truncated),
+      scanLimit: maxScanLimit
+    };
+  }
+
   return {
     handleAdminListCampaignNetworks,
     handleAdminUpsertCampaignNetwork,
@@ -2546,7 +2742,89 @@ function createCampaignAdminHandlers({ verifyAdminAccess, getDefaultDb, getDefau
     handleAdminListCampaignTrackingConfigs,
     handleAdminUpsertCampaignTrackingConfig,
     handleAdminSetCampaignTrackingStatus,
-    handleAdminGetCampaignTrackingDashboard
+    handleAdminGetCampaignTrackingDashboard,
+    handleAdminListCampaignConversions
+  };
+}
+
+/**
+ * Strictly allowlisted Admin Conversion Moderation DTO.
+ * Never returns `clickId`, raw `conversionId` (which embeds `clickId`), `externalTransactionId`,
+ * `idempotencyKey`, `callbackPayoutRaw`, `signatureValue`, `trackingNetworkRef`, or any secret.
+ */
+function toSafeAdminConversionDto(
+  convDoc = {},
+  { campaignTitleMap = new Map(), networkNameMap = new Map(), userMap = new Map() } = {}
+) {
+  const rawConversionId = String(convDoc.conversionId || convDoc._docId || "").trim();
+  const moderationId =
+    String(convDoc.moderationId || "").trim() || buildConversionModerationId(rawConversionId);
+  const displayRef = `MOD-${moderationId.replace(/^mod_/, "").slice(0, 8).toUpperCase()}`;
+
+  const campaignId = String(convDoc.campaignId || "").trim();
+  const networkId = String(convDoc.networkId || "").trim();
+  const userId = String(convDoc.userId || "").trim();
+  const state = String(convDoc.state || CAMPAIGN_CONVERSION_STATES.PENDING).trim().toUpperCase();
+  const rewardTf = Math.max(0, Math.floor(Number(convDoc.rewardTf || 0)));
+  const rewardCents = tfToBalanceCents(rewardTf);
+  const rewardCredited = convDoc.rewardCredited === true;
+
+  let recoveredTf = 0;
+  let shortfallTf = 0;
+  if (state === CAMPAIGN_CONVERSION_STATES.REVERSED && rewardCredited) {
+    const split = resolveReversalRecoverySplit(convDoc, rewardTf);
+    recoveredTf = split.recoveredTf;
+    shortfallTf = split.shortfallTf;
+  }
+
+  const userData = userMap.get(userId) || null;
+  let expectedRecoverableTf = 0;
+  let estimatedShortfallTf = 0;
+  if (state === CAMPAIGN_CONVERSION_STATES.APPROVED && rewardCredited && rewardTf > 0) {
+    if (userData) {
+      const preview = computeCampaignReversedWallet(userData, rewardTf);
+      expectedRecoverableTf = Math.max(0, Math.floor(Number(preview.recoveredCoins || 0)));
+      estimatedShortfallTf = Math.max(0, Math.floor(Number(preview.shortfallCoins || 0)));
+    } else {
+      expectedRecoverableTf = 0;
+      estimatedShortfallTf = rewardTf;
+    }
+  }
+
+  const userDisplayName = String(userData?.displayName || "TaskFlow Member").trim() || "TaskFlow Member";
+
+  return {
+    moderationId,
+    displayRef,
+    campaignId,
+    campaignTitle: campaignTitleMap.get(campaignId) || campaignId,
+    networkId,
+    networkName: networkNameMap.get(networkId) || networkId,
+    userId,
+    userDisplayName,
+    verificationMode: String(convDoc.verificationMode || "").trim(),
+    state,
+    rewardTf,
+    rewardCents,
+    rewardCredited,
+    recoveredTf,
+    recoveredCents: tfToBalanceCents(recoveredTf),
+    shortfallTf,
+    shortfallCents: tfToBalanceCents(shortfallTf),
+    expectedRecoverableTf,
+    expectedRecoverableCents: tfToBalanceCents(expectedRecoverableTf),
+    estimatedShortfallTf,
+    estimatedShortfallCents: tfToBalanceCents(estimatedShortfallTf),
+    statusReason: String(convDoc.statusReason || "").trim(),
+    sourceCallbackType: String(convDoc.sourceCallbackType || "").trim(),
+    approvedByAdminId: String(convDoc.approvedByAdminId || "").trim(),
+    rejectedByAdminId: String(convDoc.rejectedByAdminId || "").trim(),
+    reversedByAdminId: String(convDoc.reversedByAdminId || "").trim(),
+    createdAtMillis: toMillisValue(convDoc.createdAt),
+    verifiedAtMillis: toMillisValue(convDoc.verifiedAt),
+    rejectedAtMillis: toMillisValue(convDoc.rejectedAt),
+    reversedAtMillis: toMillisValue(convDoc.reversedAt),
+    updatedAtMillis: toMillisValue(convDoc.updatedAt)
   };
 }
 
@@ -2563,6 +2841,7 @@ module.exports = {
   validateAndSanitizeCampaignConfigInput,
   toSafeAdminNetworkDto,
   toSafeAdminCampaignConfigDto,
+  toSafeAdminConversionDto,
   resolveAnalyticsDateWindow,
   computeCampaignTrackingAnalytics,
   createCampaignAdminHandlers
