@@ -451,7 +451,7 @@ private fun AuthenticatedWorkspace(
   val isPromoCodeScreenVisible by viewModel.isPromoCodeScreenVisible.collectAsStateWithLifecycle()
   val isScratchCardScreenVisible by viewModel.isScratchCardScreenVisible.collectAsStateWithLifecycle()
   val scratchCardUiState by viewModel.scratchCardUiState.collectAsStateWithLifecycle()
-  val leaderboardTransactions by viewModel.leaderboardCreditedTransactionsState.collectAsStateWithLifecycle()
+  val publicLeaderboard by viewModel.publicLeaderboardState.collectAsStateWithLifecycle()
   val userSupportTickets by viewModel.userSupportTicketsState.collectAsStateWithLifecycle()
   val adminSupportTickets by viewModel.adminSupportTicketsState.collectAsStateWithLifecycle()
   val isOpeningCampaignLink by viewModel.isOpeningCampaignLink.collectAsStateWithLifecycle()
@@ -466,6 +466,15 @@ private fun AuthenticatedWorkspace(
       activeAdminTab == AdminTab.CAMPAIGN_TRACKING
     ) {
       viewModel.refreshCampaignTrackingAdminData()
+    }
+  }
+
+  androidx.compose.runtime.LaunchedEffect(activePortal, activeUserTab) {
+    if (
+      (activePortal == PortalLoginTarget.USER_APP || !isAdminAuthorized) &&
+      activeUserTab == UserTab.HOME
+    ) {
+      viewModel.refreshPublicLeaderboard()
     }
   }
 
@@ -1029,7 +1038,7 @@ private fun AuthenticatedWorkspace(
                     onNavigateToPromoCode = {
                       viewModel.setPromoCodeScreenVisible(true)
                     },
-                    leaderboardTransactions = leaderboardTransactions
+                    publicLeaderboard = publicLeaderboard
                   )
                 }
               }

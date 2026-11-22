@@ -1141,7 +1141,7 @@ private fun AdminTasksTabContent(
                   )
                 }
               }
-              RewardBadge(rewardCents = task.rewardCents)
+              RewardBadge(rewardCents = com.example.data.model.coinsToCents(task.getEffectiveRewardCoins()))
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -1455,7 +1455,7 @@ private fun SubmissionReviewCard(
             }
           }
         }
-        RewardBadge(rewardCents = task.rewardCents)
+        RewardBadge(rewardCents = com.example.data.model.coinsToCents(task.getEffectiveRewardCoins()))
       }
 
       Spacer(modifier = Modifier.height(12.dp))
@@ -1966,9 +1966,11 @@ private fun AdminUsersTabContent(
                 )
               } else {
                 userTaskHistory.take(5).forEach { sub ->
-                  val subCoins = formatCoins(sub.getEffectiveRewardCoins())
+                  val effectiveSubCoins = sub.getEffectiveRewardCoins()
+                  val subCoins = formatCoins(effectiveSubCoins)
+                  val effectiveSubCents = com.example.data.model.coinsToCents(effectiveSubCoins)
                   val subSecondaryInr =
-                    if (sub.rewardCents > 0L) " • ${formatRewardInr(sub.rewardCents)}" else ""
+                    if (effectiveSubCents > 0L) " • ${formatRewardInr(effectiveSubCents)}" else ""
                   Text(
                     text = "• ${sub.title} — ${TaskStatus.label(sub.status)} ($subCoins$subSecondaryInr)",
                     style = MaterialTheme.typography.bodySmall
@@ -2396,7 +2398,7 @@ private fun TaskEditorDialog(
   }
   var rewardCoinsStr by rememberSaveable {
     mutableStateOf(
-      existingTask?.let { "${it.rewardCents}" } ?: "500"
+      existingTask?.let { "${it.getEffectiveRewardCoins()}" } ?: "500"
     )
   }
   var description by rememberSaveable { mutableStateOf(existingTask?.description ?: "") }
@@ -2544,7 +2546,7 @@ private fun TaskEditorDialog(
                   Text(title.ifBlank { "Untitled Task" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                   Text("${appName.ifBlank { category }} • $category", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
-                RewardBadge(rewardCents = rewardCoinsStr.toLongOrNull() ?: 500L)
+                RewardBadge(rewardCents = com.example.data.model.coinsToCents(rewardCoinsStr.toLongOrNull() ?: 500L))
               }
               Text(description.ifBlank { "No description entered yet." }, style = MaterialTheme.typography.bodySmall)
               if (installationInstructions.isNotBlank()) {

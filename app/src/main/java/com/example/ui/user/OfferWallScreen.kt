@@ -419,7 +419,7 @@ fun OfferWallScreen(
         }
       } else {
         items(availableOffers, key = { "offer_${it.id}" }) { offer ->
-          val coinReward = (offer.rewardCents * 125) / 100
+          val coinReward = offer.getEffectiveRewardCoins()
           val appOrSiteLabel = resolveAppOrWebsiteLabel(offer)
 
           NeonGlassCard(

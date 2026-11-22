@@ -35,6 +35,7 @@ import com.example.data.model.PromoAdminUiFeedback
 import com.example.data.model.PromoCodeItem
 import com.example.data.model.PromoRedemptionRecord
 import com.example.data.model.PromoRedemptionUiState
+import com.example.data.model.PublicLeaderboardSnapshot
 import com.example.data.model.ScratchCardConstants
 import com.example.data.model.ScratchCardSession
 import com.example.data.model.ScratchDailyState
@@ -276,11 +277,22 @@ class TaskFlowViewModel(
       .catch { emit(UiState.Error(it.localizedMessage ?: "Failed to load leaderboard")) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
 
+  private val _publicLeaderboardState = MutableStateFlow<PublicLeaderboardSnapshot?>(null)
+  val publicLeaderboardState: StateFlow<PublicLeaderboardSnapshot?> =
+    _publicLeaderboardState.asStateFlow()
+
   val leaderboardCreditedTransactionsState: StateFlow<List<TransactionRecord>> =
-    repository
-      .observeCreditedTransactionsForLeaderboard()
-      .catch { emit(emptyList()) }
-      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    MutableStateFlow<List<TransactionRecord>>(emptyList()).asStateFlow()
+
+  fun refreshPublicLeaderboard() {
+    viewModelScope.launch {
+      repository
+        .getPublicLeaderboard()
+        .onSuccess { snapshot ->
+          _publicLeaderboardState.value = snapshot
+        }
+    }
+  }
 
   val watchStats: StateFlow<WatchStats> =
     repository
@@ -1015,8 +1027,8 @@ class TaskFlowViewModel(
     clientName: String = ""
   ) {
     val parsedCoins = rewardAmountCoins.trim().toLongOrNull()
-    if (parsedCoins == null || parsedCoins <= 0L) {
-      _bannerMessage.value = "Enter a valid reward amount in Coins (e.g., 500)."
+    if (parsedCoins == null || parsedCoins < 2L) {
+      _bannerMessage.value = "Enter a valid reward amount in TF Coins (minimum 2 TF; 125 TF = ₹1.00)."
       return
     }
     val cleanedLink = taskLink.trim()
@@ -1030,7 +1042,7 @@ class TaskFlowViewModel(
       _bannerMessage.value = "Please enter a valid HTTPS icon URL or pick an icon from Gallery."
       return
     }
-    val rewardCents = parsedCoins
+    val rewardCents = coinsToCents(parsedCoins).coerceAtLeast(1L)
     viewModelScope.launch {
       _isBusy.value = true
       var resolvedCampaignId = campaignId.trim()
@@ -1078,11 +1090,12 @@ class TaskFlowViewModel(
           endDate = endDate,
           eligibilityRules = eligibilityRules,
           campaignId = resolvedCampaignId,
-          isActive = isActive
+          isActive = isActive,
+          rewardCoins = parsedCoins
         )
         .onSuccess {
           _bannerMessage.value =
-            "Task '$title' created (${formatCoins(rewardCents)}) and published to TaskFlow."
+            "Task '$title' created (${formatCoins(parsedCoins)} • ${formatRewardInr(rewardCents)}) and published to TaskFlow."
         }
         .onFailure {
           _bannerMessage.value = it.localizedMessage ?: "Failed to create task."
@@ -1115,8 +1128,8 @@ class TaskFlowViewModel(
     campaignId: String = ""
   ) {
     val parsedCoins = rewardAmountCoins.trim().toLongOrNull()
-    if (parsedCoins == null || parsedCoins <= 0L) {
-      _bannerMessage.value = "Enter a valid reward amount in Coins (e.g., 500)."
+    if (parsedCoins == null || parsedCoins < 2L) {
+      _bannerMessage.value = "Enter a valid reward amount in TF Coins (minimum 2 TF; 125 TF = ₹1.00)."
       return
     }
     val cleanedLink = taskLink.trim()
@@ -1130,7 +1143,7 @@ class TaskFlowViewModel(
       _bannerMessage.value = "Please enter a valid HTTPS icon URL or pick an icon from Gallery."
       return
     }
-    val rewardCents = parsedCoins
+    val rewardCents = coinsToCents(parsedCoins).coerceAtLeast(1L)
     viewModelScope.launch {
       _isBusy.value = true
       repository
@@ -1157,10 +1170,11 @@ class TaskFlowViewModel(
           startDate = startDate,
           endDate = endDate,
           eligibilityRules = eligibilityRules,
-          campaignId = campaignId
+          campaignId = campaignId,
+          rewardCoins = parsedCoins
         )
         .onSuccess {
-          _bannerMessage.value = "Task '$title' updated."
+          _bannerMessage.value = "Task '$title' updated (${formatCoins(parsedCoins)} • ${formatRewardInr(rewardCents)})."
         }
         .onFailure {
           _bannerMessage.value = it.localizedMessage ?: "Failed to update task."
@@ -1209,9 +1223,11 @@ class TaskFlowViewModel(
       repository
         .reviewSubmission(task = task, approve = approve, adminFeedback = feedback)
         .onSuccess {
+          val effectiveCoins = task.getEffectiveRewardCoins()
+          val effectiveCents = coinsToCents(effectiveCoins)
           val actionLabel =
             if (approve) {
-              "approved & ${formatRewardInr(task.rewardCents)} credited"
+              "approved & ${formatCoins(effectiveCoins)} (${formatRewardInr(effectiveCents)}) credited"
             } else {
               "rejected"
             }
@@ -1252,7 +1268,7 @@ class TaskFlowViewModel(
     val merged = mergeTasksWithPreservedSubmissions(tasks, submissions, currentUserId)
     return merged
       .filter { it.status == TaskStatus.APPROVED && (currentUserId.isBlank() || it.assignedUserId == currentUserId) }
-      .sumOf { it.rewardCents }
+      .sumOf { coinsToCents(it.getEffectiveRewardCoins()) }
   }
 
   fun claimDailyCheckIn(

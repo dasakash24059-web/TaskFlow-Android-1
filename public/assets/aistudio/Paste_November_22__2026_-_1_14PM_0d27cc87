@@ -1,0 +1,947 @@
+TASKFLOW — P0 MASTER REMEDIATION PROMPT
+
+Critical Security, Wallet Integrity, Financial Accuracy & Campaign Privacy Fixes
+
+C-01, C-02, C-03, C-04, C-05
+
+You are now performing the first critical remediation stage of the TaskFlow project, based on the Final Master Red-Team Audit.
+
+The audit identified five CRITICAL findings that must be fixed before any staging or production release.
+
+Your task is to investigate, implement narrowly scoped fixes, verify them with actual tests, and produce an evidence-based completion report.
+
+This is an authorized maintenance task for our own TaskFlow application and Firebase backend.
+
+IMPORTANT: Do not blindly apply the audit's suggested code changes. First inspect the actual current source code, trace every dependent feature, understand the existing data model, and implement the safest compatible solution.
+
+The five findings are:
+
+- C-01: Direct client arbitrary wallet balance inflation.
+- C-02: Client-writable reward sessions and forged transactions.
+- C-03: Phase 3E server-only callable omissions and insecure local fallback.
+- C-04: 25% manual task reward overpayment and TF/INR unit mismatch.
+- C-05: Cross-user financial transaction exposure and raw campaign clickId leakage.
+
+---
+
+0. STRICT PROJECT PRESERVATION RULES
+
+Preserve the existing project identity and architecture.
+
+Do not change:
+
+- Android package ID: com.aistudio.taskflow.kxmpzq
+- Firebase project: taskflow-8852d
+- Existing Firebase configuration.
+- Google Sign-In / Credential Manager.
+- Kotlin + Jetpack Compose architecture.
+- Existing MVVM structure.
+- Existing Cloud Functions architecture.
+- Existing wallet economics.
+- Existing withdrawal catalog and redemption behavior unless a specific change is necessary to fix one of the five findings.
+- Existing Telegram task implementation except where a dependency is directly affected by the five findings.
+- Existing manual proof workflow except where C-04 requires a correction.
+- Existing Campaign Tracking functionality.
+- Existing admin screens and navigation.
+- Existing Unity Ads implementation and configuration.
+
+STRICT UNITY ADS PRESERVATION:
+
+Do not modify:
+
+- UnityAdsHelper.kt
+- UnityBannerAdView.kt
+- Game ID 800430673
+- BP_Rewarded_Android
+- BP_Banner_Android
+- BP_Interstitial_Android
+
+Do not modify Unity Ads behavior during this remediation.
+
+Do not redesign the application UI unnecessarily.
+
+Do not add unrelated features.
+
+Do not deploy Firebase Rules, indexes or Cloud Functions.
+
+Do not push to GitHub.
+
+Do not expose, print, replace or invent any secret values.
+
+Do not delete historical wallet, ledger, transaction or notification records.
+
+---
+
+1. PRE-REMEDIATION INVESTIGATION
+
+Before changing any code:
+
+1. Inspect the actual current versions of all relevant files.
+2. Confirm that the five audit findings still exist.
+3. Trace every affected UI action, ViewModel method, repository method, Cloud Function, Firestore document and Security Rule.
+4. Inspect existing tests and identify why they failed to detect these problems.
+5. Identify dependencies between the five findings.
+6. Identify any legacy data compatibility requirements.
+7. Determine which operations currently depend on direct client Firestore writes.
+8. Determine which features currently depend on cross-user transaction reads.
+9. Identify all places where task rewards are stored or converted between TF coins and INR paise.
+
+Before editing, produce a short internal remediation plan and then proceed with implementation.
+
+Do not stop after merely describing the issues. Implement the five approved fixes.
+
+However, if an unexpected dependency creates a risk of corrupting existing user balances or losing financial history, do not guess. Preserve the existing data and report the blocker.
+
+---
+
+2. C-01 — CLOSE DIRECT CLIENT WALLET BALANCE INFLATION
+
+Confirmed audit problem
+
+The audit identified a dangerous branch in:
+
+firestore.rules
+
+Function:
+
+isValidUserUpdate(userId)
+
+The existing lastRewardId-related update branch permits authenticated users to modify additional wallet and reward-related fields without adequate restrictions.
+
+Potentially affected fields include:
+
+- balanceCoins
+- balanceCents
+- eligibleCoins
+- promotionalCoins
+- completedTasksCount
+- checkInStreak
+- extraSpinAvailable
+- Other server-authoritative reward fields.
+
+A user may manipulate their own Firestore document and potentially inflate withdrawable balances or poison leaderboard data.
+
+Required remediation
+
+A. Remove the insecure lastRewardId-based client wallet update authorization.
+
+B. Ensure that normal users cannot directly modify any server-authoritative wallet or reward field.
+
+C. Client profile updates must use a strict changedKeys().hasOnly(...) allowlist.
+
+D. Keep only legitimate user-editable profile fields writable by the account owner.
+
+E. Do not allow the user to modify:
+
+- Wallet balances.
+- Eligible balances.
+- Promotional balances.
+- Reward counters.
+- Reward session state.
+- Approval status.
+- Role.
+- Server-generated reward identifiers.
+- Withdrawal accounting fields.
+- Other financial or privileged fields.
+
+F. Admin-authorized operations must also remain restricted to properly authenticated admins.
+
+G. Inspect TaskFlowRepository.kt and remove direct client balance writes from handleLocalCallableFallback and any other insecure local reward fallback.
+
+H. All financial credits, debits, bonuses, reversals and reward mutations must be performed by authorized server-side Cloud Functions using the Admin SDK and atomic Firestore transactions.
+
+I. Do not break legitimate profile editing, profile initialization, or account approval workflows.
+
+Required tests
+
+Verify that:
+
+- A user cannot set balanceCoins to an arbitrary value.
+- A user cannot increase eligibleCoins.
+- A user cannot increase promotionalCoins.
+- A user cannot modify balanceCents.
+- A user cannot change completedTasksCount.
+- A user cannot manipulate checkInStreak.
+- A user cannot increase extraSpinAvailable.
+- A user cannot bypass restrictions by including lastRewardId.
+- A user can still update permitted profile fields.
+- Authorized server-side Cloud Functions can still credit rewards.
+- Admin operations still work through their authorized server-side paths.
+
+Test both allowed and denied operations using actual Firestore Rules tests where possible.
+
+---
+
+3. C-02 — LOCK SERVER-AUTHORITATIVE REWARD SESSIONS AND TRANSACTIONS
+
+Confirmed audit problem
+
+The audit found client-writable documents in:
+
+- users/{userId}/spin_sessions/{sessionId}
+- users/{userId}/scratch_sessions/{sessionId}
+- users/{userId}/scratch_stats/{dateKey}
+- users/{userId}/check_ins/{dateKey}
+- users/{userId}/watch_stats/{dateKey}
+
+It also identified client-created CREDITED documents in:
+
+- transactions/{transactionId}
+
+These permissions may allow users to forge reward session state or create fake financial history.
+
+The server-side claimSpinReward and claimScratchCardReward functions must never trust client-created session documents as proof of a valid reward.
+
+Required investigation
+
+Before changing Rules, inspect the complete lifecycle of:
+
+- spinWheel
+- claimSpinReward
+- startScratchCard
+- claimScratchCardReward
+- claimDailyCheckIn
+- Watch & Earn session creation and verification
+- Unity S2S verification
+- Telegram reward claims
+- Promo Code redemption
+- Transaction creation
+- Leaderboard calculation.
+
+Determine which Cloud Functions create, update and consume each document.
+
+Do not break legitimate server-side reward generation.
+
+Required remediation
+
+A. Lock client writes to server-authoritative session and statistics documents.
+
+B. Ensure ordinary users cannot create or update their own:
+
+- spin_sessions
+- scratch_sessions
+- scratch_stats
+- check_ins
+- watch_stats
+
+C. Preserve only necessary owner-scoped reads, if required by existing UI functionality.
+
+D. All reward-session creation and mutation must happen through authorized server-side Cloud Functions.
+
+E. Ensure claimSpinReward and claimScratchCardReward verify server-generated session state.
+
+F. Validate session ownership, status, expiry, reward amount, verification state and one-time claim status on the server.
+
+G. Prevent users from inventing rewardCoins or modifying session verification fields.
+
+H. Prevent duplicate claims, concurrent claims and replayed claims.
+
+I. Preserve the existing 2-ad S2S verification requirements and existing reward schedule.
+
+J. Do not weaken Unity S2S verification or bypass its production requirements.
+
+K. Lock direct client creation and modification of /transactions documents.
+
+L. Ordinary clients must never create a transaction with status CREDITED or fabricate a financial ledger entry.
+
+M. Transaction documents must be created only by authorized server-side Cloud Functions.
+
+N. Preserve legitimate owner-scoped transaction history reads, subject to the privacy restrictions in C-05.
+
+O. Verify that every existing reward-producing feature still creates its required session and ledger documents through the correct server-side path.
+
+Required tests
+
+Attempt unauthorized client writes to each protected collection.
+
+Verify all are denied.
+
+Verify legitimate Cloud Function operations still work.
+
+Verify:
+
+- Fake spin session cannot generate coins.
+- Fake scratch session cannot generate coins.
+- Fake check-in document cannot generate coins.
+- Fake Watch & Earn statistics cannot generate rewards.
+- Forged CREDITED transaction cannot be created.
+- Duplicate reward claim cannot credit twice.
+- Concurrent reward claim cannot credit twice.
+- Existing user reward history remains readable by its owner.
+
+Do not delete historical session or transaction documents.
+
+---
+
+4. C-03 — FIX PHASE 3E SERVER-ONLY CALLABLE GUARD AND REMOVE INSECURE FINANCIAL FALLBACKS
+
+Confirmed audit problem
+
+TaskFlowRepository.kt contains:
+
+isServerOnlyCallable()
+isCloudFunctionMissing(err)
+handleLocalCallableFallback()
+
+The audit found four Phase 3E callables missing from isServerOnlyCallable:
+
+1. listUserEligibleTrackedCampaigns
+2. listUserTrackedRewardActivity
+3. adminListCampaignConversions
+4. reviewCampaignConversion
+
+The current fallback handling can incorrectly return:
+
+mapOf("success" to true)
+
+This can cause fake-success responses when a server operation actually failed.
+
+The audit also found a dangerous promo fallback that can grant 500 TF for an arbitrary promo string if the Cloud Function fails.
+
+Required remediation
+
+A. Add all four Phase 3E callables to the correct server-only callable classification.
+
+B. Review the complete callable registry. Identify every financial, reward, campaign, moderation, admin and security-sensitive callable.
+
+C. Ensure that all such callables fail closed.
+
+D. A timeout, unavailable function, permission error, internal server error or network error must never be converted into a successful financial operation.
+
+E. Remove the 500 TF local promo redemption fallback completely.
+
+F. Never credit promo rewards locally.
+
+G. Never approve, reject or reverse a campaign conversion locally.
+
+H. Never generate local success for a server-only operation.
+
+I. Ensure that failed user campaign discovery requests display a genuine error state instead of silently pretending that the user has no eligible campaigns.
+
+J. Ensure that failed user reward activity requests display an appropriate error state rather than silently returning an empty successful response.
+
+K. Ensure that admin conversion moderation displays the actual server failure and refreshes the queue when appropriate.
+
+L. Ensure that server-only callable errors preserve their original error codes and meaningful messages.
+
+M. Avoid broad exception handling that converts unrelated errors into function-not-found errors.
+
+N. Distinguish clearly between:
+
+- NOT_FOUND / UNIMPLEMENTED function deployment problems.
+- UNAVAILABLE / timeout / network errors.
+- PERMISSION_DENIED.
+- FAILED_PRECONDITION.
+- INVALID_ARGUMENT.
+- INTERNAL errors.
+
+O. Do not use a local fallback for a financial operation just because Cloud Functions are temporarily unavailable.
+
+P. Audit all existing handleLocalCallableFallback branches. Remove or disable insecure fallback behavior for:
+
+- Promo redemption.
+- Spin reward claims.
+- Scratch Card reward claims.
+- Daily Check-in reward claims.
+- Manual Bonus.
+- Campaign clicks.
+- Campaign conversion moderation.
+- Campaign reward activity.
+- Wallet mutations.
+- Any other server-authoritative financial operation.
+
+Q. Preserve harmless non-financial fallback behavior only when it is demonstrably safe and does not simulate successful server execution.
+
+R. Ensure that a server operation cannot be reported as successful unless the actual server response confirms success.
+
+Required tests
+
+Test all four Phase 3E callables with:
+
+- Successful server response.
+- NOT_FOUND.
+- UNAVAILABLE.
+- Timeout.
+- PERMISSION_DENIED.
+- INTERNAL.
+- FAILED_PRECONDITION.
+
+Verify no failure produces fake success.
+
+Test arbitrary, invalid and expired promo codes under server failure.
+
+Verify no local reward is credited.
+
+Verify valid promo codes still work through the server.
+
+Verify admin moderation only reports success after a successful server response.
+
+Verify user tracking screens show genuine errors when the backend is unavailable.
+
+---
+
+5. C-04 — FIX MANUAL TASK REWARD UNIT CONVERSION AND 25% OVERPAYMENT
+
+Confirmed audit problem
+
+TaskFlow's canonical exchange rate is:
+
+125 TF = ₹1.00 = 100 paise
+
+The audit found that TaskFlowViewModel.createTask and TaskFlowRepository.createTask store a TF coin amount directly into rewardCents.
+
+This mixes two different units:
+
+- TF coins.
+- INR paise.
+
+For example:
+
+125 TF must equal 100 paise.
+
+It must never be stored as 125 paise.
+
+The audit found that task approval also adds rewardCents directly to balanceCents and converts the same incorrect value into TF coins.
+
+This results in systematic overpayment and contradictory UI values.
+
+Required remediation
+
+A. First inspect all task reward fields and existing task model definitions.
+
+B. Identify the canonical representation of:
+
+- rewardCoins
+- rewardCents
+- effective task reward
+- transaction amountCoins
+- transaction amountCents.
+
+C. Keep the existing conversion rate unchanged:
+
+125 TF = ₹1.00
+
+D. Use the existing canonical conversion helpers wherever possible:
+
+coinsToCents(coins)
+
+centsToCoins(cents)
+
+Do not duplicate conversion formulas throughout the application.
+
+E. Fix task creation in:
+
+- TaskFlowViewModel.createTask()
+- TaskFlowRepository.createTask()
+- Any equivalent task creation function.
+
+F. Fix task update/edit functionality.
+
+G. When an admin creates a task with 125 TF:
+
+- rewardCoins must be 125.
+- rewardCents must be 100.
+- Displayed INR value must be ₹1.00.
+
+H. When an admin creates a task with 250 TF:
+
+- rewardCoins must be 250.
+- rewardCents must be 200.
+- Displayed INR value must be ₹2.00.
+
+I. Fix TaskFlowRepository.reviewSubmission().
+
+J. On successful approval:
+
+- Calculate the effective reward in TF coins.
+- Credit the exact rewardCoins.
+- Calculate the corresponding paise using coinsToCents(effectiveRewardCoins).
+- Update balanceCoins, eligibleCoins and balanceCents consistently.
+- Create an explicit amountCoins field in the ledger transaction.
+- Create the matching amountCents field.
+- Ensure notification reward amounts exactly match the credited reward.
+- Ensure the operation is atomic and idempotent.
+
+K. Do not calculate TF rewards by applying centsToCoins() to a value that actually represents TF coins.
+
+L. Do not mix rewardCoins and rewardCents.
+
+M. Fix all affected UI calculations in:
+
+- OfferWallScreen.kt
+- UserScreens.kt
+- Other task cards or task detail screens identified by source search.
+
+N. Use the canonical task reward helper or effectiveRewardCoins model property.
+
+O. Display TF and INR consistently.
+
+P. Correct the identified display bug in which a 125 TF task shows ₹1.25.
+
+Q. Correct OfferWallScreen's reward conversion that currently calculates rewardCents * 125 / 100 when the source value may actually be stored incorrectly.
+
+R. Preserve existing valid task records.
+
+S. Do not blindly reinterpret all historical rewardCents values as paise or TF coins.
+
+T. Investigate whether existing task documents contain mixed or legacy units.
+
+U. If a data migration is required, do not execute it automatically. Design a safe migration plan with:
+
+- Affected document identification.
+- Before/after examples.
+- Idempotency.
+- Backup requirement.
+- Rollback strategy.
+- No duplicate reward credits.
+
+V. If legacy documents cannot be safely distinguished, preserve them and report the exact ambiguity rather than silently changing historical financial data.
+
+Required tests
+
+Test at least:
+
+Task reward| Expected TF| Expected INR
+125 TF| 125 TF| ₹1.00
+250 TF| 250 TF| ₹2.00
+500 TF| 500 TF| ₹4.00
+1,000 TF| 1,000 TF| ₹8.00
+
+Also test:
+
+- Task creation.
+- Task update.
+- Task approval.
+- Duplicate approval prevention.
+- Ledger amountCoins.
+- Ledger amountCents.
+- Wallet balanceCoins.
+- Wallet balanceCents.
+- Notification amount.
+- Offerwall display.
+- Home task card display.
+- Task detail display.
+- Legacy task compatibility.
+
+Verify that the actual wallet credit, transaction history, notification and UI all agree.
+
+Do not change the 125 TF = ₹1.00 conversion rate.
+
+---
+
+6. C-05 — PREVENT CROSS-USER TRANSACTION EXPOSURE AND RAW CLICK ID LEAKAGE
+
+Confirmed audit problem
+
+The audit found that Firestore Rules permit any authenticated user to read all CREDITED transactions.
+
+This exposes other users' financial transaction data.
+
+The audit also found that campaign conversion transaction and notification identifiers include raw clickId values.
+
+Examples identified in the audit:
+
+- conv_credit_conv_<clickId>
+- conv_rev_conv_<clickId>
+- referenceId: conv_<clickId>
+- notif_conv_credit_conv_<clickId>
+
+This violates the intended privacy separation introduced in Phase 3D and Phase 3E.
+
+Required remediation — Transaction Privacy
+
+A. Restrict ordinary /transactions reads to:
+
+- The authenticated owner of the transaction.
+- Properly authorized admins.
+
+B. Remove the broad cross-user CREDITED transaction read permission.
+
+C. Verify that the owner comparison uses the actual authenticated UID.
+
+D. Verify that an ordinary user cannot read another user's transaction by guessing or enumerating transaction IDs.
+
+E. Verify that an ordinary user cannot list all credited transactions.
+
+F. Preserve legitimate owner-scoped transaction history.
+
+G. Do not break admin transaction inspection.
+
+H. Do not break the leaderboard.
+
+Required remediation — Leaderboard Compatibility
+
+The current leaderboard implementation uses cross-user credited transaction scanning.
+
+Removing that permission may break the leaderboard.
+
+Do not retain the insecure cross-user read rule just to preserve leaderboard behavior.
+
+Instead:
+
+1. Inspect the complete existing leaderboard architecture.
+2. Identify its exact source of earnings data.
+3. Move leaderboard aggregation to an appropriate trusted server-side mechanism.
+4. Prefer an existing protected leaderboard document or server-maintained aggregate if one is already available.
+5. If a new aggregate is necessary, make it server-authoritative.
+6. Prevent ordinary clients from writing leaderboard earnings.
+7. Preserve correct net earnings calculations.
+8. Continue subtracting campaign reversals.
+9. Prevent double counting.
+10. Ensure the leaderboard cannot be poisoned by forged transactions.
+11. Preserve the existing leaderboard UI and navigation.
+
+Do not create an unnecessary second financial source of truth.
+
+Required remediation — Campaign Identifier Privacy
+
+A. Inspect campaign conversion credit and reversal code.
+
+B. Find every place where raw clickId or conv_<clickId> is stored in:
+
+- Transaction document IDs.
+- Transaction referenceId.
+- Notification document IDs.
+- Notification reference fields.
+- Publicly readable documents.
+- Android response payloads.
+
+C. Replace unnecessary raw clickId-derived public identifiers with opaque, non-reversible activity references.
+
+D. Use the existing activityId/moderationId privacy architecture where compatible.
+
+E. Generate deterministic opaque references using a cryptographically safe server-side mechanism or a properly scoped hash.
+
+F. Preserve idempotency and duplicate transaction prevention.
+
+G. Ensure that credit and reversal records remain reliably associated with their underlying server-side conversion.
+
+H. Keep raw clickId and externalTransactionId in server-only tracking collections when genuinely required for attribution, verification or reconciliation.
+
+I. Do not expose raw clickId in public ledger or user-facing notification documents.
+
+J. Preserve the user's ability to see their own reward history.
+
+K. Do not delete historical records that already contain raw identifiers.
+
+L. Do not silently rename existing historical transaction documents.
+
+M. If legacy records need privacy remediation, provide a separate migration plan without executing it.
+
+Required tests
+
+Verify:
+
+- User A cannot read User B's transaction.
+- User A cannot list all CREDITED transactions.
+- User A can read their own transactions.
+- Authorized Admin can inspect transactions.
+- User cannot write their own fake transaction.
+- Leaderboard still works.
+- Leaderboard does not depend on insecure cross-user client reads.
+- Leaderboard subtracts campaign reversals.
+- Campaign reward transaction IDs contain no raw clickId.
+- Campaign reversal transaction IDs contain no raw clickId.
+- Notification IDs and references contain no raw clickId.
+- User-facing campaign activity remains readable.
+- Duplicate conversion callbacks remain idempotent.
+
+---
+
+7. CROSS-FEATURE REGRESSION PROTECTION
+
+The five fixes are interconnected.
+
+After implementation, verify that the following existing features still work:
+
+1. Google Sign-In.
+2. User registration.
+3. Account approval.
+4. User profile updates.
+5. Admin Dashboard.
+6. Admin task creation.
+7. Admin task editing.
+8. Manual proof submission.
+9. Written proof + gallery photo requirement.
+10. Admin proof review.
+11. Telegram Join tasks.
+12. Telegram membership verification.
+13. Telegram reward claim.
+14. Offerwall.
+15. Campaign Tracking.
+16. User tracked campaign discovery.
+17. User tracked reward activity.
+18. Admin conversion moderation.
+19. Wallet.
+20. Ledger.
+21. Daily Check-in.
+22. Watch & Earn.
+23. Spin.
+24. Scratch Card.
+25. Promo Code.
+26. Referral-related existing code, if any.
+27. Manual Bonus.
+28. Notifications.
+29. Leaderboard.
+30. Withdrawals.
+31. Support and FAQ.
+32. Unity Ads.
+
+Special attention:
+
+- Do not break Telegram rewards while locking reward sessions.
+- Do not break Daily Check-in while locking check_ins.
+- Do not break Watch & Earn S2S verification.
+- Do not break Spin/Scratch claim flows.
+- Do not break Promo Code redemption.
+- Do not break Admin task approval.
+- Do not break Leaderboard after restricting transaction reads.
+- Do not break Campaign Conversion Moderation.
+- Do not alter withdrawal economics.
+- Do not alter Unity Ads.
+
+---
+
+8. REQUIRED TEST EXECUTION
+
+Run the available tests after implementation.
+
+Include:
+
+Firestore Security Tests
+
+Add or update tests to verify all newly restricted write/read paths.
+
+Use a real Firestore Emulator when available.
+
+If an emulator is unavailable:
+
+- Clearly report that emulator verification was not completed.
+- Do not claim Firestore Rules passed based only on source inspection.
+- Run any independent available rules tests.
+- Report the exact limitation.
+
+Backend Tests
+
+Run relevant existing and new tests for:
+
+- Wallet credit.
+- Ledger creation.
+- Spin.
+- Scratch.
+- Daily Check-in.
+- Watch & Earn.
+- Promo Code.
+- Telegram rewards.
+- Manual Bonus.
+- Campaign conversion.
+- Campaign reversal.
+- Leaderboard aggregation.
+- Transaction privacy.
+
+Android Tests
+
+Run:
+
+- Task reward unit conversion tests.
+- Task creation and approval tests.
+- Callable fail-closed tests.
+- Promo fallback regression tests.
+- Campaign tracking tests.
+- Wallet/ledger tests.
+- UI reward formatting tests.
+- Existing non-emulator regression tests.
+
+Build
+
+Run the available Android compile/build verification.
+
+Do not claim success unless the actual command or build tool reports success.
+
+If any test fails:
+
+- Identify the exact test.
+- Explain whether it is a code regression or unavailable infrastructure.
+- Do not hide the failure.
+
+---
+
+9. REQUIRED IMPLEMENTATION QUALITY
+
+For every change:
+
+1. Keep the fix narrowly scoped.
+2. Avoid unnecessary architecture rewrites.
+3. Preserve backward compatibility where safe.
+4. Use server-authoritative financial operations.
+5. Use Firestore transactions for atomic financial changes.
+6. Preserve idempotency.
+7. Avoid duplicate reward credits.
+8. Preserve historical records.
+9. Avoid sensitive logging.
+10. Keep Android models consistent with backend responses.
+11. Keep Firestore Rules consistent with actual client operations.
+12. Do not silently ignore failed server calls.
+
+Do not simply change tests to make them pass.
+
+Tests must verify the real security and financial behavior.
+
+---
+
+10. REQUIRED FINAL REPORT
+
+After completing implementation and tests, provide the following report.
+
+A. Remediation Verdict
+
+Choose:
+
+- PASS
+- PARTIAL PASS
+- FAIL
+
+Explain the result.
+
+B. Critical Finding Status
+
+For each:
+
+- C-01
+- C-02
+- C-03
+- C-04
+- C-05
+
+Report:
+
+- Original issue.
+- Exact files changed.
+- Functions/rules changed.
+- What was corrected.
+- How the correction works.
+- Test evidence.
+- Remaining limitations.
+
+C. Files Changed
+
+List every:
+
+- Modified file.
+- Newly created file.
+- Deleted file, if any.
+
+Do not omit files.
+
+For each file, explain why it changed.
+
+D. Firestore Security Rules Results
+
+Provide explicit ALLOWED and DENIED test results for each important operation.
+
+E. Financial Verification
+
+Show before/after verification for:
+
+- Wallet balance.
+- Task reward.
+- Ledger entry.
+- Transaction amount.
+- Notification amount.
+- Leaderboard earnings.
+- Campaign reversal.
+
+Use the fixed conversion rate:
+
+125 TF = ₹1.00.
+
+F. Campaign Privacy Verification
+
+Confirm whether raw clickId remains in any user-readable:
+
+- Transaction document ID.
+- referenceId.
+- Notification document ID.
+- Notification reference.
+- Android response.
+
+Report all remaining occurrences and explain whether they are server-only or public.
+
+G. Regression Results
+
+List each tested feature and mark:
+
+- PASS
+- FAIL
+- PARTIAL
+- NOT TESTED
+
+H. Exact Test Results
+
+Report:
+
+- Test suite name.
+- Passed count.
+- Failed count.
+- Skipped count.
+- Timeout status.
+- Build result.
+
+I. Remaining Findings
+
+List any remaining:
+
+- CRITICAL.
+- HIGH.
+- MEDIUM.
+- LOW.
+
+Do not claim the project is production-ready if other previously identified blockers remain.
+
+J. Deployment Status
+
+Explicitly confirm:
+
+- No Firestore Rules deployed.
+- No Firestore indexes deployed.
+- No Cloud Functions deployed.
+- No Secret Manager values modified.
+- No GitHub push performed.
+
+If any of these actions were performed accidentally, disclose them immediately.
+
+K. Final Recommendation
+
+Answer:
+
+1. Are all five Critical findings fixed?
+2. Is direct client wallet inflation blocked?
+3. Are fake reward sessions blocked?
+4. Can a failed Cloud Function still create fake success?
+5. Is the 500 TF promo fallback removed?
+6. Is manual task reward accounting now exactly correct?
+7. Can users still read other users' financial transactions?
+8. Is raw clickId still leaked into user-readable documents?
+9. Does the Leaderboard still work securely?
+10. Are all existing reward features preserved?
+11. Is another audit required before proceeding?
+
+---
+
+FINAL INSTRUCTION
+
+Implement only C-01 through C-05 in this remediation stage.
+
+Do not automatically start H-01, H-02, H-03, H-04, H-05 or unrelated medium/low-priority remediation.
+
+Do not modify Unity Ads.
+
+Do not deploy anything.
+
+Do not push to GitHub.
+
+Do not delete historical financial data.
+
+After implementation, run the available tests and return the complete evidence-based report.
+
+Wait for explicit approval before beginning the next remediation stage.

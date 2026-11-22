@@ -11,6 +11,7 @@ const {
   generateSecureClickId,
   buildExternalTxnLockId,
   buildConversionModerationId,
+  buildUserActivityId,
   tfToBalanceCents,
   computeCampaignApprovedWallet,
   computeCampaignReversedWallet,
@@ -2914,6 +2915,8 @@ async function handleCreateScratchCardSession(request, deps = {}) {
       isFree: !hasUsedFree,
       claimed: false,
       status: "ACTIVE",
+      serverGenerated: true,
+      expiresAt: new Date(nowMillis + 24 * 60 * 60 * 1000),
       createdAt: ts
     };
 
@@ -3014,6 +3017,11 @@ async function handleClaimScratchCardReward(request, deps = {}) {
         "already-exists",
         "This Scratch Card reward has already been claimed."
       );
+    }
+
+    const scratchExpiresAtMillis = toMillisSafe(session.expiresAt);
+    if (scratchExpiresAtMillis !== null && scratchExpiresAtMillis < nowMillis) {
+      throw new HttpsError("deadline-exceeded", "Scratch card session has expired.");
     }
 
     const rawReward = Number(session.rewardCoins);
@@ -4928,8 +4936,12 @@ async function executeConversionTransitionInTransaction({
     }
 
     const existingConversion = conversionSnap.exists ? conversionSnap.data() || {} : null;
-    const creditTxId = `conv_credit_${conversionId}`;
-    const revTxId = `conv_rev_${conversionId}`;
+    // Opaque, non-reversible public identifier so user-readable transactions and notifications never expose raw clickId
+    const activityId = buildUserActivityId(conversionId);
+    const creditTxId = existingConversion?.creditedTransactionId || `conv_credit_${activityId}`;
+    const revTxId = existingConversion?.reversalTransactionId || `conv_rev_${activityId}`;
+    const creditNotifId = `notif_conv_credit_${activityId}`;
+    const revNotifId = `notif_conv_rev_${activityId}`;
 
     // Phase 2 Reads (still strictly BEFORE any writes): config, network, campaign, user, guard, reservation, ledger docs, and lock
     const configRef = firestoreDb
@@ -5282,6 +5294,7 @@ async function executeConversionTransitionInTransaction({
 
     const baseConversionFields = {
       conversionId,
+      activityId,
       moderationId: buildConversionModerationId(conversionId),
       clickId,
       userId,
@@ -5392,7 +5405,7 @@ async function executeConversionTransitionInTransaction({
         userData.approvalStatus || "approved"
       );
 
-      // 3. Create immutable wallet ledger credit entry (attribution identifiers remain server-only in campaign_conversions)
+      // 3. Create immutable wallet ledger credit entry using opaque activityId (never exposing raw clickId)
       transaction.set(creditTxRef, {
         userId,
         userName: displayName,
@@ -5401,14 +5414,14 @@ async function executeConversionTransitionInTransaction({
         amountCoins: authoritativeRewardTf,
         amountCents: wallet.rewardCents,
         status: "CREDITED",
-        referenceId: conversionId,
+        referenceId: activityId,
         campaignId,
         networkId: clickNetworkId,
         createdAt: ts
       });
 
-      // 4. Create user notification
-      const notifRef = userRef.collection("notifications").doc(`notif_${creditTxId}`);
+      // 4. Create user notification using opaque activityId (never exposing raw clickId)
+      const notifRef = userRef.collection("notifications").doc(creditNotifId);
       transaction.set(notifRef, {
         userId,
         title: "Campaign Reward Credited",
@@ -5416,7 +5429,7 @@ async function executeConversionTransitionInTransaction({
         message: `Your conversion for '${campaignTitle.slice(0, 60)}' was verified! +${authoritativeRewardTf} TF credited to your wallet.`,
         type: "CAMPAIGN_REWARD",
         rewardCoins: authoritativeRewardTf,
-        referenceId: conversionId,
+        referenceId: activityId,
         isRead: false,
         createdAt: ts
       });
@@ -5605,7 +5618,11 @@ async function executeConversionTransitionInTransaction({
       userData.approvalStatus || "approved"
     );
 
-    // 3. Create auditable compensating ledger entry (original credit tx stays untouched; attribution identifiers stay server-only)
+    // 3. Create auditable compensating ledger entry using opaque activityId (never exposing raw clickId)
+    const rawOriginalCreditTxId = String(existingConversion.creditedTransactionId || creditTxId);
+    const safePublicOriginalTxId = rawOriginalCreditTxId.includes(clickId)
+      ? `conv_credit_${activityId}`
+      : rawOriginalCreditTxId;
     transaction.set(revTxRef, {
       userId,
       userName: displayName,
@@ -5617,16 +5634,16 @@ async function executeConversionTransitionInTransaction({
       recoveredCoins: revWallet.recoveredCoins,
       shortfallCoins: revWallet.shortfallCoins,
       status: "REVERSED",
-      referenceId: conversionId,
-      originalTransactionId: existingConversion.creditedTransactionId || creditTxId,
+      referenceId: activityId,
+      originalTransactionId: safePublicOriginalTxId,
       campaignId,
       networkId: clickNetworkId,
       reason: effectiveStatusReason || "ADVERTISER_REVERSAL",
       createdAt: ts
     });
 
-    // 4. Notify user
-    const revNotifRef = userRef.collection("notifications").doc(`notif_${revTxId}`);
+    // 4. Notify user using opaque activityId (never exposing raw clickId)
+    const revNotifRef = userRef.collection("notifications").doc(revNotifId);
     transaction.set(revNotifRef, {
       userId,
       title: "Campaign Conversion Reversed",
@@ -5634,7 +5651,7 @@ async function executeConversionTransitionInTransaction({
       message: `Reward of ${authoritativeRewardTf} TF for '${campaignTitle.slice(0, 60)}' was reversed (${effectiveStatusReason || "advertiser reversal"}).`,
       type: "CAMPAIGN_REVERSAL",
       rewardCoins: authoritativeRewardTf,
-      referenceId: conversionId,
+      referenceId: activityId,
       isRead: false,
       createdAt: ts
     });
@@ -6091,3 +6108,280 @@ exports.listUserTrackedRewardActivity = onCall(async (request) =>
   campaignUserHandlers.handleListUserTrackedRewardActivity(request)
 );
 exports._campaignUserHandlers = campaignUserHandlers;
+
+// =========================================================================
+// C-05 — SERVER-AUTHORITATIVE PUBLIC LEADERBOARD AGGREGATION
+// =========================================================================
+const LEADERBOARD_CREDITED_REWARD_TYPES = new Set([
+  "TASK_REWARD",
+  "DAILY_CHECKIN",
+  "WATCH_EARN",
+  "SPIN_EARN",
+  "SCRATCH_CARD",
+  "TELEGRAM_JOIN",
+  "PROMO_CODE",
+  "MANUAL_BONUS",
+  "ADMIN_BONUS",
+  "BONUS",
+  "CAMPAIGN_REWARD"
+]);
+
+function getIstPeriodStartMillis(period, nowMillis) {
+  if (period === "ALL_TIME") return 0;
+  // Compute IST (UTC+05:30) wall-clock date components
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const istDate = new Date(nowMillis + istOffsetMs);
+  const year = istDate.getUTCFullYear();
+  const month = istDate.getUTCMonth();
+  const day = istDate.getUTCDate();
+  if (period === "THIS_MONTH") {
+    return Date.UTC(year, month, 1, 0, 0, 0, 0) - istOffsetMs;
+  }
+  // THIS_WEEK: Monday 00:00:00 IST
+  const dow = istDate.getUTCDay(); // 0=Sun, 1=Mon, ...
+  const daysSinceMonday = dow === 0 ? 6 : dow - 1;
+  return Date.UTC(year, month, day - daysSinceMonday, 0, 0, 0, 0) - istOffsetMs;
+}
+
+function getEffectiveTxCoinsServer(tx) {
+  const explicitCoins = Number(tx?.amountCoins || 0);
+  if (Number.isFinite(explicitCoins) && explicitCoins > 0) {
+    return Math.floor(explicitCoins);
+  }
+  const cents = Number(tx?.amountCents || 0);
+  if (Number.isFinite(cents) && cents > 0) {
+    return Math.floor((cents * 125) / 100);
+  }
+  return 0;
+}
+
+function isHiddenAdminProfile(profile) {
+  const role = String(profile?.role || "").trim().toLowerCase();
+  const email = String(profile?.email || "").trim().toLowerCase();
+  return role === "admin" || email === PROMO_BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+}
+
+function computeServerLeaderboardForPeriod(activeUsersByUid, validCreditedTxs, validReversalTxs, period, nowMillis) {
+  const startMillis = getIstPeriodStartMillis(period, nowMillis);
+  const reversedByCreditIdx = new Array(validCreditedTxs.length).fill(0);
+  const unmatchedReversals = [];
+  const seenUnmatchedKeys = new Set();
+
+  for (const rev of validReversalTxs) {
+    const revRef = String(rev.referenceId || "").trim();
+    const revOrigTx = String(rev.originalTransactionId || "").trim();
+    const revUid = String(rev.userId || "").trim();
+    let matchedIdx = -1;
+    for (let i = 0; i < validCreditedTxs.length; i++) {
+      const credit = validCreditedTxs[i];
+      if (String(credit.userId || "").trim() !== revUid) continue;
+      if (String(credit.type || "").trim().toUpperCase() !== "CAMPAIGN_REWARD") continue;
+      const creditId = String(credit.id || "").trim();
+      const creditRef = String(credit.referenceId || "").trim();
+      if (
+        (revOrigTx && creditId && revOrigTx === creditId) ||
+        (revRef && creditRef && revRef === creditRef)
+      ) {
+        matchedIdx = i;
+        break;
+      }
+    }
+    const revAmount = getEffectiveTxCoinsServer(rev);
+    if (matchedIdx >= 0) {
+      const maxReversible = getEffectiveTxCoinsServer(validCreditedTxs[matchedIdx]);
+      reversedByCreditIdx[matchedIdx] = Math.min(
+        maxReversible,
+        reversedByCreditIdx[matchedIdx] + revAmount
+      );
+    } else {
+      const dedupKey = `${revUid}:${revRef || revOrigTx || rev.id}`;
+      if (!seenUnmatchedKeys.has(dedupKey)) {
+        seenUnmatchedKeys.add(dedupKey);
+        unmatchedReversals.push(rev);
+      }
+    }
+  }
+
+  const earnedByUid = new Map();
+  const nameByUid = new Map();
+
+  for (let i = 0; i < validCreditedTxs.length; i++) {
+    const tx = validCreditedTxs[i];
+    const txMillis = toMillisSafe(tx.createdAt) || 0;
+    const inWindow =
+      period === "ALL_TIME" || (txMillis >= startMillis && txMillis <= nowMillis);
+    if (!inWindow) continue;
+    const uid = String(tx.userId || "").trim();
+    if (!uid) continue;
+    const netTxCoins = Math.max(0, getEffectiveTxCoinsServer(tx) - reversedByCreditIdx[i]);
+    earnedByUid.set(uid, (earnedByUid.get(uid) || 0) + netTxCoins);
+    const txName = String(tx.userName || "").trim();
+    if (txName && !nameByUid.has(uid)) {
+      nameByUid.set(uid, txName);
+    }
+  }
+
+  for (const rev of unmatchedReversals) {
+    const revMillis = toMillisSafe(rev.createdAt) || 0;
+    const inWindow =
+      period === "ALL_TIME" || (revMillis >= startMillis && revMillis <= nowMillis);
+    if (!inWindow) continue;
+    const uid = String(rev.userId || "").trim();
+    if (!uid) continue;
+    const prev = earnedByUid.get(uid) || 0;
+    earnedByUid.set(uid, Math.max(0, prev - getEffectiveTxCoinsServer(rev)));
+  }
+
+  const allCandidateUids = new Set([...activeUsersByUid.keys(), ...earnedByUid.keys()]);
+  const rows = [];
+
+  for (const uid of allCandidateUids) {
+    const profile = activeUsersByUid.get(uid);
+    if (profile && isHiddenAdminProfile(profile)) continue;
+    if (profile && String(profile.approvalStatus || "approved") === "suspended") continue;
+
+    const txEarned = earnedByUid.get(uid) || 0;
+    const profileDisplayCoins = profile
+      ? (Number(profile.balanceCoins || 0) > 0
+          ? Math.floor(Number(profile.balanceCoins))
+          : Math.floor((Number(profile.balanceCents || 0) * 125) / 100))
+      : 0;
+    const periodEarnedCoins =
+      period === "ALL_TIME" ? Math.max(txEarned, profileDisplayCoins) : txEarned;
+    const completedTasksCount = Math.max(0, Math.floor(Number(profile?.completedTasksCount || 0)));
+
+    if (periodEarnedCoins > 0 || (period === "ALL_TIME" && completedTasksCount > 0)) {
+      const displayName =
+        String(profile?.displayName || "").trim() ||
+        String(nameByUid.get(uid) || "").trim() ||
+        "TaskFlow Member";
+      rows.push({
+        userId: uid,
+        displayName,
+        earnedCoins: periodEarnedCoins,
+        completedTasksCount
+      });
+    }
+  }
+
+  rows.sort((a, b) => {
+    if (b.earnedCoins !== a.earnedCoins) return b.earnedCoins - a.earnedCoins;
+    if (b.completedTasksCount !== a.completedTasksCount) {
+      return b.completedTasksCount - a.completedTasksCount;
+    }
+    const nameDiff = a.displayName.toLowerCase().localeCompare(b.displayName.toLowerCase());
+    if (nameDiff !== 0) return nameDiff;
+    return a.userId.localeCompare(b.userId);
+  });
+
+  return rows.slice(0, 50).map((row, idx) => ({
+    rank: idx + 1,
+    userId: row.userId,
+    displayName: row.displayName,
+    earnedCoins: row.earnedCoins,
+    completedTasksCount: row.completedTasksCount
+  }));
+}
+
+/**
+ * Server-authoritative public leaderboard endpoint.
+ * Aggregates net credited earnings (minus campaign reversals) server-side via Admin SDK
+ * so ordinary clients never need read access to other users' `/transactions` documents.
+ */
+async function handleGetPublicLeaderboard(request, deps = {}) {
+  if (!request.auth || !request.auth.uid) {
+    throw new HttpsError("unauthenticated", "Authentication required to view the leaderboard.");
+  }
+
+  const firestoreDb = deps.db || db;
+  const nowMillis = typeof deps.now === "function" ? deps.now() : Date.now();
+  const maxTxScan = Math.min(20000, Math.max(100, Number(deps.maxTxScan || 5000)));
+
+  const [leaderboardSnap, txSnap] = await Promise.all([
+    firestoreDb.collection("leaderboard").get(),
+    typeof firestoreDb.collection("transactions").limit === "function"
+      ? firestoreDb.collection("transactions").limit(maxTxScan).get()
+      : firestoreDb.collection("transactions").get()
+  ]);
+
+  const activeUsersByUid = new Map();
+  for (const doc of leaderboardSnap?.docs || []) {
+    const data = doc.data() || {};
+    const uid = String(data.userId || doc.id || "").trim();
+    if (!uid) continue;
+    if (isHiddenAdminProfile(data)) continue;
+    if (String(data.approvalStatus || "approved") === "suspended") continue;
+    activeUsersByUid.set(uid, {
+      userId: uid,
+      displayName: String(data.displayName || "TaskFlow Member").trim() || "TaskFlow Member",
+      balanceCoins: Number(data.balanceCoins || 0),
+      balanceCents: Number(data.balanceCents || 0),
+      completedTasksCount: Number(data.completedTasksCount || 0),
+      approvalStatus: String(data.approvalStatus || "approved")
+    });
+  }
+
+  const seenCreditIds = new Set();
+  const validCreditedTxs = [];
+  const seenRevKeys = new Set();
+  const validReversalTxs = [];
+
+  for (const doc of txSnap?.docs || []) {
+    const data = doc.data() || {};
+    const uid = String(data.userId || "").trim();
+    if (!uid) continue;
+    const status = String(data.status || "").trim().toUpperCase();
+    const type = String(data.type || "").trim().toUpperCase();
+    const effectiveCoins = getEffectiveTxCoinsServer(data);
+    if (effectiveCoins <= 0) continue;
+
+    if (status === "CREDITED" && LEADERBOARD_CREDITED_REWARD_TYPES.has(type)) {
+      const dedupId = doc.id || `${uid}_${type}_${data.referenceId || ""}`;
+      if (!seenCreditIds.has(dedupId)) {
+        seenCreditIds.add(dedupId);
+        validCreditedTxs.push({ id: doc.id, ...data });
+      }
+    } else if (status === "REVERSED" && type === "CAMPAIGN_REVERSAL") {
+      const revKey = `${uid}:${String(data.referenceId || data.originalTransactionId || doc.id)}`;
+      if (!seenRevKeys.has(revKey)) {
+        seenRevKeys.add(revKey);
+        validReversalTxs.push({ id: doc.id, ...data });
+      }
+    }
+  }
+
+  return {
+    success: true,
+    generatedAtMillis: nowMillis,
+    allTime: computeServerLeaderboardForPeriod(
+      activeUsersByUid,
+      validCreditedTxs,
+      validReversalTxs,
+      "ALL_TIME",
+      nowMillis
+    ),
+    thisMonth: computeServerLeaderboardForPeriod(
+      activeUsersByUid,
+      validCreditedTxs,
+      validReversalTxs,
+      "THIS_MONTH",
+      nowMillis
+    ),
+    thisWeek: computeServerLeaderboardForPeriod(
+      activeUsersByUid,
+      validCreditedTxs,
+      validReversalTxs,
+      "THIS_WEEK",
+      nowMillis
+    )
+  };
+}
+
+exports.getPublicLeaderboard = onCall(async (request) =>
+  handleGetPublicLeaderboard(request)
+);
+exports._leaderboardHandlers = {
+  handleGetPublicLeaderboard,
+  computeServerLeaderboardForPeriod
+};
+

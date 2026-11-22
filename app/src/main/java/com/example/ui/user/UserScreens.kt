@@ -185,7 +185,8 @@ fun UserHomeScreen(
   onNavigateToOfferWall: () -> Unit = {},
   onNavigateToScratchCard: () -> Unit = {},
   onNavigateToPromoCode: () -> Unit = {},
-  leaderboardTransactions: List<TransactionRecord> = emptyList()
+  leaderboardTransactions: List<TransactionRecord> = emptyList(),
+  publicLeaderboard: com.example.data.model.PublicLeaderboardSnapshot? = null
 ) {
   val profile = (profileState as? UiState.Success)?.data
   val currentUserId = profile?.userId?.ifBlank { profile.id } ?: ""
@@ -256,6 +257,7 @@ fun UserHomeScreen(
     LeaderboardDialog(
       users = leaderboardUsers,
       transactions = effectiveLeaderboardTransactions,
+      publicLeaderboard = publicLeaderboard,
       onDismiss = { showLeaderboardDialog = false }
     )
   }
@@ -450,6 +452,7 @@ fun UserHomeScreen(
         LeaderboardPreviewCard(
           users = leaderboardUsers,
           transactions = effectiveLeaderboardTransactions,
+          publicLeaderboard = publicLeaderboard,
           onViewAllClicked = { showLeaderboardDialog = true }
         )
       }
@@ -502,7 +505,7 @@ fun UserHomeScreen(
                 horizontalArrangement = Arrangement.spacedBy(1.dp)
               ) {
                 Text(text = task.title, fontSize = 1.sp, color = Color.Transparent)
-                Text(text = formatRewardInr(task.rewardCents), fontSize = 1.sp, color = Color.Transparent)
+                Text(text = formatRewardInr(com.example.data.model.coinsToCents(task.getEffectiveRewardCoins())), fontSize = 1.sp, color = Color.Transparent)
                 Box(
                   modifier =
                     Modifier.size(2.dp)
@@ -1448,16 +1451,21 @@ private fun PromoCodeCard(
 private fun LeaderboardPreviewCard(
   users: List<UserProfile>,
   transactions: List<TransactionRecord> = emptyList(),
+  publicLeaderboard: com.example.data.model.PublicLeaderboardSnapshot? = null,
   onViewAllClicked: () -> Unit
 ) {
   var selectedPeriod by rememberSaveable { mutableStateOf(LeaderboardPeriod.ALL_TIME) }
   val rankedEntries =
-    remember(users, transactions, selectedPeriod) {
-      computeLeaderboardEntriesForPeriod(
-        users = users,
-        transactions = transactions,
-        period = selectedPeriod
-      )
+    remember(users, transactions, publicLeaderboard, selectedPeriod) {
+      if (publicLeaderboard != null) {
+        publicLeaderboard.entriesFor(selectedPeriod)
+      } else {
+        computeLeaderboardEntriesForPeriod(
+          users = users,
+          transactions = transactions,
+          period = selectedPeriod
+        )
+      }
     }
 
   val firstPlace = rankedEntries.getOrNull(0)
@@ -1847,16 +1855,21 @@ internal fun SmallGoldTokenDot(size: androidx.compose.ui.unit.Dp = 14.dp) {
 private fun LeaderboardDialog(
   users: List<UserProfile>,
   transactions: List<TransactionRecord> = emptyList(),
+  publicLeaderboard: com.example.data.model.PublicLeaderboardSnapshot? = null,
   onDismiss: () -> Unit
 ) {
   var selectedPeriod by rememberSaveable { mutableStateOf(LeaderboardPeriod.ALL_TIME) }
   val rankedEntries =
-    remember(users, transactions, selectedPeriod) {
-      computeLeaderboardEntriesForPeriod(
-        users = users,
-        transactions = transactions,
-        period = selectedPeriod
-      )
+    remember(users, transactions, publicLeaderboard, selectedPeriod) {
+      if (publicLeaderboard != null) {
+        publicLeaderboard.entriesFor(selectedPeriod)
+      } else {
+        computeLeaderboardEntriesForPeriod(
+          users = users,
+          transactions = transactions,
+          period = selectedPeriod
+        )
+      }
     }
 
   AlertDialog(
@@ -2441,7 +2454,7 @@ fun UserTaskDetailScreen(
                 fontWeight = FontWeight.SemiBold
               )
               Text(
-                text = formatRewardInr(task.rewardCents),
+                text = formatRewardInr(com.example.data.model.coinsToCents(task.getEffectiveRewardCoins())),
                 style = MaterialTheme.typography.titleMedium,
                 color = tfColors.goldText,
                 fontWeight = FontWeight.SemiBold
@@ -3052,7 +3065,7 @@ fun SubmitProofModalDialog(
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
-          text = "${task.title} • ${formatRewardInr(task.rewardCents)}",
+          text = "${task.title} • ${formatCoins(task.getEffectiveRewardCoins())} (${formatRewardInr(com.example.data.model.coinsToCents(task.getEffectiveRewardCoins()))})",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.primary
         )

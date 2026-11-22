@@ -11,7 +11,8 @@ const {
   CAMPAIGN_VERIFICATION_MODES,
   CAMPAIGN_CONVERSION_STATES,
   tfToBalanceCents,
-  computeCampaignReversedWallet
+  computeCampaignReversedWallet,
+  buildUserActivityId
 } = require("./campaign_tracking.js");
 
 const { handleCreateCampaignClick } = _campaignTrackingHandlers;
@@ -637,13 +638,17 @@ test("3. Verified S2S postback credits authoritative TF reward (125 TF = ₹1), 
   assert.equal(lb.balanceCoins, 600);
   assert.equal(lb.balanceCents, 400);
 
-  // Immutable credit ledger doc written without leaking private attribution identifiers
-  const creditTx = db.read(`transactions/conv_credit_${res.payload.conversionId}`);
+  // Immutable credit ledger doc written with opaque activityId (zero raw clickId leakage — C-05)
+  const expectedActivityId = buildUserActivityId(res.payload.conversionId);
+  assert.ok(!expectedActivityId.includes(click.clickId));
+  const creditTx = db.read(`transactions/conv_credit_${expectedActivityId}`);
+  assert.ok(creditTx);
   assert.equal(creditTx.type, "CAMPAIGN_REWARD");
   assert.equal(creditTx.status, "CREDITED");
   assert.equal(creditTx.amountCoins, 500);
   assert.equal(creditTx.amountCents, 400);
-  assert.equal(creditTx.referenceId, res.payload.conversionId);
+  assert.equal(creditTx.referenceId, expectedActivityId);
+  assert.ok(!String(creditTx.referenceId).includes(click.clickId));
   assert.equal("clickId" in creditTx, false);
   assert.equal("externalTransactionId" in creditTx, false);
 
@@ -652,12 +657,16 @@ test("3. Verified S2S postback credits authoritative TF reward (125 TF = ₹1), 
     `${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CONVERSIONS}/${res.payload.conversionId}`
   );
   assert.equal(convRecord.clickId, click.clickId);
+  assert.equal(convRecord.activityId, expectedActivityId);
   assert.equal(convRecord.externalTransactionId, "beta_txn_1001");
 
-  // Notification created
-  const notif = db.read(`users/user_alice/notifications/notif_conv_credit_${res.payload.conversionId}`);
+  // Notification created with opaque activityId (zero raw clickId leakage)
+  const notif = db.read(`users/user_alice/notifications/notif_conv_credit_${expectedActivityId}`);
+  assert.ok(notif);
   assert.equal(notif.type, "CAMPAIGN_REWARD");
   assert.equal(notif.rewardCoins, 500);
+  assert.equal(notif.referenceId, expectedActivityId);
+  assert.ok(!String(notif.referenceId).includes(click.clickId));
 
   // Reservation slot released, submission used incremented
   const cfg = db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_TRACKING_CONFIGS}/camp_beta`);
@@ -841,8 +850,10 @@ test("6. Approved conversion reversal creates compensating ledger without deleti
   assert.equal(approveRes.payload.state, "APPROVED");
 
   const conversionId = approveRes.payload.conversionId;
-  const creditTxPath = `transactions/conv_credit_${conversionId}`;
+  const activityId = buildUserActivityId(conversionId);
+  const creditTxPath = `transactions/conv_credit_${activityId}`;
   assert.ok(db.read(creditTxPath));
+  assert.equal(db.read(`transactions/conv_credit_${conversionId}`), null);
 
   // Reverse via S2S chargeback callback
   const qReverse = {
@@ -874,14 +885,26 @@ test("6. Approved conversion reversal creates compensating ledger without deleti
 
   // Historical credit tx is NOT deleted, compensating tx created alongside it without clickId leakage
   assert.ok(db.read(creditTxPath));
-  const revTx = db.read(`transactions/conv_rev_${conversionId}`);
+  const revTxPath = `transactions/conv_rev_${activityId}`;
+  const revTx = db.read(revTxPath);
+  assert.ok(revTx, "Opaque activityId reversal transaction must exist");
+  assert.equal(db.read(`transactions/conv_rev_${conversionId}`), null);
   assert.equal(revTx.type, "CAMPAIGN_REVERSAL");
   assert.equal(revTx.status, "REVERSED");
   assert.equal(revTx.amountCoins, 500);
   assert.equal(revTx.reversedCoins, -500);
-  assert.equal(revTx.originalTransactionId, `conv_credit_${conversionId}`);
+  assert.equal(revTx.referenceId, activityId);
+  assert.equal(revTx.originalTransactionId, `conv_credit_${activityId}`);
   assert.equal("clickId" in revTx, false);
   assert.equal("externalTransactionId" in revTx, false);
+  assert.equal(revTxPath.includes(click.clickId), false);
+  assert.equal(JSON.stringify(revTx).includes(click.clickId), false);
+  const revNotifPath = `users/user_alice/notifications/notif_conv_rev_${activityId}`;
+  const revNotif = db.read(revNotifPath);
+  assert.ok(revNotif, "Opaque activityId reversal notification must exist");
+  assert.equal(revNotif.referenceId, activityId);
+  assert.equal(revNotifPath.includes(click.clickId), false);
+  assert.equal(JSON.stringify(revNotif).includes(click.clickId), false);
 
   // Replay reversal is idempotent without double debit; invalid backwards transition (REVERSED -> APPROVED) blocked 409
   const replayRevRes = makeMockRes();

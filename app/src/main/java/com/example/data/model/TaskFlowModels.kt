@@ -469,6 +469,24 @@ data class LeaderboardEntryUi(
   val completedTasksCount: Long = 0L
 )
 
+/**
+ * Server-authoritative public leaderboard snapshot returned by the `getPublicLeaderboard`
+ * Cloud Function so regular users never read cross-user `/transactions` documents (C-05).
+ */
+data class PublicLeaderboardSnapshot(
+  val generatedAtMillis: Long = 0L,
+  val allTime: List<LeaderboardEntryUi> = emptyList(),
+  val thisMonth: List<LeaderboardEntryUi> = emptyList(),
+  val thisWeek: List<LeaderboardEntryUi> = emptyList()
+) {
+  fun entriesFor(period: LeaderboardPeriod): List<LeaderboardEntryUi> =
+    when (period) {
+      LeaderboardPeriod.ALL_TIME -> allTime
+      LeaderboardPeriod.THIS_MONTH -> thisMonth
+      LeaderboardPeriod.THIS_WEEK -> thisWeek
+    }
+}
+
 private fun deduplicateCampaignReversals(
   transactions: List<TransactionRecord>
 ): List<TransactionRecord> =

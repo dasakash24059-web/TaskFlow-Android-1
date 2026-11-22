@@ -1437,7 +1437,7 @@ fun TaskItemCard(
           color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
-          text = formatRewardInr(task.rewardCents),
+          text = formatRewardInr(com.example.data.model.coinsToCents(task.getEffectiveRewardCoins())),
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           fontWeight = FontWeight.Medium,
