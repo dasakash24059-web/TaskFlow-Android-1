@@ -152,11 +152,29 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
 
+val robolectricSdk: Configuration by configurations.creating
+
+dependencies {
+    robolectricSdk("org.robolectric:android-all-instrumented:13-robolectric-9030017-i7")
+}
+
+val prepareRobolectricSdk by tasks.registering(Sync::class) {
+    from(robolectricSdk)
+    into(layout.buildDirectory.dir("robolectric-sdk"))
+}
+
 tasks.withType<Test> {
+    dependsOn(prepareRobolectricSdk)
     failFast = false
-    timeout.set(Duration.ofMinutes(2))
+    timeout.set(Duration.ofMinutes(15))
+    systemProperty("robolectric.offline", "true")
+    systemProperty(
+        "robolectric.dependency.dir",
+        layout.buildDirectory.dir("robolectric-sdk").get().asFile.absolutePath
+    )
 
     testLogging {
         events("passed", "failed", "skipped")
     }
 }
+
