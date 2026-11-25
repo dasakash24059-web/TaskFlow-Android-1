@@ -80,6 +80,7 @@ jobs:
       - name: Run All 5 Root Firebase Emulator Security Rules Test Suites
         run: |
           set -euo pipefail
+          npm install --no-save @firebase/rules-unit-testing@^5.0.0 firebase@^12.0.0
           npx --yes firebase-tools emulators:exec --config firebase.emulator.json --project demo-no-project --only auth,firestore,storage "node --test --test-concurrency=1 storage.test.js firestore.test.js firestore.promo.test.js firestore.withdrawal.test.js firestore.campaign_tracking.test.js"
 
       - name: Ordered Firebase CLI Deployment (1. Indexes -> 2. All 37 Cloud Functions -> 3. Firestore & Storage Rules)
