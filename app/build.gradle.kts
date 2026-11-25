@@ -24,8 +24,8 @@ android {
         applicationId = "com.aistudio.taskflow.kxmpzq"
         minSdk = 24
         targetSdk = 36
-        versionCode = 49
-        versionName = "6.9"
+        versionCode = 50
+        versionName = "7.0"
 
         testInstrumentationRunner =
             "androidx.test.runner.AndroidJUnitRunner"
