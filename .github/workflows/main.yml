@@ -251,7 +251,7 @@ jobs:
           {
             "latest_version_code": ${VC:-44},
             "latest_version_name": "${VN:-6.4}",
-            "download_url": "https://github.com/dasakash24059-web/TaskFlow/releases/latest/download/TaskFlow.apk",
+            "download_url": "https://github.com/${{ github.repository }}/releases/latest/download/TaskFlow.apk",
             "release_notes": "TaskFlow v${VN:-6.4}: Phase F.3 zero-trust server-ticketed proof upload pipeline, App Check debug/release Play Integrity separation, APK signature verification, and full security hardening.",
             "force_update": false
           }

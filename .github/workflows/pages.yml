@@ -43,7 +43,8 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           PUBLISH_VERSION_JSON: ${{ inputs.publish_version_json }}
-          PAGES_URL: "https://dasakash24059-web.github.io/TaskFlow/version.json"
+          PAGES_URL: "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/version.json"
+          CANONICAL_DOWNLOAD_URL: "https://github.com/${{ github.repository }}/releases/latest/download/TaskFlow.apk"
         run: |
           set -euo pipefail
           rm -rf _site
@@ -78,6 +79,10 @@ jobs:
             const parsed = JSON.parse(raw);
             if (typeof parsed.latest_version_code !== "number" || typeof parsed.latest_version_name !== "string" || typeof parsed.download_url !== "string" || !parsed.download_url.startsWith("https://")) {
               throw new Error("Invalid version.json schema: missing required fields (latest_version_code, latest_version_name, download_url)");
+            }
+            if (process.env.CANONICAL_DOWNLOAD_URL && parsed.download_url.includes("/TaskFlow/releases/")) {
+              parsed.download_url = process.env.CANONICAL_DOWNLOAD_URL;
+              fs.writeFileSync("_site/version.json", JSON.stringify(parsed, null, 2) + "\n", "utf8");
             }
             console.log("Validated _site/version.json:", JSON.stringify({
               latest_version_code: parsed.latest_version_code,

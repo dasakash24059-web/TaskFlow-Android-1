@@ -42,7 +42,7 @@ object AppUpdateManager {
   const val KEY_RELEASE_NOTES = "release_notes"
   const val KEY_FORCE_UPDATE = "force_update"
 
-  const val DEFAULT_VERSION_URL = "https://dasakash24059-web.github.io/TaskFlow/version.json"
+  const val DEFAULT_VERSION_URL = "https://dasakash24059-web.github.io/TaskFlow-Android-1/version.json"
   const val APK_FILE_NAME = "TaskFlow_Update.apk"
 
   @Volatile
@@ -221,9 +221,15 @@ object AppUpdateManager {
     val trimmed = url.trim()
     if (trimmed.isBlank()) return trimmed
 
-    // If it's a GitHub latest releases page e.g. https://github.com/dasakash24059-web/TaskFlow/releases/latest
+    // If it's a GitHub latest releases page e.g. https://github.com/dasakash24059-web/TaskFlow-Android-1/releases/latest
     if (trimmed.contains("github.com") && trimmed.contains("/releases/latest") && !trimmed.endsWith(".apk")) {
-      return "https://github.com/dasakash24059-web/TaskFlow/releases/latest/download/TaskFlow.apk"
+      return "https://github.com/dasakash24059-web/TaskFlow-Android-1/releases/latest/download/TaskFlow.apk"
+    }
+    // Automatically migrate legacy /TaskFlow/ release download URLs to the live /TaskFlow-Android-1/ repository
+    if (trimmed.contains("github.com/dasakash24059-web/TaskFlow/releases/") || trimmed.contains("github.com/dasakash24059/TaskFlow/releases/")) {
+      return trimmed
+        .replace("github.com/dasakash24059-web/TaskFlow/releases/", "github.com/dasakash24059-web/TaskFlow-Android-1/releases/")
+        .replace("github.com/dasakash24059/TaskFlow/releases/", "github.com/dasakash24059-web/TaskFlow-Android-1/releases/")
     }
 
     // If it's a generic GitHub tag release URL like https://github.com/.../releases/tag/v2.8

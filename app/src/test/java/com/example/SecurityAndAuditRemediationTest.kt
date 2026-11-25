@@ -230,7 +230,7 @@ class SecurityAndAuditRemediationTest {
       AppVersionInfo(
         versionCode = 9999,
         versionName = "9.9.9",
-        apkUrl = "https://github.com/dasakash24059-web/TaskFlow/releases/latest/download/TaskFlow.apk",
+        apkUrl = "https://github.com/dasakash24059-web/TaskFlow-Android-1/releases/latest/download/TaskFlow.apk",
         releaseNotes = "Optional bug fixes",
         forceUpdate = false
       )
@@ -272,7 +272,7 @@ class SecurityAndAuditRemediationTest {
       AppVersionInfo(
         versionCode = 9999,
         versionName = "9.9.9",
-        apkUrl = "https://github.com/dasakash24059-web/TaskFlow/releases/latest/download/TaskFlow.apk",
+        apkUrl = "https://github.com/dasakash24059-web/TaskFlow-Android-1/releases/latest/download/TaskFlow.apk",
         releaseNotes = "Critical security update",
         forceUpdate = true
       )
