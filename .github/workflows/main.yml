@@ -19,9 +19,9 @@ on:
         default: true
         type: boolean
       release_tag:
-        description: 'Release tag to publish (e.g. v6.6)'
+        description: 'Release tag to publish (e.g. v6.8)'
         required: false
-        default: 'v6.6'
+        default: 'v6.8'
         type: string
 
 permissions:
@@ -236,7 +236,7 @@ jobs:
           elif [ -n "${{ inputs.release_tag }}" ]; then
             TAG_NAME="${{ inputs.release_tag }}"
           else
-            TAG_NAME="v${VN:-6.6}"
+            TAG_NAME="v${VN:-6.8}"
           fi
           VERSION="$TAG_NAME"
 
@@ -255,10 +255,10 @@ jobs:
 
           cat <<EOF > version.json
           {
-            "latest_version_code": ${VC:-46},
-            "latest_version_name": "${VN:-6.6}",
+            "latest_version_code": ${VC:-48},
+            "latest_version_name": "${VN:-6.8}",
             "download_url": "https://github.com/${{ github.repository }}/releases/latest/download/TaskFlow.apk",
-            "release_notes": "TaskFlow v${VN:-6.6}: Phase F.3 zero-trust server-ticketed proof upload pipeline, App Check debug/release Play Integrity separation, APK signature verification, and full security hardening.",
+            "release_notes": "TaskFlow v${VN:-6.8}: Phase F.3 zero-trust server-ticketed proof upload pipeline, App Check debug/release Play Integrity separation, APK signature verification, and full security hardening.",
             "force_update": false
           }
           EOF
