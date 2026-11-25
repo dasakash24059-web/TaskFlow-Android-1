@@ -1,7 +1,7 @@
 {
-  "latest_version_code": 44,
-  "latest_version_name": "6.4",
+  "latest_version_code": 46,
+  "latest_version_name": "6.6",
   "download_url": "https://github.com/dasakash24059-web/TaskFlow-Android-1/releases/latest/download/TaskFlow.apk",
-  "release_notes": "TaskFlow v6.4: Phase F.3 zero-trust server-ticketed proof upload pipeline, App Check debug/release Play Integrity separation, APK signature verification, and full security hardening.",
+  "release_notes": "TaskFlow v6.6: Phase F.3 zero-trust server-ticketed proof upload pipeline, App Check debug/release Play Integrity separation, APK signature verification, and full security hardening.",
   "force_update": false
 }

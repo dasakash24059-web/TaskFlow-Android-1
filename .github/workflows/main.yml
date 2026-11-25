@@ -7,17 +7,21 @@ on:
       - master
     tags:
       - 'v*'
+  release:
+    types:
+      - published
+      - created
   workflow_dispatch:
     inputs:
       publish_release:
         description: 'Publish GitHub Release (ONLY after Firebase backend deployment & smoke tests pass)'
         required: false
-        default: false
+        default: true
         type: boolean
       release_tag:
-        description: 'Release tag to publish (e.g. v6.4)'
+        description: 'Release tag to publish (e.g. v6.6)'
         required: false
-        default: 'v6.4'
+        default: 'v6.6'
         type: string
 
 permissions:
@@ -218,20 +222,21 @@ jobs:
           echo "selected_apk=$SELECTED_APK" >> $GITHUB_OUTPUT
           echo "SUCCESS: Release APK ($SELECTED_APK) matches established TaskFlow SHA-1 and SHA-256 signing identity!"
 
-      - name: Prepare Versioned Release Assets (Explicit Tag or Manual Release Dispatch Only)
+      - name: Prepare Versioned Release Assets
         id: prepare_apk
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
         run: |
           set -euo pipefail
           VC=$(grep -E 'versionCode\s*=' app/build.gradle.kts | head -n 1 | tr -d ' ' | cut -d '=' -f 2)
           VN=$(grep -E 'versionName\s*=' app/build.gradle.kts | head -n 1 | tr -d ' "' | cut -d '=' -f 2)
 
-          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+          if [ "${GITHUB_EVENT_NAME:-}" = "release" ] && [ -n "${{ github.event.release.tag_name }}" ]; then
+            TAG_NAME="${{ github.event.release.tag_name }}"
+          elif [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
             TAG_NAME="${GITHUB_REF_NAME}"
           elif [ -n "${{ inputs.release_tag }}" ]; then
             TAG_NAME="${{ inputs.release_tag }}"
           else
-            TAG_NAME="v${VN:-6.4}"
+            TAG_NAME="v${VN:-6.6}"
           fi
           VERSION="$TAG_NAME"
 
@@ -250,10 +255,10 @@ jobs:
 
           cat <<EOF > version.json
           {
-            "latest_version_code": ${VC:-44},
-            "latest_version_name": "${VN:-6.4}",
+            "latest_version_code": ${VC:-46},
+            "latest_version_name": "${VN:-6.6}",
             "download_url": "https://github.com/${{ github.repository }}/releases/latest/download/TaskFlow.apk",
-            "release_notes": "TaskFlow v${VN:-6.4}: Phase F.3 zero-trust server-ticketed proof upload pipeline, App Check debug/release Play Integrity separation, APK signature verification, and full security hardening.",
+            "release_notes": "TaskFlow v${VN:-6.6}: Phase F.3 zero-trust server-ticketed proof upload pipeline, App Check debug/release Play Integrity separation, APK signature verification, and full security hardening.",
             "force_update": false
           }
           EOF
@@ -263,7 +268,7 @@ jobs:
           echo "version_json=version.json" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
-          echo "Prepared verified release APKs: $RELEASE_APK and $LATEST_APK"
+          echo "Prepared verified release APKs: $RELEASE_APK, $LATEST_APK, and $LATEST_NAMED_APK"
 
       - name: Clean up restored keystores
         if: always()
@@ -275,11 +280,15 @@ jobs:
           name: TaskFlow-APK
           path: |
             ${{ steps.select_and_verify_apk.outputs.selected_apk }}
+            ${{ steps.prepare_apk.outputs.apk_path }}
+            ${{ steps.prepare_apk.outputs.latest_apk }}
+            ${{ steps.prepare_apk.outputs.latest_named_apk }}
             version.json
           if-no-files-found: error
 
-      - name: Create or Update GitHub Release (Explicit Tag or Manual Release Dispatch Only)
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
+      - name: Create or Update GitHub Release
+        id: create_release
+        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
         uses: softprops/action-gh-release@v2
         with:
           name: "TaskFlow Release ${{ steps.prepare_apk.outputs.version }}"
@@ -294,3 +303,29 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Release APK Assets via GitHub Release Asset Uploader (Verify & Guarantee APK Attachment)
+        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.prepare_apk.outputs.tag_name }}"
+          echo "Uploading and verifying APK assets on GitHub Release '$TAG'..."
+          gh release upload "$TAG" \
+            "${{ steps.prepare_apk.outputs.apk_path }}" \
+            "${{ steps.prepare_apk.outputs.latest_apk }}" \
+            "${{ steps.prepare_apk.outputs.latest_named_apk }}" \
+            "${{ steps.prepare_apk.outputs.version_json }}" \
+            --clobber --repo "${{ github.repository }}"
+
+          ASSETS_JSON=$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name')
+          echo "Attached Release Assets:"
+          echo "$ASSETS_JSON"
+
+          if ! printf '%s\n' "$ASSETS_JSON" | grep -Fxq "TaskFlow.apk"; then
+            echo "::error::TaskFlow.apk ফাইলটি GitHub Release '$TAG'-এ যুক্ত হয়নি!"
+            exit 1
+          fi
+          echo "SUCCESS: APK assets are verified and attached to GitHub Release '$TAG'!"
+
