@@ -65,6 +65,8 @@ service cloud.firestore {
     // Bootstrapped Owner / Admin email check with mandatory verified email token claim
     function isBootstrappedAdmin() {
       return isSignedIn() &&
+             ('email_verified' in request.auth.token) &&
+             request.auth.token.email_verified == true &&
              ('email' in request.auth.token) &&
              request.auth.token.email in ['dasakash24059@gmail.com', 'DasAkash24059@gmail.com', 'DASAKASH24059@GMAIL.COM'];
     }
@@ -232,14 +234,31 @@ service cloud.firestore {
       return (rc is int && rc > 0) ? (rc < 2 ? 1 : int((rc * 100) / 125)) : docData.rewardCents;
     }
 
+    function hasExactTaskApprovalUserCredit(oldUser, newUser, expectedCents, expectedCoins) {
+      let oldBalance = ('balanceCents' in oldUser && oldUser.balanceCents is int) ? oldUser.balanceCents : 0;
+      let oldCentsCoins = int((oldBalance * 125) / 100);
+      let oldExplicitEligible = ('eligibleCoins' in oldUser && oldUser.eligibleCoins is int && oldUser.eligibleCoins > oldCentsCoins)
+        ? oldUser.eligibleCoins
+        : oldCentsCoins;
+      let oldPromo = ('promotionalCoins' in oldUser && oldUser.promotionalCoins is int) ? oldUser.promotionalCoins : 0;
+      let oldBalanceCoins = ('balanceCoins' in oldUser && oldUser.balanceCoins is int && oldUser.balanceCoins > (oldExplicitEligible + oldPromo))
+        ? oldUser.balanceCoins
+        : (oldExplicitEligible + oldPromo);
+      let oldCompleted = ('completedTasksCount' in oldUser && oldUser.completedTasksCount is int) ? oldUser.completedTasksCount : 0;
+      return newUser.balanceCents == oldBalance + expectedCents &&
+             newUser.completedTasksCount == oldCompleted + 1 &&
+             (!('eligibleCoins' in newUser) || newUser.eligibleCoins == oldExplicitEligible + expectedCoins) &&
+             (!('balanceCoins' in newUser) || newUser.balanceCoins == oldBalanceCoins + expectedCoins);
+    }
+
     function isTaskAndSubmissionApprovedForUser(taskId, userId) {
       let taskPath = /databases/$(database)/documents/tasks/$(taskId);
       let legacySubPath = /databases/$(database)/documents/submissions/$(taskId);
       let multiSubPath = /databases/$(database)/documents/submissions/$(taskId + '_' + userId);
       let expectedCents = expectedTaskRewardCents(get(taskPath).data);
+      let expectedCoins = expectedTaskRewardCoins(get(taskPath).data);
       return exists(taskPath) &&
-             incoming().balanceCents == existing().balanceCents + expectedCents &&
-             incoming().completedTasksCount == existing().completedTasksCount + 1 && (
+             hasExactTaskApprovalUserCredit(existing(), incoming(), expectedCents, expectedCoins) && (
         (
           exists(multiSubPath) &&
           existsAfter(multiSubPath) &&
@@ -586,6 +605,23 @@ service cloud.firestore {
              incoming().updatedAt is timestamp;
     }
 
+    function isTaskAvailableForSubmitter(taskData) {
+      return !('assignedUserId' in taskData) ||
+             taskData.assignedUserId == '' ||
+             taskData.assignedUserId == request.auth.uid ||
+             taskData.assignedUserId == taskData.get('createdBy', '') ||
+             exists(/databases/$(database)/documents/admins/$(taskData.assignedUserId));
+    }
+
+    function isTaskWithinSubmissionQuota(taskData) {
+      return !('targetSubmissions' in taskData) ||
+             !(taskData.targetSubmissions is int) ||
+             taskData.targetSubmissions <= 0 ||
+             !('completedSubmissions' in taskData) ||
+             !(taskData.completedSubmissions is int) ||
+             taskData.completedSubmissions < taskData.targetSubmissions;
+    }
+
     // Approved user submitting proof on an open, active task (legacy single-assignee format)
     function isAtomicTaskSubmissionByAssignee(taskId) {
       let legacySubPath = /databases/$(database)/documents/submissions/$(taskId);
@@ -595,6 +631,8 @@ service cloud.firestore {
              isApprovedUser(request.auth.uid) &&
              existing().status == 'pending' &&
              taskIsActive &&
+             isTaskAvailableForSubmitter(existing()) &&
+             isTaskWithinSubmissionQuota(existing()) &&
              changedKeys().hasOnly([
                'assignedUserId',
                'assignedUserName',
@@ -627,6 +665,8 @@ service cloud.firestore {
              existsAfter(taskPath) &&
              get(taskPath).data.status == 'pending' &&
              (!('isActive' in get(taskPath).data) || get(taskPath).data.isActive == true) &&
+             isTaskAvailableForSubmitter(get(taskPath).data) &&
+             isTaskWithinSubmissionQuota(get(taskPath).data) &&
              incoming().keys().hasOnly([
                'taskId',
                'taskTitle',
@@ -683,15 +723,20 @@ service cloud.firestore {
              getAfter(taskPath).data.proofStoragePath == incoming().proofStoragePath;
     }
 
-    // Approved user creating a multi-user submission record where submissionId is unique (e.g. ${taskId}_${userId})
+    // Approved user creating a multi-user submission record with strict deterministic ID `${taskId}_${userId}`
     function isMultiUserSubmissionCreate(submissionId) {
       let taskId = incoming().taskId;
       let taskPath = /databases/$(database)/documents/tasks/$(taskId);
       return isSignedIn() &&
              isApprovedUser(request.auth.uid) &&
+             isNonEmptyString(taskId, 128) &&
+             submissionId == taskId + '_' + request.auth.uid &&
              !exists(/databases/$(database)/documents/submissions/$(submissionId)) &&
              exists(taskPath) &&
+             get(taskPath).data.status == 'pending' &&
              (!('isActive' in get(taskPath).data) || get(taskPath).data.isActive == true) &&
+             isTaskAvailableForSubmitter(get(taskPath).data) &&
+             isTaskWithinSubmissionQuota(get(taskPath).data) &&
              incoming().keys().hasOnly([
                'taskId',
                'taskTitle',
@@ -742,15 +787,16 @@ service cloud.firestore {
              incoming().updatedAt is timestamp;
     }
 
-    function isAdminReviewUserConsistent(submittingUid, rewardCents, newStatus) {
+    function isAdminReviewUserConsistent(submittingUid, rewardSource, newStatus) {
       let userPath = /databases/$(database)/documents/users/$(submittingUid);
+      let expectedCents = expectedTaskRewardCents(rewardSource);
+      let expectedCoins = expectedTaskRewardCoins(rewardSource);
       return exists(userPath) &&
              existsAfter(userPath) &&
              (
                (
                  newStatus == 'approved' &&
-                 getAfter(userPath).data.balanceCents == get(userPath).data.balanceCents + rewardCents &&
-                 getAfter(userPath).data.completedTasksCount == get(userPath).data.completedTasksCount + 1
+                 hasExactTaskApprovalUserCredit(get(userPath).data, getAfter(userPath).data, expectedCents, expectedCoins)
                ) ||
                (
                  newStatus == 'rejected' &&
@@ -771,11 +817,12 @@ service cloud.firestore {
              existsAfter(subPath) &&
              get(subPath).data.status == 'submitted' &&
              changedKeys().hasOnly(['status', 'adminFeedback', 'updatedAt']) &&
+             (incoming().status == 'approved' || incoming().status == 'rejected') &&
              isNonEmptyString(incoming().adminFeedback, 1000) &&
              incoming().updatedAt is timestamp &&
              getAfter(subPath).data.status == incoming().status &&
              getAfter(subPath).data.adminFeedback == incoming().adminFeedback &&
-             isAdminReviewUserConsistent(get(subPath).data.userId, expectedTaskRewardCents(existing()), incoming().status);
+             isAdminReviewUserConsistent(get(subPath).data.userId, existing(), incoming().status);
     }
 
     function isAtomicAdminSubmissionReview(submissionId) {
@@ -786,11 +833,12 @@ service cloud.firestore {
              existsAfter(taskPath) &&
              get(taskPath).data.status == 'submitted' &&
              changedKeys().hasOnly(['status', 'adminFeedback', 'updatedAt']) &&
+             (incoming().status == 'approved' || incoming().status == 'rejected') &&
              isNonEmptyString(incoming().adminFeedback, 1000) &&
              incoming().updatedAt is timestamp &&
              getAfter(taskPath).data.status == incoming().status &&
              getAfter(taskPath).data.adminFeedback == incoming().adminFeedback &&
-             isAdminReviewUserConsistent(existing().userId, expectedTaskRewardCents(get(taskPath).data), incoming().status);
+             isAdminReviewUserConsistent(existing().userId, get(taskPath).data, incoming().status);
     }
 
     function isAtomicAdminMultiUserSubmissionReview(submissionId) {
@@ -803,7 +851,7 @@ service cloud.firestore {
              (incoming().status == 'approved' || incoming().status == 'rejected') &&
              isNonEmptyString(incoming().adminFeedback, 1000) &&
              incoming().updatedAt is timestamp &&
-             isAdminReviewUserConsistent(submittingUid, expectedTaskRewardCents(rewardSource), incoming().status);
+             isAdminReviewUserConsistent(submittingUid, rewardSource, incoming().status);
     }
 
     // =========================================================================
@@ -1612,6 +1660,25 @@ service cloud.firestore {
     }
 
     match /campaign_conversion_locks/{lockId} {
+      allow read, write: if false;
+
+      match /{subpath=**} {
+        allow read, write: if false;
+      }
+    }
+
+    // Server-Mediated Task Proof Upload Tickets & Active Rate-Limit Locks
+    // Strictly Server-Only via Cloud Functions (`issueTaskProofUploadTicket`,
+    // `finalizeTaskProofSubmission`, `cleanupExpiredProofUploadTickets`).
+    match /proof_upload_tickets/{ticketId} {
+      allow read, write: if false;
+
+      match /{subpath=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /proof_upload_locks/{lockId} {
       allow read, write: if false;
 
       match /{subpath=**} {

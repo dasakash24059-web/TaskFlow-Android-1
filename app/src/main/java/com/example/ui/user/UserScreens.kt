@@ -180,7 +180,6 @@ fun UserHomeScreen(
   onStartWatchVideo: (() -> Unit)? = null,
   onClaimVerifiedWatchReward: (() -> Unit)? = null,
   onOpenWatchDialog: () -> Unit = {},
-  onShowInterstitial: () -> Unit = {},
   onNavigateToSpin: () -> Unit = {},
   onNavigateToOfferWall: () -> Unit = {},
   onNavigateToScratchCard: () -> Unit = {},
@@ -403,7 +402,6 @@ fun UserHomeScreen(
                 onOpenWatchDialog()
                 showWatchAdDialog = true
               },
-              onShowInterstitialClicked = onShowInterstitial,
               modifier = Modifier.weight(1f).fillMaxHeight()
             )
             DailyCheckInCard(
@@ -741,9 +739,9 @@ private fun DailyCheckInCard(
   val nextCoins = DailyCheckInConstants.getRewardCoinsForDay(nextDay)
   val subtitleText =
     if (dailyCheckInState.canCheckInToday) {
-      "Day $nextDay: +$nextCoins Coins"
+      "Day $nextDay: +${com.example.data.model.formatCoins(nextCoins)}"
     } else {
-      "Up to 1,000 Coins"
+      "Up to ${com.example.data.model.formatCoins(1000L)}"
     }
 
   ExploreRewardPastelCard(
@@ -800,7 +798,6 @@ private fun DailyCheckInCard(
 @Composable
 private fun WatchAndEarnCard(
   onWatchAdClicked: () -> Unit,
-  onShowInterstitialClicked: () -> Unit,
   modifier: Modifier = Modifier
 ) {
   ExploreRewardPastelCard(

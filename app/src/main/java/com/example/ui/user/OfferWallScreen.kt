@@ -90,7 +90,9 @@ fun OfferWallScreen(
 
   val availableOffers = remember(tasks, selectedCategory) {
     tasks.filter { task ->
-      task.isActive && task.status == TaskStatus.PENDING &&
+      task.isActive &&
+        task.status == TaskStatus.PENDING &&
+        !task.isQuotaExhausted &&
         (selectedCategory == "All" || task.category.contains(selectedCategory, ignoreCase = true))
     }
   }

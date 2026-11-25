@@ -42,7 +42,7 @@ object AppUpdateManager {
   const val KEY_RELEASE_NOTES = "release_notes"
   const val KEY_FORCE_UPDATE = "force_update"
 
-  const val DEFAULT_VERSION_URL = "https://raw.githubusercontent.com/dasakash24059/TaskFlow/main/version.json"
+  const val DEFAULT_VERSION_URL = "https://dasakash24059-web.github.io/TaskFlow/version.json"
   const val APK_FILE_NAME = "TaskFlow_Update.apk"
 
   @Volatile
@@ -104,7 +104,7 @@ object AppUpdateManager {
         KEY_DOWNLOAD_URL to "",
         KEY_DOWNLOAD_URL_ALT to "",
         KEY_RELEASE_NOTES to "",
-        KEY_FORCE_UPDATE to true
+        KEY_FORCE_UPDATE to false
       )
 
       withTimeoutOrNull(3500L) {
@@ -143,7 +143,7 @@ object AppUpdateManager {
           versionName = latestVersionName.ifBlank { "1.0" },
           apkUrl = normalizeDownloadUrl(downloadUrl),
           releaseNotes = releaseNotes,
-          forceUpdate = true
+          forceUpdate = remoteConfig.getBoolean(KEY_FORCE_UPDATE)
         )
         Result.success(versionInfo)
       } else {
@@ -195,12 +195,13 @@ object AppUpdateManager {
       val resolvedApkUrl = normalizeDownloadUrl(rawApkUrl)
 
       val installedCode = getInstalledVersionCode(context)
+      val forceUpdate = json.optBoolean("force_update", json.optBoolean("forceUpdate", false))
       val versionInfo = AppVersionInfo(
         versionCode = versionCode,
         versionName = versionName,
         apkUrl = resolvedApkUrl,
         releaseNotes = releaseNotes,
-        forceUpdate = true
+        forceUpdate = forceUpdate
       )
 
       if (versionInfo.versionCode > installedCode) {
@@ -220,9 +221,9 @@ object AppUpdateManager {
     val trimmed = url.trim()
     if (trimmed.isBlank()) return trimmed
 
-    // If it's a GitHub latest releases page e.g. https://github.com/dasakash24059/TaskFlow/releases/latest
+    // If it's a GitHub latest releases page e.g. https://github.com/dasakash24059-web/TaskFlow/releases/latest
     if (trimmed.contains("github.com") && trimmed.contains("/releases/latest") && !trimmed.endsWith(".apk")) {
-      return "https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk"
+      return "https://github.com/dasakash24059-web/TaskFlow/releases/latest/download/TaskFlow.apk"
     }
 
     // If it's a generic GitHub tag release URL like https://github.com/.../releases/tag/v2.8
@@ -581,9 +582,9 @@ object AppUpdateManager {
         Pair(iList, aList)
       }
 
-      // If running in Robolectric or unit test environment where signatures are mocked or empty
+      // Fail closed when signing certificates cannot be extracted or are empty
       if (installedSignatures.isEmpty() || apkSignatures.isEmpty()) {
-        return true
+        return false
       }
 
       val installedHashes = installedSignatures.map { computeSha256(it) }.toSet()

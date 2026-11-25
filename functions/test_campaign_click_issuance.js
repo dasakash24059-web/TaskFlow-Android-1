@@ -406,11 +406,15 @@ test("2. Generates unique unpredictable clickIds, persists click safely, strips 
 
   assert.equal(res1.success, true);
   assert.equal(res2.success, true);
-  assert.match(res1.clickId, /^clk_[a-f0-9]{32}$/);
-  assert.match(res2.clickId, /^clk_[a-f0-9]{32}$/);
-  assert.notEqual(res1.clickId, res2.clickId);
+  assert.equal(res1.clickId, undefined);
+  assert.equal(res2.clickId, undefined);
+  const res1ClickId = (/clk_[a-f0-9]{32}/.exec(res1.trackingUrl) || [])[0] || "";
+  const res2ClickId = (/clk_[a-f0-9]{32}/.exec(res2.trackingUrl) || [])[0] || "";
+  assert.match(res1ClickId, /^clk_[a-f0-9]{32}$/);
+  assert.match(res2ClickId, /^clk_[a-f0-9]{32}$/);
+  assert.notEqual(res1ClickId, res2ClickId);
 
-  // Verify response exposes only safe tracking fields — no secrets, no rewardTf override
+  // Verify response exposes only safe tracking fields — no secrets, no rewardTf override, no raw clickId property
   const serialized = JSON.stringify(res1);
   assert.equal(serialized.includes("SUPER_PRIVATE_HMAC_SECRET_999"), false);
   assert.equal(serialized.includes("PRIVATE_NETWORK_API_KEY"), false);
@@ -418,7 +422,7 @@ test("2. Generates unique unpredictable clickIds, persists click safely, strips 
   assert.equal(res1.rewardTf, undefined);
 
   // Verify click record stored securely and user TF balance untouched (still 1000)
-  const storedClick = db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${res1.clickId}`);
+  const storedClick = db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${res1ClickId}`);
   assert.ok(storedClick);
   assert.equal(storedClick.userId, "user_1");
   assert.equal(storedClick.campaignId, "camp_offer_01");
@@ -581,7 +585,9 @@ test("4. Fails closed when geo headers are missing or spoofed and enforces App C
     }
   );
   assert.equal(ok.success, true);
-  const stored = db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${ok.clickId}`);
+  assert.equal(ok.clickId, undefined);
+  const okClickId = (/clk_[a-f0-9]{32}/.exec(ok.trackingUrl) || [])[0] || "";
+  const stored = db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${okClickId}`);
   assert.equal(stored.deviceTrustLevel, "SELF_DECLARED_UNVERIFIED");
   assert.equal(stored.countryTrustLevel, "CLOUDFLARE_PROXY_HEADER");
 
@@ -610,8 +616,10 @@ test("4. Fails closed when geo headers are missing or spoofed and enforces App C
     { ...makeDeps(db, nowRef), appCheck: { appId: "1:123:android:abc" } }
   );
   assert.equal(attested.success, true);
+  assert.equal(attested.clickId, undefined);
+  const attestedClickId = (/clk_[a-f0-9]{32}/.exec(attested.trackingUrl) || [])[0] || "";
   assert.equal(
-    db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${attested.clickId}`).deviceTrustLevel,
+    db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${attestedClickId}`).deviceTrustLevel,
     "APP_CHECK_VERIFIED"
   );
 });
@@ -662,10 +670,12 @@ test("5. Maps network-specific URL parameters without hardcoding a universal for
     { auth: { uid: "user_1" }, data: { campaignId: "camp_net_a", devicePlatform: "ANDROID" } },
     { ...makeDeps(db, nowRef), headers: { "x-appengine-country": "IN" } }
   );
+  assert.equal(outA.clickId, undefined);
   const urlA = new URL(outA.trackingUrl);
   assert.equal(urlA.hostname, "track.alpha.example");
-  assert.equal(urlA.searchParams.get("aff_sub"), outA.clickId);
-  assert.equal(urlA.searchParams.get("cb"), outA.clickId);
+  const clickIdA = urlA.searchParams.get("aff_sub");
+  assert.match(clickIdA, /^clk_[a-f0-9]{32}$/);
+  assert.equal(urlA.searchParams.get("cb"), clickIdA);
   assert.equal(urlA.searchParams.get("aff_sub2"), "user_1");
   assert.equal(urlA.searchParams.get("offer_id"), "camp_net_a");
 
@@ -673,9 +683,10 @@ test("5. Maps network-specific URL parameters without hardcoding a universal for
     { auth: { uid: "user_1" }, data: { campaignId: "camp_net_b", devicePlatform: "ANDROID" } },
     { ...makeDeps(db, nowRef), headers: { "x-appengine-country": "IN" } }
   );
+  assert.equal(outB.clickId, undefined);
   const urlB = new URL(outB.trackingUrl);
   assert.equal(urlB.hostname, "go.beta.example");
-  assert.equal(urlB.searchParams.get("subid"), outB.clickId);
+  assert.match(urlB.searchParams.get("subid"), /^clk_[a-f0-9]{32}$/);
   assert.equal(urlB.searchParams.get("partner"), "taskflow");
 
   // Malicious URLs & trailing-dot localhost
@@ -726,7 +737,8 @@ test("5. Maps network-specific URL parameters without hardcoding a universal for
     { ...makeDeps(db, nowRef), headers: { "x-appengine-country": "IN" } }
   );
   const overrideUrl = new URL(overrideOut.trackingUrl);
-  assert.equal(overrideUrl.searchParams.get("aff_sub"), overrideOut.clickId);
+  assert.match(overrideUrl.searchParams.get("aff_sub"), /^clk_[a-f0-9]{32}$/);
+  assert.notEqual(overrideUrl.searchParams.get("aff_sub"), "spoofed_override");
   assert.equal(overrideUrl.searchParams.get("campaign_tag"), "q4");
 });
 
@@ -752,6 +764,8 @@ test("6. Deduplicates rapid duplicate clicks via cooldown/idempotency while allo
     { ...makeDeps(db, nowRef), headers: { "x-appengine-country": "IN" } }
   );
   assert.equal(first.deduplicated, false);
+  assert.equal(first.clickId, undefined);
+  const firstClickId = (/clk_[a-f0-9]{32}/.exec(first.trackingUrl) || [])[0] || "";
 
   // Rapid duplicate tap within cooldown -> returns existing unexpired click without burning slot
   nowRef.value += 5_000;
@@ -763,7 +777,7 @@ test("6. Deduplicates rapid duplicate clicks via cooldown/idempotency while allo
     { ...makeDeps(db, nowRef), headers: { "x-appengine-country": "IN" } }
   );
   assert.equal(dup.deduplicated, true);
-  assert.equal(dup.clickId, first.clickId);
+  assert.equal((/clk_[a-f0-9]{32}/.exec(dup.trackingUrl) || [])[0] || "", firstClickId);
 
   // Repeat tap after cooldown -> allowed (2nd hourly click)
   nowRef.value += 31_000;
@@ -775,7 +789,7 @@ test("6. Deduplicates rapid duplicate clicks via cooldown/idempotency while allo
     { ...makeDeps(db, nowRef), headers: { "x-appengine-country": "IN" } }
   );
   assert.equal(second.deduplicated, false);
-  assert.notEqual(second.clickId, first.clickId);
+  assert.notEqual((/clk_[a-f0-9]{32}/.exec(second.trackingUrl) || [])[0] || "", firstClickId);
 
   // Third click within same hour -> blocked by per-campaign hourly limit (maxClicksPerUserPerHour = 2)
   nowRef.value += 31_000;
@@ -922,12 +936,14 @@ test("8. Releases expired reservations lazily and via scheduled sweep without pe
   assert.equal(raceBlocked[0].reason.code, "resource-exhausted");
 
   // Previous clicks from u1 & u2 are marked EXPIRED and reservedClickSlots equals 2 (no leak)
+  const clickU1Id = (/clk_[a-f0-9]{32}/.exec(clickU1.trackingUrl) || [])[0] || "";
+  const clickU2Id = (/clk_[a-f0-9]{32}/.exec(clickU2.trackingUrl) || [])[0] || "";
   assert.equal(
-    db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${clickU1.clickId}`).status,
+    db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${clickU1Id}`).status,
     "EXPIRED"
   );
   assert.equal(
-    db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${clickU2.clickId}`).status,
+    db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${clickU2Id}`).status,
     "EXPIRED"
   );
   assert.equal(
@@ -972,9 +988,11 @@ test("8. Releases expired reservations lazily and via scheduled sweep without pe
     { auth: { uid: "u1" }, data: { campaignId: "camp_single_user_reclick" } },
     { ...makeDeps(db, nowRef), headers: { "x-appengine-country": "IN" } }
   );
-  assert.notEqual(reclick.clickId, firstClick.clickId);
+  const firstReclickId = (/clk_[a-f0-9]{32}/.exec(firstClick.trackingUrl) || [])[0] || "";
+  const secondReclickId = (/clk_[a-f0-9]{32}/.exec(reclick.trackingUrl) || [])[0] || "";
+  assert.notEqual(secondReclickId, firstReclickId);
   assert.equal(
-    db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${firstClick.clickId}`).status,
+    db.read(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/${firstReclickId}`).status,
     "EXPIRED"
   );
   assert.equal(

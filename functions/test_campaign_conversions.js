@@ -391,7 +391,7 @@ function seedCampaignEnvironment(db, nowMs, {
 }
 
 async function issueClickForUser(db, deps, { uid = "user_alice", campaignId = "camp_offer_01" } = {}) {
-  return await handleCreateCampaignClick(
+  const response = await handleCreateCampaignClick(
     {
       auth: { uid },
       app: { appId: "1:123:android:abc" },
@@ -400,6 +400,15 @@ async function issueClickForUser(db, deps, { uid = "user_alice", campaignId = "c
     },
     deps
   );
+  assert.equal(response.clickId, undefined, "Raw clickId must not be returned to authenticated caller (M-02)");
+  const stored = db
+    .listByPrefix(`${CAMPAIGN_TRACKING_COLLECTIONS.CAMPAIGN_CLICKS}/`)
+    .map((entry) => entry.data)
+    .filter((doc) => doc && doc.userId === uid && doc.campaignId === campaignId)
+    .sort((a, b) => Number(b.issuedAtMillis || 0) - Number(a.issuedAtMillis || 0));
+  const clickId = stored[0]?.clickId || "";
+  assert.ok(clickId, "Expected server click record in database");
+  return { ...response, clickId };
 }
 
 test("1. Rejects missing, tampered, or insecure NONE signatures and missing server secrets", async () => {

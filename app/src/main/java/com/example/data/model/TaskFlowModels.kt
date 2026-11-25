@@ -1014,8 +1014,8 @@ data class UserProfile(
   val approvalStatus: String = "approved",
   val balanceCents: Long = 0L, // Legacy (100 paise = ₹1 = 125 Coins)
   val balanceCoins: Long = 0L, // Total Coin balance
-  val eligibleCoins: Long = 0L, // Eligible task-earned withdrawable Coins
-  val promotionalCoins: Long = 0L, // Ad/Spin/Check-in promotional Coins (non-withdrawable directly)
+  val eligibleCoins: Long = 0L, // Task-earned withdrawable Coins (mirrored in balanceCents)
+  val promotionalCoins: Long = 0L, // Promotional bonus Coins (Ad/Spin/Check-in; spendable in combined balanceCoins pool)
   val virtualPoints: Long = 0L,
   val completedTasksCount: Long = 0L,
   val assignedTaskId: String = "",
@@ -1033,14 +1033,16 @@ data class UserProfile(
 )
 
 /**
- * Returns the user's eligible withdrawable Coins (earned from approved tasks).
- * 125 Coins = ₹1 (100 paise).
+ * Returns the user's task-earned Coins portion (backed by `eligibleCoins` / `balanceCents`).
+ * Withdrawals spend from the unified `balanceCoins` (`eligibleCoins + promotionalCoins`) pool
+ * using task-earned Coins first, then promotional Coins.
+ * Canonical reference: 125 Coins = ₹1 (100 paise).
  */
 fun UserProfile.getEligibleWithdrawalCoins(): Long =
   maxOf(eligibleCoins, centsToCoins(balanceCents))
 
 /**
- * Returns the user's promotional Coins (earned from Spin, Watch & Earn, Daily Check-in).
+ * Returns the user's promotional Coins (earned from Spin, Watch & Earn, Daily Check-in, Scratch, Promo).
  */
 fun UserProfile.getPromotionalBalanceCoins(): Long = promotionalCoins
 

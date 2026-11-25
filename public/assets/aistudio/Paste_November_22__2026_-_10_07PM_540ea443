@@ -1,0 +1,1013 @@
+TASKFLOW — COMPLETE H-01 TO L-02 SECURITY, BACKEND, AND QUALITY AUDIT & REMEDIATION
+
+PRIMARY OBJECTIVE
+
+Perform a complete, evidence-based audit and carefully remediate every verified finding from H-01 through H-05, M-01 through M-08, and L-01 through L-02.
+
+This is a continuation of the previously completed P0 remediation covering C-01 through C-05.
+
+The previous P0 report claimed:
+
+- Backend tests: 52/52 passed.
+- Android and emulator tests: 168/168 passed.
+- Build: successful.
+- No production deployment or GitHub push.
+
+You MUST independently inspect the current repository and verify the actual implementation. Do not blindly trust previous reports.
+
+Your goal is to improve security, financial integrity, backend reliability, privacy, Android quality, and UI consistency without breaking existing functionality.
+
+---
+
+1. ABSOLUTE PROJECT PRESERVATION RULES
+
+Before making any changes:
+
+1. Inspect the entire relevant project structure.
+2. Read the current implementation of every affected file.
+3. Check Git status and identify existing uncommitted changes.
+4. Verify the previous P0 fixes are still present.
+5. Record the current state and create a detailed change plan.
+6. Identify dependencies between the findings before modifying anything.
+
+Never overwrite or revert unrelated existing work.
+
+Preserve these existing systems
+
+- Native Android Kotlin application.
+- Jetpack Compose Material 3.
+- MVVM architecture.
+- Firebase Authentication and Google Credential Manager.
+- Cloud Firestore.
+- Firebase Cloud Functions.
+- Existing Admin Dashboard.
+- User Dashboard.
+- Wallet and transaction ledger.
+- Daily Check-in.
+- Watch & Earn.
+- Unity rewarded ads.
+- Unity banner ads.
+- Unity interstitial ads.
+- Spin and Scratch Card.
+- Promo Code.
+- Offerwall.
+- Manual proof tasks.
+- Telegram Join tasks.
+- Campaign Tracking system.
+- Notifications.
+- Support and FAQ.
+- Profile and existing app navigation.
+- Existing leaderboard design and functionality.
+
+Do not redesign the app or introduce unrelated features.
+
+Financial rules — STRICT
+
+The canonical conversion is:
+
+125 TF = ₹1
+
+Examples:
+
+- 125 TF = ₹1
+- 250 TF = ₹2
+- 500 TF = ₹4
+- 1,000 TF = ₹8
+
+Never change this conversion.
+
+Do not modify:
+
+- Existing user balances.
+- Historical wallet records.
+- Historical transactions.
+- Existing reward economics.
+- Existing redemption rates.
+- Existing withdrawal catalog values.
+- Existing reward eligibility without evidence of a verified vulnerability.
+
+The existing redemption catalog may have different conversion rates. Audit and document its actual behavior, but do not silently change those rates.
+
+Unity Ads — STRICT PRESERVATION
+
+The following must remain intact:
+
+- Unity Game ID: "800430673"
+- "BP_Rewarded_Android"
+- "BP_Banner_Android"
+- "BP_Interstitial_Android"
+
+Preserve:
+
+- Ad initialization.
+- Rewarded ad lifecycle.
+- Reward callbacks.
+- Server-side reward verification.
+- Ad placement names.
+- Banner behavior.
+- Interstitial behavior.
+- Daily Check-in ad behavior.
+- Watch & Earn behavior.
+- Existing reward handling.
+
+Only the specific verified H-04 release-build fallback vulnerability may be corrected.
+
+Do not replace Unity Ads, introduce another ad SDK, change ad IDs, rename placements, remove ad formats, or redesign the ad experience.
+
+Deployment restrictions
+
+ABSOLUTELY DO NOT:
+
+- Deploy Firebase Cloud Functions.
+- Deploy Firestore Rules.
+- Deploy Storage Rules.
+- Deploy Firebase Hosting.
+- Change production secrets.
+- Change Firebase Console settings.
+- Push commits to GitHub.
+- Publish an APK.
+- Modify production data.
+- Run historical data migrations.
+
+Local implementation, local emulator tests, and local build verification are allowed.
+
+---
+
+2. H-01 — ADMIN EMAIL VERIFICATION AND STORAGE RULES
+
+Previous audit finding:
+
+- Admin bootstrap email verification may incorrectly handle "email_verified" when the value is missing or undefined.
+- Secondary admin lookup in "storage.rules" may not correctly enforce admin authorization.
+
+Required audit
+
+Inspect:
+
+- "firestore.rules"
+- "storage.rules"
+- Admin bootstrap logic.
+- Admin authentication checks.
+- Admin custom claims, if implemented.
+- Admin collection lookups.
+- Relevant Cloud Functions.
+- Android admin initialization.
+
+Required remediation
+
+1. Ensure an unverified or missing email verification status never grants admin privileges.
+2. Never treat undefined, null, or missing "email_verified" as verified.
+3. Verify the authenticated Firebase UID and trusted admin authorization source.
+4. Ensure secondary admin lookup follows the same secure authorization model.
+5. Prevent ordinary authenticated users from modifying their own admin status.
+6. Ensure Storage Rules do not rely on insecure client-controlled fields.
+7. Preserve the existing legitimate admin account and admin dashboard.
+8. Avoid hardcoding an admin email as the only authorization mechanism if a secure UID-based or trusted server-controlled approach is already available.
+
+Test:
+
+- Verified legitimate admin.
+- Unverified user.
+- Missing email verification claim.
+- Ordinary user attempting admin access.
+- User attempting to modify admin status.
+- Unauthorized Storage read/write.
+- Legitimate admin Storage access.
+
+Do not lock out the existing admin account.
+
+---
+
+3. H-02 — FIREBASE APP CHECK AND PLAY INTEGRITY
+
+Previous audit finding:
+
+Firebase App Check with Play Integrity was not configured or enforced consistently.
+
+Required audit
+
+Inspect:
+
+- Android Gradle dependencies.
+- Firebase initialization.
+- Application class and startup lifecycle.
+- App Check provider configuration.
+- Debug and release build configurations.
+- Cloud Functions callable enforcement.
+- Firestore and Storage access patterns.
+- Existing campaign and reward verification flows.
+
+Required remediation
+
+1. Determine whether Firebase App Check is already partially implemented.
+2. If missing, add the appropriate Firebase App Check dependency and initialization.
+3. Use Play Integrity for supported release builds.
+4. Provide a safe debug-provider configuration for local development and emulator testing.
+5. Never hardcode production debug tokens.
+6. Do not activate Firebase Console enforcement automatically.
+7. Document which Firebase services and Cloud Functions support App Check enforcement.
+8. Identify legacy callables that cannot safely enforce App Check yet.
+9. Avoid locking out legitimate existing users or breaking the current development environment.
+10. Do not claim App Check is production-enforced unless actual configuration and enforcement have been verified.
+
+Test debug and release initialization separately.
+
+Do not weaken authentication or server-side authorization as a workaround.
+
+---
+
+4. H-03 — WATCH & EARN S2S VERIFICATION TIMING
+
+Previous audit finding:
+
+"awaitSessionVerified" may return early when no custom callable invoker is available, preventing the app from properly waiting for the Unity server-to-server verification webhook.
+
+Required audit
+
+Inspect:
+
+- "UnityAdsHelper.kt"
+- "UnityBannerAdView.kt"
+- Watch & Earn implementation.
+- Reward claim flow.
+- "awaitSessionVerified".
+- Session creation and verification.
+- Unity S2S webhook Cloud Function.
+- Callable invoker.
+- Reward session documents.
+- Timeout and retry behavior.
+
+Required remediation
+
+1. Trace the complete Watch & Earn lifecycle.
+2. Verify how a reward session is created.
+3. Verify how Unity's S2S webhook confirms a completed ad.
+4. Ensure the Android client cannot independently fabricate a successful reward.
+5. Correct the early-return behavior.
+6. Ensure the client waits for a genuine server-confirmed result.
+7. Implement safe bounded polling or retry behavior where appropriate.
+8. Use a reasonable timeout.
+9. Handle delayed webhook delivery.
+10. Prevent duplicate reward claims.
+11. Ensure a failed or incomplete ad never receives a reward.
+12. Preserve idempotency and server-side reward authorization.
+
+Do not introduce local reward fallback.
+
+Do not credit TF based only on an Android callback.
+
+Test:
+
+- Successful S2S verification.
+- Delayed webhook.
+- Missing webhook.
+- Invalid verification.
+- Duplicate webhook.
+- Duplicate claim.
+- Timeout.
+- Network unavailable.
+- User closing the screen during verification.
+
+Unity Ads reward behavior must remain consistent with the existing implementation.
+
+---
+
+5. H-04 — UNITY ADS RELEASE FALLBACK SECURITY
+
+Previous audit finding:
+
+"UnityAdsHelper.kt" may contain:
+
+- A secondary Game ID "6091982".
+- A "/v6/test/" endpoint.
+- "test=true" behavior.
+- Release-build fallback behavior when no-fill occurs.
+
+This finding must be inspected carefully.
+
+Required audit
+
+Inspect the complete implementation of:
+
+- "UnityAdsHelper.kt"
+- Unity SDK initialization.
+- Release and debug build configuration.
+- Game ID selection.
+- Ad request configuration.
+- No-fill handling.
+- Rewarded, banner, and interstitial flows.
+
+Required remediation
+
+If the previous finding is confirmed:
+
+1. Prevent production release builds from silently switching to an unintended secondary Game ID.
+2. Prevent production release builds from using test-only endpoints or test-mode configuration.
+3. Keep test configuration restricted to legitimate debug/development builds.
+4. Ensure no-fill results in a safe no-fill/error state rather than an insecure fallback.
+5. Preserve the production Game ID "800430673".
+6. Preserve all three placement IDs exactly.
+7. Preserve ad initialization and lifecycle behavior.
+8. Preserve existing server-side reward verification.
+9. Do not change reward amounts or reward eligibility.
+10. Do not disable legitimate production ads.
+
+If the secondary ID or test endpoint is intentional and necessary for a documented reason, explain the evidence before changing it.
+
+Do not invent a replacement Game ID.
+
+---
+
+6. H-05 — APP UPDATE SIGNATURE AND FORCE UPDATE LOGIC
+
+Previous audit finding:
+
+- "AppUpdateManager.kt" may return true when "installedSignatures" is empty.
+- "forceUpdate=true" may be hardcoded.
+- "REQUEST_INSTALL_PACKAGES" may introduce Android policy or permission concerns.
+
+Required audit
+
+Inspect:
+
+- "AppUpdateManager.kt"
+- AndroidManifest.xml
+- Signing configuration.
+- APK distribution method.
+- Installed package signature verification.
+- Update download and installation flow.
+- Force update configuration.
+- Android API compatibility.
+- Existing update UI.
+
+Required remediation
+
+1. Determine the actual APK distribution method before changing update logic.
+2. Never treat an empty signature list as successful verification.
+3. Fail safely when signature information is unavailable.
+4. Verify installed and downloaded APK signing certificates correctly.
+5. Do not trust an unsigned or incorrectly signed update.
+6. Remove unintended hardcoded force-update behavior.
+7. Make forced updates dependent on trusted, validated configuration.
+8. Preserve normal optional update behavior.
+9. Inspect whether "REQUEST_INSTALL_PACKAGES" is genuinely required.
+10. Do not remove a required update feature without a compatible replacement.
+11. Do not introduce an installation flow that bypasses Android security.
+
+Test:
+
+- Matching signature.
+- Mismatched signature.
+- Empty signature.
+- Missing package information.
+- Invalid update configuration.
+- Optional update.
+- Required update.
+- Network failure.
+
+---
+
+7. M-01 — MANUAL TASK SUBMISSION AND APPROVAL RULES
+
+Previous audit finding:
+
+Potential Firestore Rules gaps involving:
+
+- Deterministic "submissionId".
+- Reward parity.
+- Assignee validation.
+- Exact approval coin deltas.
+
+Required audit
+
+Inspect:
+
+- "firestore.rules"
+- Task creation.
+- Task assignment.
+- Submission creation.
+- Admin approval/rejection.
+- Reward calculation.
+- Task submission IDs.
+- Backend approval functions.
+- Android task repository and ViewModel.
+
+Required remediation
+
+1. Ensure a user cannot submit a task assigned to another user.
+2. Ensure submission ownership is verified server-side.
+3. Ensure deterministic submission IDs cannot be abused to overwrite another submission.
+4. Validate task status and assignment before accepting a submission.
+5. Ensure reward amounts come from trusted task configuration.
+6. Ensure client-supplied reward values cannot override the server amount.
+7. Ensure one task cannot be approved more than once.
+8. Ensure approval and wallet credit are atomic.
+9. Ensure transaction, notification, and wallet values match.
+10. Preserve the mandatory written proof and at least one gallery photo requirement for manual proof tasks.
+
+Test normal submission, forged submission, duplicate submission, wrong assignee, forged reward, duplicate approval, and rejected submission.
+
+---
+
+8. M-02 — REMOVE RAW CAMPAIGN CLICK ID EXPOSURE
+
+Previous audit finding:
+
+"createCampaignClick" still returns a raw "clickId" to the authenticated caller.
+
+Required audit
+
+Inspect:
+
+- "createCampaignClick"
+- Campaign click creation.
+- Redirect URL construction.
+- Postback attribution.
+- Conversion processing.
+- Campaign transactions.
+- Notifications.
+- Public activity responses.
+- Android campaign launch flow.
+
+Required remediation
+
+1. Determine whether the Android client genuinely needs the raw click ID.
+2. Prefer returning only the minimum launch information needed by the client.
+3. Keep raw attribution identifiers server-side wherever possible.
+4. Do not expose raw click IDs through public transaction IDs, notifications, leaderboard data, or user-facing activity records.
+5. Preserve secure conversion attribution.
+6. Preserve postback validation.
+7. Preserve deduplication and idempotency.
+8. Do not break existing active campaign links.
+9. Ensure the server can still identify the correct user and campaign.
+
+If compatibility requires a transitional mechanism, document it and avoid weakening security.
+
+---
+
+9. M-03 — TELEGRAM TASK APPROVAL STATUS GATE
+
+Previous audit finding:
+
+"handleVerifyTelegramTaskMembership" may not require "approvalStatus == approved".
+
+Required audit
+
+Inspect:
+
+- "handleVerifyTelegramTaskMembership"
+- Telegram Join task flow.
+- Telegram Bot API integration.
+- "getChatMember".
+- Telegram identity linking.
+- Webhook handling.
+- Claim and reward functions.
+- User approval status checks.
+
+Required remediation
+
+1. Require approved account status before granting Telegram task rewards.
+2. Verify the authenticated UID.
+3. Verify the linked Telegram identity securely.
+4. Verify the actual Telegram membership using the existing Bot API flow.
+5. Never trust a client-supplied membership result.
+6. Prevent duplicate rewards.
+7. Prevent one Telegram identity from being improperly reused across multiple accounts where existing rules prohibit it.
+8. Preserve existing Telegram task creation and admin controls.
+
+Test pending, rejected, approved, unlinked, linked, member, non-member, duplicate claim, and invalid identity cases.
+
+---
+
+10. M-04 — PROMOTIONAL COINS AND REDEMPTION SEMANTICS
+
+Previous audit finding:
+
+There may be a contradiction between:
+
+- "promotionalCoins" model semantics.
+- Wallet calculations.
+- Withdrawal eligibility.
+- Firestore Rules.
+- Redemption catalog conversion rates.
+
+Required audit
+
+Trace every writer, reader, calculation, and display of:
+
+- "balanceCoins"
+- "eligibleCoins"
+- "promotionalCoins"
+- Withdrawable balance.
+- Total earned.
+- Withdrawal eligibility.
+- Redemption conversion.
+
+Required remediation
+
+1. Determine the actual meaning of each balance field.
+2. Identify whether promotional coins are withdrawable or non-withdrawable in the current implementation.
+3. Compare Android UI, repository, Cloud Functions, Firestore Rules, and transaction ledger behavior.
+4. Identify any mismatch between displayed and actual withdrawable balances.
+5. Document the intended semantics.
+6. Make only the minimum safe changes necessary to ensure all components use consistent definitions.
+7. Preserve historical user balances and transaction records.
+8. Do not silently convert promotional coins into withdrawable coins.
+9. Do not remove existing promotional rewards.
+10. Do not modify withdrawal catalog rates.
+
+Important: Existing catalog rates such as UPI 165 TF/₹1 and gift cards 220 TF/₹1 must not be changed without separate explicit approval.
+
+The base conversion remains 125 TF = ₹1.
+
+If the intended business rule cannot be determined from source code, mark the finding BLOCKED and explain the exact ambiguity rather than guessing.
+
+---
+
+11. M-05 — ANDROID BACKUP, RELEASE MINIFICATION, AND NOTIFICATIONS
+
+Previous audit finding:
+
+- "allowBackup=true".
+- Release minification disabled.
+- "POST_NOTIFICATIONS" permission may be missing.
+
+Required audit
+
+Inspect:
+
+- AndroidManifest.xml
+- Gradle release configuration.
+- ProGuard/R8 rules.
+- Firebase Messaging implementation.
+- Notification channels.
+- Android API level compatibility.
+- Current notification architecture.
+
+Required remediation
+
+1. Assess whether Android backup could expose sensitive app data.
+2. Configure appropriate backup rules for sensitive local data.
+3. Do not accidentally break legitimate user preferences or required app behavior.
+4. Evaluate enabling release minification and resource shrinking.
+5. Add or update keep rules for Firebase, Compose, serialization, and reflection-based components as required.
+6. Run a complete release build before accepting minification changes.
+7. Check whether OS-level push notifications are actually implemented.
+8. If push notifications are implemented, configure "POST_NOTIFICATIONS" correctly for supported Android versions.
+9. If only in-app Firestore notifications exist, do not falsely claim OS push notifications are implemented.
+10. Do not add unused permissions.
+
+Do not change the existing in-app notification system unnecessarily.
+
+---
+
+12. M-06 — FIRESTORE SNAPSHOT LISTENER LIFECYCLE
+
+Previous audit finding:
+
+Some Firestore snapshot listeners may remain active without proper cleanup.
+
+Required audit
+
+Inspect all:
+
+- "addSnapshotListener"
+- "ListenerRegistration"
+- Flow wrappers.
+- Repository observers.
+- ViewModel lifecycle.
+- User and admin screens.
+- Campaign tracking listeners.
+- Wallet and notification listeners.
+
+Required remediation
+
+1. Identify every active snapshot listener.
+2. Ensure listeners are removed when no longer needed.
+3. Ensure Flow cancellation removes the associated listener.
+4. Avoid duplicate listener registration during recomposition.
+5. Avoid retaining Activity, Context, or View references unnecessarily.
+6. Ensure ViewModels do not leak listeners after their lifecycle ends.
+7. Preserve real-time updates.
+8. Do not replace real-time functionality with unnecessary polling.
+
+Test repeated navigation, screen recreation, sign-out, and ViewModel cleanup.
+
+---
+
+13. M-07 — WALLET EARNINGS, BADGE COUNT, AND OFFERWALL FILTER
+
+Previous audit findings:
+
+- Lifetime earnings fallback may double-count transactions.
+- A hardcoded "10 Modules" badge may be inaccurate when 12 modules exist.
+- Offerwall may not correctly filter quota-exhausted items.
+
+A. Lifetime earnings
+
+Inspect:
+
+- Wallet calculations.
+- Transaction history.
+- Leaderboard aggregation.
+- Campaign reversal handling.
+- Historical transaction compatibility.
+
+Ensure lifetime earnings are not double-counted when both cached user totals and transaction aggregates are available.
+
+Do not change historical balances.
+
+Ensure campaign reversals are deducted exactly once.
+
+B. Module count
+
+Inspect the actual enabled module list and badge calculation.
+
+Remove inaccurate hardcoded counts.
+
+Use the actual number of enabled modules where a count is displayed.
+
+Do not invent new modules.
+
+C. Offerwall quota filtering
+
+Inspect:
+
+- Offerwall providers.
+- Quota-exhausted status.
+- Campaign availability.
+- User eligibility.
+- Backend responses.
+- Android filtering.
+
+Ensure exhausted or ineligible offers are not presented as available.
+
+Do not change offer reward values or provider integration.
+
+Preserve the existing Offerwall design and functionality.
+
+---
+
+14. M-08 — FIREBASE EMULATOR TEST HANG
+
+Previous audit finding:
+
+Some emulator tests may hang indefinitely when Firebase Emulator is unavailable.
+
+Required audit
+
+Inspect:
+
+- Android emulator tests.
+- Firestore Rules tests.
+- Cloud Functions tests.
+- Firebase emulator configuration.
+- Test setup and teardown.
+- Gradle test tasks.
+- Node test runner.
+
+Required remediation
+
+1. Ensure tests detect unavailable emulator services.
+2. Use bounded connection timeouts.
+3. Ensure test setup fails with a clear message when required emulators are missing.
+4. Ensure teardown closes clients and connections.
+5. Prevent infinite retries.
+6. Do not silently skip security tests.
+7. Distinguish unavailable infrastructure from an actual test failure.
+8. Document the exact emulator startup command and required ports.
+9. Ensure CI or local testing can reliably detect test failures.
+
+A test must never report PASS merely because its emulator was unavailable.
+
+---
+
+15. L-01 — DEAD CALLBACK CLEANUP
+
+Previous audit finding:
+
+A dead or unused callback may remain in the application.
+
+Required audit
+
+1. Identify the exact callback.
+2. Search all references.
+3. Check whether it is invoked through reflection, navigation, Compose, dependency injection, or another indirect mechanism.
+4. Confirm it is genuinely unused.
+5. Remove it only if safe.
+6. Remove associated unused imports or parameters.
+7. Do not delete functionality based only on a text search.
+
+---
+
+16. L-02 — DUPLICATE TF LABEL AND DAILY CHECK-IN FORMATTING
+
+Previous audit finding:
+
+- Duplicate TF label.
+- Daily Check-in formatting inconsistency.
+
+Required audit
+
+Inspect:
+
+- Wallet components.
+- Task cards.
+- Reward labels.
+- Daily Check-in UI.
+- Shared formatting utilities.
+- TF and INR display.
+
+Required remediation
+
+1. Remove duplicate TF labels where confirmed.
+2. Ensure each reward is displayed only once.
+3. Use consistent spacing and typography.
+4. Ensure Daily Check-in reward formatting is consistent.
+5. Preserve the existing light and dark themes.
+6. Preserve existing screen structure.
+7. Do not add extra hints, cards, or decorative clutter.
+8. Do not alter reward calculations.
+
+Keep the existing premium minimal visual style.
+
+---
+
+17. CROSS-SYSTEM SECURITY REVIEW
+
+After the individual findings, perform a cross-system review.
+
+Verify that:
+
+- Client cannot directly modify authoritative wallet balances.
+- Client cannot fabricate reward sessions.
+- Client cannot create forged credited transactions.
+- Cloud Functions validate Firebase Auth identity.
+- Admin actions require trusted admin authorization.
+- User account approval status is enforced where required.
+- Campaign attribution is server-controlled.
+- Campaign conversions are idempotent.
+- Campaign reversals are applied exactly once.
+- Telegram rewards are verified server-side.
+- Unity rewards require genuine S2S confirmation.
+- Task approval cannot be duplicated.
+- Wallet and ledger remain consistent.
+- Leaderboard does not expose private transaction history.
+- Public leaderboard contains only intended public fields.
+- No local fallback can fabricate successful financial operations.
+- Existing P0 C-01 through C-05 fixes remain intact.
+
+Pay special attention to the new "getPublicLeaderboard" callable.
+
+The previous report stated that it was not deployed and that clients could fall back to the public "/leaderboard" collection.
+
+Verify:
+
+1. The fallback does not depend on reading other users' private transactions.
+2. "/leaderboard" contains only intended public fields.
+3. Clients cannot write arbitrary leaderboard rewards or rankings.
+4. Only trusted server code can update authoritative leaderboard data.
+5. The Android fallback does not silently hide a backend failure.
+
+Do not claim production leaderboard functionality is verified until it has been tested against the actual production deployment.
+
+---
+
+18. HISTORICAL DATA AND BACKWARD COMPATIBILITY
+
+Do not perform automatic historical migrations.
+
+Inspect legacy:
+
+- Tasks.
+- Wallet records.
+- Transactions.
+- Notifications.
+- Campaign clicks.
+- Campaign conversions.
+- Reward sessions.
+- Leaderboard entries.
+
+Document any legacy records that require migration.
+
+If historical raw campaign identifiers or legacy reward records remain, do not silently rewrite them.
+
+Provide a separate migration plan with:
+
+- Affected collection.
+- Required fields.
+- Before/after examples.
+- Idempotency strategy.
+- Backup requirements.
+- Rollback strategy.
+
+Do not execute that migration.
+
+---
+
+19. REQUIRED TESTING
+
+Run all relevant tests after implementation.
+
+Backend
+
+- Existing backend test suites.
+- H-01 authorization tests.
+- H-03 S2S verification tests.
+- H-04 release/debug configuration tests.
+- M-01 task approval tests.
+- M-02 campaign privacy tests.
+- M-03 Telegram authorization tests.
+- M-04 wallet semantics tests.
+- M-07 earnings and Offerwall tests.
+- Campaign tracking regression tests.
+- P0 C-01 through C-05 regression tests.
+
+Firestore and Storage Emulator
+
+Test:
+
+- Admin and non-admin access.
+- Email verification edge cases.
+- User wallet update restrictions.
+- Task assignment and submission authorization.
+- Duplicate approval prevention.
+- Transaction ownership.
+- Leaderboard privacy.
+- Storage authorization.
+- Client writes to server-only collections.
+- Campaign tracking access restrictions.
+
+Android
+
+Run:
+
+- Unit tests.
+- Repository tests.
+- ViewModel tests.
+- Compose/UI tests where available.
+- Release compilation.
+- Debug compilation.
+- Relevant Robolectric tests.
+- Emulator tests.
+
+Regression
+
+Verify:
+
+- Google sign-in.
+- User dashboard.
+- Admin dashboard.
+- Wallet.
+- Daily Check-in.
+- Watch & Earn.
+- Unity rewarded ads.
+- Banner ads.
+- Interstitial ads.
+- Spin.
+- Scratch Card.
+- Promo Code.
+- Offerwall.
+- Manual proof tasks.
+- Telegram tasks.
+- Campaign Tracking.
+- Notifications.
+- Profile.
+- Existing navigation.
+
+Do not report a test as passed if it was skipped, unavailable, or not executed.
+
+---
+
+20. IMPLEMENTATION STRATEGY
+
+Work in controlled stages:
+
+Stage A — Inspection
+
+Inspect all findings and verify exact source locations.
+
+Stage B — Risk classification
+
+For each finding, classify:
+
+- CONFIRMED
+- PARTIALLY CONFIRMED
+- NOT REPRODUCIBLE
+- ALREADY FIXED
+- BLOCKED
+
+Include exact file paths and relevant functions.
+
+Stage C — Remediation
+
+Fix only verified issues.
+
+Keep changes small and isolated.
+
+Avoid broad refactoring.
+
+Stage D — Testing
+
+Run targeted tests first, followed by regression tests and builds.
+
+Stage E — Final verification
+
+Review Git diff and verify no unrelated files or features were changed.
+
+If a finding cannot be safely fixed without changing an unresolved business rule, production configuration, or external service setting, mark it BLOCKED and explain why.
+
+Do not invent a successful result.
+
+---
+
+21. FINAL REPORT FORMAT
+
+Provide a detailed final report containing:
+
+A. Overall Result
+
+- PASS / PARTIAL PASS / FAIL.
+- Production readiness assessment.
+- Remaining blockers.
+
+B. Finding-by-Finding Status
+
+Create a table:
+
+Finding| Original issue| Status| Fix implemented| Tests
+H-01| Admin verification and Storage Rules| | | 
+H-02| App Check| | | 
+H-03| Unity S2S wait/retry| | | 
+H-04| Unity release fallback| | | 
+H-05| App update security| | | 
+M-01| Task submission/approval| | | 
+M-02| Raw clickId exposure| | | 
+M-03| Telegram approval gate| | | 
+M-04| Promotional coin semantics| | | 
+M-05| Backup/minification/notifications| | | 
+M-06| Snapshot listener cleanup| | | 
+M-07| Earnings/module count/Offerwall| | | 
+M-08| Emulator test hang| | | 
+L-01| Dead callback| | | 
+L-02| Duplicate TF/Daily Check-in formatting| | | 
+
+C. Exact File Changes
+
+List every modified, added, and deleted file with the reason.
+
+D. Tests
+
+Report:
+
+- Total passed.
+- Total failed.
+- Total skipped.
+- Emulator availability.
+- Debug build result.
+- Release build result.
+
+E. Preserved Systems
+
+Explicitly confirm whether:
+
+- Unity Ads placements and Game ID remained unchanged.
+- Wallet conversion remained 125 TF = ₹1.
+- Redemption economics remained unchanged.
+- Campaign Tracking remained functional.
+- Telegram tasks remained functional.
+- Previous P0 fixes remained intact.
+
+F. Deployment Status
+
+Explicitly state:
+
+- No Firebase production deployment.
+- No Firestore/Storage Rules deployment.
+- No Cloud Functions deployment.
+- No GitHub push.
+- No APK publishing.
+
+G. Remaining Risks
+
+List all unresolved, partially fixed, or blocked findings.
+
+H. Next Steps
+
+Recommend the next safest action based on verified evidence.
+
+---
+
+FINAL INSTRUCTION
+
+Security and financial integrity are more important than claiming completion.
+
+Do not hide failed tests.
+Do not skip difficult findings.
+Do not invent file contents.
+Do not assume Firebase Console configuration.
+Do not modify historical user financial data.
+Do not break existing application features.
+Do not deploy anything.
+
+Complete the local audit and remediation only, then provide the full evidence-based report.

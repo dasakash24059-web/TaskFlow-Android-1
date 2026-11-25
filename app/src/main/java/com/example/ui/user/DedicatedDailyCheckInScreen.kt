@@ -443,7 +443,7 @@ fun DedicatedDailyCheckInScreen(
               modifier = Modifier.size(20.dp)
             )
             Text(
-              text = "Milestone bonuses on Days 5, 10, 15, 20, 25 & 1,000 Coins on Day 30.",
+              text = "Milestone bonuses on Days 5, 10, 15, 20, 25 & ${formatCoins(1000L)} on Day 30.",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               fontWeight = FontWeight.Medium
@@ -597,9 +597,9 @@ private fun CompactDayGridSquareCard(
 
       // Bottom Coin Amount
       Text(
-        text = "+$rewardCoins",
+        text = "+${formatCoins(rewardCoins)}",
         style = MaterialTheme.typography.labelSmall,
-        fontSize = 11.sp,
+        fontSize = 10.sp,
         fontWeight = FontWeight.SemiBold,
         color =
           when {

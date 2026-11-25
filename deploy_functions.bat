@@ -1,6 +1,6 @@
 @echo off
 echo ==================================================
-echo TaskFlow Cloud Functions Deployment to taskflow-8852d
+echo TaskFlow Safe Production Deployment to taskflow-8852d
 echo ==================================================
 
 where firebase >nul 2>nul
@@ -21,10 +21,16 @@ cd functions
 call npm install
 cd ..
 
-echo Step 4: Deploying Cloud Functions and Firestore Rules...
-call firebase deploy --only functions,firestore:rules --project taskflow-8852d
+echo Step 4: Deploying Firestore Composite Indexes first...
+call firebase deploy --only firestore:indexes --project taskflow-8852d
+
+echo Step 5: Deploying all 36 Cloud Functions (including Phase F.3 proof upload endpoints)...
+call firebase deploy --only functions --project taskflow-8852d
+
+echo Step 6: Deploying Firestore Rules and Storage Rules...
+call firebase deploy --only firestore:rules,storage --project taskflow-8852d
 
 echo ==================================================
-echo Deployment Complete! All 19 Cloud Functions are LIVE!
+echo Deployment Complete! Indexes, 36 Cloud Functions, Firestore Rules, and Storage Rules are LIVE!
 echo ==================================================
 pause

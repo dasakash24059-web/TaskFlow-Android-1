@@ -449,13 +449,16 @@ test("HIGH-1.1: Phase 3D edit preserves Phase 3B/3C campaign & network runtime f
     app: { appId: "1:123:android:abc", token: { sub: "valid" } },
     data: { campaignId: "camp_legacy", platform: "ANDROID" }
   }, deps);
+  assert.equal(clickRes.clickId, undefined);
   assert.equal(clickRes.expiresAtMillis, nowMs + 30 * 60 * 1000, "clickTtlMinutes must govern click expiry");
+  const legacyClickId = new URL(clickRes.trackingUrl).searchParams.get("sub_id");
+  assert.ok(legacyClickId);
 
   // Verify Phase 3C postback signature still works with preserved signaturePrefix ("sha256=")
   const secretVal = "unit_test_secret_alpha_prefix";
   const postbackQuery = {
     networkId: "net_legacy",
-    sub_id: clickRes.clickId,
+    sub_id: legacyClickId,
     tx_ref: "txn_prefix_01",
     st: "ok",
     pay: "99.99"
@@ -565,13 +568,16 @@ test("HIGH-1.2: requireVerifiedCountry enforces trusted server geo even for ALL 
     data: { campaignId: "camp_strict", platform: "ANDROID" },
     rawRequest: { headers: { "x-appengine-country": "IN" } }
   }, deps);
+  assert.equal(clickRes.clickId, undefined);
   assert.equal(clickRes.expiresAtMillis, campaignExpiresAt);
+  const strictClickId = new URL(clickRes.trackingUrl).searchParams.get("click_id");
+  assert.ok(strictClickId);
 
   // 3) Verified APPROVED postback MUST be held in PENDING because autoApproveVerifiedPostback=false
   const secretVal = "strict_beta_secret_key";
   const pbQuery = {
     networkId: "net_strict",
-    click_id: clickRes.clickId,
+    click_id: strictClickId,
     txn_id: "txn_hold_01",
     status: "approved",
     payout: "4.00"

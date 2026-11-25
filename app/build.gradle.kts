@@ -54,7 +54,8 @@ android {
     buildTypes {
         release {
             isCrunchPngs = false
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -123,6 +124,8 @@ dependencies {
     implementation(libs.firebase.storage)
     implementation(libs.firebase.config)
     implementation(libs.firebase.functions)
+    implementation(libs.firebase.appcheck.playintegrity)
+    debugImplementation(libs.firebase.appcheck.debug)
     implementation(libs.coil.compose)
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services)

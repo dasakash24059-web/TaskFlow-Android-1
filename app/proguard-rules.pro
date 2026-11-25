@@ -1,21 +1,42 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# TaskFlow R8 / ProGuard Configuration
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Preserve stack trace metadata cleanly without revealing local file paths
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# TaskFlow Firestore / Model POJOs & Serialization
+-keepclassmembers class com.example.data.model.** {
+    <fields>;
+    <methods>;
+}
+-keep class com.example.data.model.** { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Firebase SDKs (Firestore, Auth, Functions, Remote Config, Storage, App Check, Play Integrity)
+-keepclassmembers class * {
+    @com.google.firebase.firestore.PropertyName <fields>;
+    @com.google.firebase.firestore.PropertyName <methods>;
+    @com.google.firebase.firestore.DocumentId <fields>;
+    @com.google.firebase.firestore.ServerTimestamp <fields>;
+    @com.google.firebase.firestore.Exclude <fields>;
+    @com.google.firebase.firestore.Exclude <methods>;
+}
+-dontwarn com.google.firebase.**
+-dontwarn com.google.android.play.core.**
+
+# Credential Manager & Google Identity Services
+-keep class androidx.credentials.** { *; }
+-keep class com.google.android.libraries.identity.googleid.** { *; }
+-dontwarn androidx.credentials.**
+
+# Unity Ads SDK (v4.12.0) reflection & WebView JavaScript bridges
+-keepattributes JavascriptInterface
+-keep class com.unity3d.ads.** { *; }
+-keep class com.unity3d.services.** { *; }
+-keep interface com.unity3d.** { *; }
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+-dontwarn com.unity3d.**
+-dontwarn com.google.ar.core.**
+-dontwarn org.codehaus.mojo.animal_sniffer.IgnoreJRERequirement

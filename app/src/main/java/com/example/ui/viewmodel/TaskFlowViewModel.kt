@@ -154,11 +154,13 @@ class TaskFlowViewModel(
   val currentUserId: String,
   val currentUserEmail: String,
   val currentUserDisplayName: String,
-  initialPortal: PortalLoginTarget = PortalLoginTarget.USER_APP
+  initialPortal: PortalLoginTarget = PortalLoginTarget.USER_APP,
+  val currentUserEmailVerified: Boolean = true
 ) : ViewModel() {
 
   private val isBootstrappedAdminEmail: Boolean =
-    currentUserEmail.trim().equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true)
+    currentUserEmailVerified &&
+      currentUserEmail.trim().equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true)
 
   private val _activePortal =
     MutableStateFlow(
@@ -227,7 +229,7 @@ class TaskFlowViewModel(
 
   val isAdminAuthorized: StateFlow<Boolean> =
     repository
-      .observeAdminAuthorization(currentUserId, currentUserEmail)
+      .observeAdminAuthorization(currentUserId, currentUserEmail, currentUserEmailVerified)
       .catch { emit(isBootstrappedAdminEmail) }
       .stateIn(
         viewModelScope,
@@ -582,7 +584,11 @@ class TaskFlowViewModel(
     viewModelScope.launch {
       val authorizedAdmin =
         withTimeoutOrNull(10_000L) {
-          repository.checkAndEnsureAdminAuthorization(currentUserId, currentUserEmail)
+          repository.checkAndEnsureAdminAuthorization(
+            currentUserId,
+            currentUserEmail,
+            currentUserEmailVerified
+          )
         } ?: isBootstrappedAdminEmail
       if (authorizedAdmin) {
         _activePortal.value = PortalLoginTarget.ADMIN_DASHBOARD
@@ -595,7 +601,8 @@ class TaskFlowViewModel(
           .ensureUserProfile(
             uid = currentUserId,
             email = currentUserEmail,
-            displayName = currentUserDisplayName
+            displayName = currentUserDisplayName,
+            emailVerified = currentUserEmailVerified
           )
           .onFailure { err ->
             _bannerMessage.value =
@@ -2007,15 +2014,14 @@ class TaskFlowViewModel(
         .onSuccess { updateInfo ->
           val installedCode = com.example.util.AppUpdateManager.getInstalledVersionCode(context)
           if (updateInfo != null && installedCode < updateInfo.versionCode) {
-            val mandatoryUpdateInfo = updateInfo.copy(forceUpdate = true)
-            _appUpdateInfo.value = mandatoryUpdateInfo
+            _appUpdateInfo.value = updateInfo
             _showUpdateDialog.value = true
             if (_updateDownloadProgress.value.status == UpdateDownloadStatus.IDLE) {
               _updateDownloadProgress.value =
                 UpdateDownloadProgress(
                   status = UpdateDownloadStatus.UPDATE_AVAILABLE,
-                  targetVersionCode = mandatoryUpdateInfo.versionCode,
-                  targetVersionName = mandatoryUpdateInfo.versionName
+                  targetVersionCode = updateInfo.versionCode,
+                  targetVersionName = updateInfo.versionName
                 )
             }
           } else {
@@ -2042,11 +2048,12 @@ class TaskFlowViewModel(
   val updateDownloadProgress: StateFlow<UpdateDownloadProgress> = _updateDownloadProgress.asStateFlow()
 
   fun dismissUpdateDialog(context: android.content.Context) {
-    // Mandatory updates cannot be dismissed while installedVersionCode < latest_version_code
+    // Only mandatory updates (forceUpdate == true) cannot be dismissed while installedVersionCode < latest_version_code
     val info = _appUpdateInfo.value
     val installedCode = com.example.util.AppUpdateManager.getInstalledVersionCode(context)
     if (
       info != null &&
+        info.forceUpdate &&
         installedCode < info.versionCode &&
         !_updateDownloadProgress.value.isUpdateCompleted
     ) {

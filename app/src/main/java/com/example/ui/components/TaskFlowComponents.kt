@@ -1566,15 +1566,18 @@ fun AppUpdateDialog(
   val isUpdateCompleted = downloadProgress?.isUpdateCompleted == true
   val hasFailed = downloadProgress?.hasFailed == true
 
+  val canDismissDialog = isUpdateCompleted ||
+    (!versionInfo.forceUpdate && !isDownloading && !isVerifying && !isInstallationStarted)
+
   AlertDialog(
     onDismissRequest = {
-      if (isUpdateCompleted) {
+      if (canDismissDialog) {
         onDismiss()
       }
     },
     properties = androidx.compose.ui.window.DialogProperties(
-      dismissOnBackPress = isUpdateCompleted,
-      dismissOnClickOutside = isUpdateCompleted
+      dismissOnBackPress = canDismissDialog,
+      dismissOnClickOutside = canDismissDialog
     ),
     modifier = Modifier.testTag("update_dialog"),
     title = {
@@ -1763,13 +1766,15 @@ fun AppUpdateDialog(
             }
           }
 
-          Spacer(modifier = Modifier.height(4.dp))
-          Text(
-            text = "This is a required update. You must install the latest APK to continue using TaskFlow.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-            fontWeight = FontWeight.SemiBold
-          )
+          if (versionInfo.forceUpdate) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = "This is a required update. You must install the latest APK to continue using TaskFlow.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.error,
+              fontWeight = FontWeight.SemiBold
+            )
+          }
         }
       }
     },
@@ -1884,7 +1889,18 @@ fun AppUpdateDialog(
         }
       }
     },
-    dismissButton = null
+    dismissButton = if (!versionInfo.forceUpdate && !isUpdateCompleted && !isDownloading && !isVerifying && !isInstallationStarted) {
+      {
+        TextButton(
+          onClick = onDismiss,
+          modifier = Modifier.testTag("update_later_button")
+        ) {
+          Text("Later", fontWeight = FontWeight.Medium)
+        }
+      }
+    } else {
+      null
+    }
   )
 }
 

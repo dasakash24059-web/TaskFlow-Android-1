@@ -170,6 +170,7 @@ class MainActivity : ComponentActivity() {
     com.example.ui.theme.ThemePreferences.init(applicationContext)
     com.example.util.TaskFlowNotificationHelper.ensureNotificationChannels(applicationContext)
     ensureFirebaseInitialized(applicationContext)
+    com.example.util.configureAppCheck(applicationContext, intent)
     com.example.util.UnityAdsHelper.initialize(this)
     runCatching { enableEdgeToEdge() }
     setContent {
@@ -306,7 +307,8 @@ fun TaskFlowAppRoot(
     )
   } else {
     val isBootstrappedAdmin =
-      activeUser.email.orEmpty().trim().equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true)
+      activeUser.isEmailVerified &&
+        activeUser.email.orEmpty().trim().equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true)
     val resolvedInitialPortal =
       if (isBootstrappedAdmin) {
         PortalLoginTarget.ADMIN_DASHBOARD
@@ -366,7 +368,8 @@ private fun AuthenticatedWorkspace(
               currentUserId = user.uid,
               currentUserEmail = user.email ?: "",
               currentUserDisplayName = user.displayName ?: "",
-              initialPortal = initialPortal
+              initialPortal = initialPortal,
+              currentUserEmailVerified = user.isEmailVerified
             )
           }
         }
@@ -1016,11 +1019,6 @@ private fun AuthenticatedWorkspace(
                     },
                     onOpenWatchDialog = {
                       viewModel.prepareWatchEarnDialog(context)
-                    },
-                    onShowInterstitial = {
-                      if (currentActivity != null) {
-                        com.example.util.UnityAdsHelper.loadAndShowInterstitialAd(currentActivity)
-                      }
                     },
                     onNavigateToSpin = {
                       viewModel.setSpinScreenVisible(true)

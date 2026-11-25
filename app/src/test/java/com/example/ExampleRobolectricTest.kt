@@ -1777,7 +1777,7 @@ class ExampleRobolectricTest {
     val forcedInfo = AppVersionInfo(
       versionCode = installedCode + 1,
       versionName = "2.0",
-      apkUrl = "https://github.com/dasakash24059/TaskFlow/releases/download/v2.0/TaskFlow.apk",
+      apkUrl = "https://github.com/dasakash24059-web/TaskFlow/releases/download/v2.0/TaskFlow.apk",
       releaseNotes = "Major security patch",
       forceUpdate = true
     )
@@ -1869,16 +1869,20 @@ class ExampleRobolectricTest {
 
     // Normalize download URL tests
     assertEquals(
-      "https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk",
-      AppUpdateManager.normalizeDownloadUrl("https://github.com/dasakash24059/TaskFlow/releases/latest")
+      "https://github.com/dasakash24059-web/TaskFlow/releases/latest/download/TaskFlow.apk",
+      AppUpdateManager.normalizeDownloadUrl("https://github.com/dasakash24059-web/TaskFlow/releases/latest")
     )
     assertEquals(
-      "https://github.com/dasakash24059/TaskFlow/releases/download/v2.8/TaskFlow.apk",
-      AppUpdateManager.normalizeDownloadUrl("https://github.com/dasakash24059/TaskFlow/releases/tag/v2.8")
+      "https://github.com/dasakash24059-web/TaskFlow/releases/download/v2.8/TaskFlow.apk",
+      AppUpdateManager.normalizeDownloadUrl("https://github.com/dasakash24059-web/TaskFlow/releases/tag/v2.8")
     )
     assertEquals(
       "https://example.com/custom.apk",
       AppUpdateManager.normalizeDownloadUrl("https://example.com/custom.apk")
+    )
+    assertEquals(
+      "https://dasakash24059-web.github.io/TaskFlow/version.json",
+      AppUpdateManager.DEFAULT_VERSION_URL
     )
   }
 

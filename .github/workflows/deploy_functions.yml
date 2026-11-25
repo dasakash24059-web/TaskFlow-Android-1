@@ -1,48 +1,116 @@
-name: Deploy Firebase Functions
+name: Deploy Firebase Functions, Indexes & Security Rules
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'functions/**'
-      - 'firebase.json'
-      - '.firebaserc'
-      - 'firestore.rules'
   workflow_dispatch:
+    inputs:
+      confirm_production_deploy:
+        description: 'Type DEPLOY-TASKFLOW-8852D to authorize production deployment to taskflow-8852d'
+        required: true
+        default: ''
+        type: string
+
+concurrency:
+  group: firebase-production-deploy-taskflow-8852d
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_TASKFLOW_8852D }}
     steps:
+      - name: Verify Explicit Production Deployment Authorization & Credentials
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.confirm_production_deploy }}" != "DEPLOY-TASKFLOW-8852D" ]; then
+            echo "::error::Production deployment aborted: confirm_production_deploy input must equal 'DEPLOY-TASKFLOW-8852D'."
+            exit 1
+          fi
+          if [ -z "${FIREBASE_SERVICE_ACCOUNT:-}" ] && [ -z "${FIREBASE_TOKEN:-}" ]; then
+            echo "::error::Missing Firebase deployment credentials! Configure FIREBASE_SERVICE_ACCOUNT_TASKFLOW_8852D or FIREBASE_TOKEN in GitHub Repository Secrets."
+            exit 1
+          fi
+          echo "Explicit production deployment authorization and credentials confirmed for project taskflow-8852d."
+
       - name: Checkout Repo
         uses: actions/checkout@v4
+
+      - name: Set up JDK 21 for Firebase Emulator Rules Verification
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
           cache: 'npm'
           cache-dependency-path: 'functions/package.json'
 
-      - name: Install Dependencies
+      - name: Cache Firebase Emulator binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: ${{ runner.os }}-firebase-emulators-v2
+
+      - name: Install Dependencies & Run All 15 Cloud Functions Verification Suites
         run: |
+          set -euo pipefail
           cd functions
           npm install
+          node --test \
+            test_audit_remediation.js \
+            test_campaign_admin.js \
+            test_campaign_click_issuance.js \
+            test_campaign_conversions.js \
+            test_campaign_tracking_foundation.js \
+            test_p0_remediation.js \
+            test_phase3d_remediation.js \
+            test_proof_upload_phase_f3.js \
+            test_step9a_backend.js
+          node test_phase3e_e2e.js
+          node test_promo_backend.js
+          node test_rewards_step5.js
+          node test_scratch_backend.js
+          node test_security.js
+          node test_signature.js
 
-      - name: Deploy to Firebase
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: '${{ secrets.GITHUB_TOKEN }}'
-          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_TASKFLOW_8852D }}'
-          channelId: live
-          projectId: taskflow-8852d
-        continue-on-error: true
-
-      - name: Fallback Firebase Deploy CLI
-        if: env.FIREBASE_TOKEN != ''
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+      - name: Run All 5 Root Firebase Emulator Security Rules Test Suites
         run: |
+          set -euo pipefail
+          npx --yes firebase-tools emulators:exec --config firebase.emulator.json --project demo-no-project --only auth,firestore,storage "node --test --test-concurrency=1 storage.test.js firestore.test.js firestore.promo.test.js firestore.withdrawal.test.js firestore.campaign_tracking.test.js"
+
+      - name: Ordered Firebase CLI Deployment (1. Indexes -> 2. All 37 Cloud Functions -> 3. Firestore & Storage Rules)
+        if: env.FIREBASE_TOKEN != '' || env.FIREBASE_SERVICE_ACCOUNT != ''
+        run: |
+          set -euo pipefail
           npm install -g firebase-tools
-          firebase deploy --only functions,firestore:rules --project taskflow-8852d --token "$FIREBASE_TOKEN"
+
+          AUTH_ARGS=()
+          CleanupCreds() {
+            rm -f "$RUNNER_TEMP/firebase-sa.json"
+          }
+          trap CleanupCreds EXIT
+
+          if [ -n "${FIREBASE_SERVICE_ACCOUNT:-}" ]; then
+            echo "Authenticating Firebase CLI with least-privilege service account (FIREBASE_SERVICE_ACCOUNT_TASKFLOW_8852D)..."
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-sa.json"
+            export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-sa.json"
+          elif [ -n "${FIREBASE_TOKEN:-}" ]; then
+            echo "Authenticating Firebase CLI with FIREBASE_TOKEN..."
+            AUTH_ARGS=(--token "$FIREBASE_TOKEN")
+          else
+            echo "::error::Neither FIREBASE_SERVICE_ACCOUNT_TASKFLOW_8852D nor FIREBASE_TOKEN is configured in GitHub Secrets."
+            exit 1
+          fi
+
+          echo "Step 1/3: Deploying Firestore Composite Indexes..."
+          firebase deploy --only firestore:indexes --project taskflow-8852d "${AUTH_ARGS[@]}"
+
+          echo "Step 2/3: Deploying all 37 Cloud Functions..."
+          firebase deploy --only functions --project taskflow-8852d "${AUTH_ARGS[@]}"
+
+          echo "Step 3/3: Deploying Firestore Rules and Storage Rules..."
+          firebase deploy --only firestore:rules,storage --project taskflow-8852d "${AUTH_ARGS[@]}"

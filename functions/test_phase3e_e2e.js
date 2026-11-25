@@ -397,9 +397,10 @@ async function runTests() {
       { db, now: nowFn, serverTimestamp: ts }
     );
     assert.strictEqual(clickRes.success, true);
-    assert.ok(clickRes.clickId);
+    assert.strictEqual(clickRes.clickId, undefined);
     assert.ok(clickRes.trackingUrl.startsWith("https://partner.example.com/offer/101"));
-    assert.ok(clickRes.trackingUrl.includes(clickRes.clickId));
+    const trackedClickId = (/clk_[a-f0-9]{32}/.exec(clickRes.trackingUrl) || [])[0] || "";
+    assert.match(trackedClickId, /^clk_/);
 
     // Wallet MUST NOT be credited on click
     const userAfterClick = (await db.collection("users").doc("user_1").get()).data();
@@ -408,7 +409,7 @@ async function runTests() {
     // Step E: Verified S2S postback arrives -> held in PENDING because requireAdminApproval=true
     const pbParams = {
       networkId: "net_alpha",
-      click_id: clickRes.clickId,
+      click_id: trackedClickId,
       txn_id: "ext_txn_e2e_001",
       status: "approved",
       campaign_id: "camp_e2e_1",

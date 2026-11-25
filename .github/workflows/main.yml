@@ -8,6 +8,17 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish GitHub Release (ONLY after Firebase backend deployment & smoke tests pass)'
+        required: false
+        default: false
+        type: boolean
+      release_tag:
+        description: 'Release tag to publish (e.g. v6.4)'
+        required: false
+        default: 'v6.4'
+        type: string
 
 permissions:
   contents: write
@@ -30,11 +41,13 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Restore and Verify debug.keystore from GitHub Secret
+      - name: Restore and Verify Signing Keystore from GitHub Secret
         env:
           KEYSTORE_BASE64: ${{ secrets.TASKFLOW_DEBUG_KEYSTORE_BASE64 }}
         run: |
+          set -euo pipefail
           EXPECTED_SHA1="a7aacdf1fa3e6bda90b72480c73200f8a6c2ea09"
+          EXPECTED_SHA256="6a6158a49800ec46c4e4cb1b93253ff369686ab308cf72ad3472b022facd7b7f"
 
           if [ -z "$KEYSTORE_BASE64" ]; then
             echo "::error::GitHub Secret 'TASKFLOW_DEBUG_KEYSTORE_BASE64' সেট করা নেই (Missing or empty)! অনুগ্রহ করে GitHub Repository -> Settings -> Secrets and variables -> Actions-এ গিয়ে TASKFLOW_DEBUG_KEYSTORE_BASE64 যোগ করুন।"
@@ -55,19 +68,39 @@ jobs:
 
           KEYSTORE_INFO=$(keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android 2>&1 || true)
           KEYSTORE_SHA1=$(printf '%s\n' "$KEYSTORE_INFO" | grep -i "SHA1:" | head -n 1 | awk '{print tolower($NF)}' | tr -d ':')
+          KEYSTORE_SHA256=$(printf '%s\n' "$KEYSTORE_INFO" | grep -i "SHA256:" | head -n 1 | awk '{print tolower($NF)}' | tr -d ':')
 
-          if [ -z "$KEYSTORE_SHA1" ]; then
-            echo "::error::Restored debug.keystore ফাইলটি একটি বৈধ Android Debug Keystore নয় (alias: androiddebugkey, storepass: android পাওয়া যায়নি)।"
+          if [ -z "$KEYSTORE_SHA1" ] || [ -z "$KEYSTORE_SHA256" ]; then
+            echo "::error::Restored debug.keystore ফাইলটি একটি বৈধ TaskFlow Keystore নয় (alias: androiddebugkey, storepass: android পাওয়া যায়নি)।"
             rm -f debug.keystore
             exit 1
           fi
 
-          echo "Restored Keystore SHA-1: $KEYSTORE_SHA1"
-          echo "Expected Firebase SHA-1: $EXPECTED_SHA1"
+          echo "Restored Keystore SHA-1  : $KEYSTORE_SHA1"
+          echo "Expected Firebase SHA-1  : $EXPECTED_SHA1"
+          echo "Restored Keystore SHA-256: $KEYSTORE_SHA256"
+          echo "Expected AppUpdate SHA256: $EXPECTED_SHA256"
 
-          if [ "$KEYSTORE_SHA1" != "$EXPECTED_SHA1" ]; then
-            echo "::error::Keystore SHA-1 মিলছে না! পাওয়া গেছে: $KEYSTORE_SHA1, কিন্তু Firebase-এ রেজিস্টার করা আছে: $EXPECTED_SHA1। নতুন তৈরি করা Keystore ব্যবহার না করে AI Studio-এর আসল debug.keystore.base64 ব্যবহার করুন।"
+          if [ "$KEYSTORE_SHA1" != "$EXPECTED_SHA1" ] || [ "$KEYSTORE_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "::error::Keystore fingerprint মিলছে না! পাওয়া গেছে SHA-1=$KEYSTORE_SHA1 / SHA-256=$KEYSTORE_SHA256, কিন্তু প্রতিষ্ঠিত TaskFlow signing identity হলো SHA-1=$EXPECTED_SHA1 / SHA-256=$EXPECTED_SHA256।"
             rm -f debug.keystore
+            exit 1
+          fi
+
+          # Prepare my-upload-key.jks with alias 'upload' from the verified TaskFlow certificate
+          # so signingConfigs.getByName("release") in app/build.gradle.kts produces a genuine
+          # Release APK (BuildConfig.DEBUG == false, Play Integrity, R8, production Unity Ads)
+          # signed with the exact established TaskFlow SHA-1 and SHA-256 identity.
+          cp debug.keystore my-upload-key.jks
+          keytool -changealias -keystore my-upload-key.jks -storepass android -keypass android -alias androiddebugkey -destalias upload
+
+          UPLOAD_INFO=$(keytool -list -v -keystore my-upload-key.jks -alias upload -storepass android -keypass android 2>&1 || true)
+          UPLOAD_SHA1=$(printf '%s\n' "$UPLOAD_INFO" | grep -i "SHA1:" | head -n 1 | awk '{print tolower($NF)}' | tr -d ':')
+          UPLOAD_SHA256=$(printf '%s\n' "$UPLOAD_INFO" | grep -i "SHA256:" | head -n 1 | awk '{print tolower($NF)}' | tr -d ':')
+
+          if [ "$UPLOAD_SHA1" != "$EXPECTED_SHA1" ] || [ "$UPLOAD_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "::error::Release signing keystore (my-upload-key.jks) fingerprint mismatch after alias mapping!"
+            rm -f debug.keystore my-upload-key.jks
             exit 1
           fi
 
@@ -75,7 +108,7 @@ jobs:
             cp google-services.json app/google-services.json
           fi
 
-      - name: Set up Node.js for Firebase Emulator
+      - name: Set up Node.js for Firebase Emulator & Cloud Functions Tests
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -84,89 +117,143 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/firebase/emulators
-          key: ${{ runner.os }}-firebase-emulators-v1
+          key: ${{ runner.os }}-firebase-emulators-v2
 
       - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Run All Unit & Firebase Emulator Rule Tests
-        run: npx --yes firebase-tools emulators:exec --config firebase.emulator.json --project demo-no-project --only auth,firestore "gradle testDebugUnitTest"
-
-      - name: Build Debug APK
-        run: gradle assembleDebug
-
-      - name: Verify APK Signing Certificate
+      - name: Run All 15 Cloud Functions Backend Test Suites (9 node:test + 6 Custom Assertion Suites)
         run: |
-          EXPECTED_SHA1="a7aacdf1fa3e6bda90b72480c73200f8a6c2ea09"
-          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          set -euo pipefail
+          cd functions
+          npm install
+          node --test \
+            test_audit_remediation.js \
+            test_campaign_admin.js \
+            test_campaign_click_issuance.js \
+            test_campaign_conversions.js \
+            test_campaign_tracking_foundation.js \
+            test_p0_remediation.js \
+            test_phase3d_remediation.js \
+            test_proof_upload_phase_f3.js \
+            test_step9a_backend.js
+          node test_phase3e_e2e.js
+          node test_promo_backend.js
+          node test_rewards_step5.js
+          node test_scratch_backend.js
+          node test_security.js
+          node test_signature.js
 
-          if [ ! -f "$APK_PATH" ]; then
-            echo "::error::Built APK পাওয়া যায়নি: $APK_PATH"
+      - name: Run All Unit, Storage Rules & Firestore Emulator Rule Tests
+        run: |
+          set -euo pipefail
+          npx --yes firebase-tools emulators:exec --config firebase.emulator.json --project demo-no-project --only auth,firestore,storage "node --test --test-concurrency=1 storage.test.js firestore.test.js firestore.promo.test.js firestore.withdrawal.test.js firestore.campaign_tracking.test.js && gradle testDebugUnitTest"
+
+      - name: Build Production Release APK (BuildConfig.DEBUG == false, Play Integrity, R8)
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          STORE_PASSWORD: android
+          KEY_PASSWORD: android
+        run: |
+          set -euo pipefail
+          gradle :app:assembleRelease
+
+      - name: Select Release APK & Enforce Fail-Closed Signing Identity (SHA-1 & SHA-256)
+        id: select_and_verify_apk
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA1="a7aacdf1fa3e6bda90b72480c73200f8a6c2ea09"
+          EXPECTED_SHA256="6a6158a49800ec46c4e4cb1b93253ff369686ab308cf72ad3472b022facd7b7f"
+
+          SELECTED_APK="app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$SELECTED_APK" ]; then
+            echo "::error::Built Release APK পাওয়া যায়নি: $SELECTED_APK"
             exit 1
           fi
 
-          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           APKSIGNER=""
           if [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR/build-tools" ]; then
-            APKSIGNER=$(find "$SDK_DIR/build-tools" -maxdepth 2 \( -type f -o -type l \) -name apksigner 2>/dev/null | sort -V | tail -n 1)
+            APKSIGNER=$(find "$SDK_DIR/build-tools" -maxdepth 2 \( -type f -o -type l \) -name apksigner 2>/dev/null | sort -V | tail -n 1 || true)
           fi
 
           ACTUAL_SHA1=""
+          ACTUAL_SHA256=""
           if [ -n "$APKSIGNER" ] && [ -x "$APKSIGNER" ]; then
-            CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$APK_PATH" 2>&1 || true)
+            CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$SELECTED_APK" 2>&1 || true)
             echo "$CERT_OUTPUT"
             ACTUAL_SHA1=$(printf '%s\n' "$CERT_OUTPUT" | grep -i "certificate SHA-1 digest:" | head -n 1 | awk '{print tolower($NF)}' | tr -d ':')
+            ACTUAL_SHA256=$(printf '%s\n' "$CERT_OUTPUT" | grep -i "certificate SHA-256 digest:" | head -n 1 | awk '{print tolower($NF)}' | tr -d ':')
           fi
 
-          if [ -z "$ACTUAL_SHA1" ]; then
-            CERT_OUTPUT=$(keytool -printcert -jarfile "$APK_PATH" 2>&1 || true)
+          if [ -z "$ACTUAL_SHA1" ] || [ -z "$ACTUAL_SHA256" ]; then
+            CERT_OUTPUT=$(keytool -printcert -jarfile "$SELECTED_APK" 2>&1 || true)
             echo "$CERT_OUTPUT"
             ACTUAL_SHA1=$(printf '%s\n' "$CERT_OUTPUT" | grep -i "SHA1:" | head -n 1 | awk '{print tolower($NF)}' | tr -d ':')
+            ACTUAL_SHA256=$(printf '%s\n' "$CERT_OUTPUT" | grep -i "SHA256:" | head -n 1 | awk '{print tolower($NF)}' | tr -d ':')
           fi
 
-          if [ -z "$ACTUAL_SHA1" ]; then
-            echo "::error::APK থেকে Signing Certificate SHA-1 পড়া সম্ভব হয়নি!"
+          if [ -z "$ACTUAL_SHA1" ] || [ -z "$ACTUAL_SHA256" ]; then
+            echo "::error::Release APK থেকে Signing Certificate SHA-1 / SHA-256 পড়া সম্ভব হয়নি!"
             exit 1
           fi
 
-          echo "Verified APK SHA-1 : $ACTUAL_SHA1"
-          echo "Expected SHA-1     : $EXPECTED_SHA1"
+          echo "Selected Release APK Path : $SELECTED_APK"
+          echo "Verified Release SHA-1    : $ACTUAL_SHA1"
+          echo "Expected SHA-1            : $EXPECTED_SHA1"
+          echo "Verified Release SHA-256  : $ACTUAL_SHA256"
+          echo "Expected SHA-256          : $EXPECTED_SHA256"
 
           if [ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]; then
-            echo "::error::APK Signing Certificate SHA-1 ($ACTUAL_SHA1) এবং Firebase Registered SHA-1 ($EXPECTED_SHA1) মিলছে না!"
+            echo "::error::Release APK Signing Certificate SHA-1 ($ACTUAL_SHA1) এবং Firebase Registered SHA-1 ($EXPECTED_SHA1) মিলছে না!"
             exit 1
           fi
 
-          echo "SUCCESS: APK Signing Certificate SHA-1 matches Firebase configuration!"
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "::error::Release APK Signing Certificate SHA-256 ($ACTUAL_SHA256) এবং Installed AppUpdateManager SHA-256 ($EXPECTED_SHA256) মিলছে না!"
+            exit 1
+          fi
 
-      - name: Prepare Versioned Release APK
+          echo "selected_apk=$SELECTED_APK" >> $GITHUB_OUTPUT
+          echo "SUCCESS: Release APK ($SELECTED_APK) matches established TaskFlow SHA-1 and SHA-256 signing identity!"
+
+      - name: Prepare Versioned Release Assets (Explicit Tag or Manual Release Dispatch Only)
         id: prepare_apk
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
         run: |
+          set -euo pipefail
           VC=$(grep -E 'versionCode\s*=' app/build.gradle.kts | head -n 1 | tr -d ' ' | cut -d '=' -f 2)
           VN=$(grep -E 'versionName\s*=' app/build.gradle.kts | head -n 1 | tr -d ' "' | cut -d '=' -f 2)
-          VERSION="${GITHUB_REF_NAME}"
-          if [ -z "$VERSION" ] || [ "$VERSION" = "main" ] || [ "$VERSION" = "master" ]; then
-            VERSION="v${VN:-2.8}"
-          fi
-          TAG_NAME="v${VN:-2.8}"
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
             TAG_NAME="${GITHUB_REF_NAME}"
+          elif [ -n "${{ inputs.release_tag }}" ]; then
+            TAG_NAME="${{ inputs.release_tag }}"
+          else
+            TAG_NAME="v${VN:-6.4}"
+          fi
+          VERSION="$TAG_NAME"
+
+          SOURCE_APK="${{ steps.select_and_verify_apk.outputs.selected_apk }}"
+          if [ -z "$SOURCE_APK" ] || [ ! -f "$SOURCE_APK" ]; then
+            echo "::error::Verified release APK source file missing: $SOURCE_APK"
+            exit 1
           fi
 
-          RELEASE_APK="app/build/outputs/apk/debug/TaskFlow-${VERSION}.apk"
-          LATEST_APK="app/build/outputs/apk/debug/TaskFlow.apk"
-          LATEST_NAMED_APK="app/build/outputs/apk/debug/TaskFlow-latest.apk"
-          cp "app/build/outputs/apk/debug/app-debug.apk" "$RELEASE_APK"
-          cp "app/build/outputs/apk/debug/app-debug.apk" "$LATEST_APK"
-          cp "app/build/outputs/apk/debug/app-debug.apk" "$LATEST_NAMED_APK"
+          RELEASE_APK="app/build/outputs/apk/release/TaskFlow-${VERSION}.apk"
+          LATEST_APK="app/build/outputs/apk/release/TaskFlow.apk"
+          LATEST_NAMED_APK="app/build/outputs/apk/release/TaskFlow-latest.apk"
+          cp "$SOURCE_APK" "$RELEASE_APK"
+          cp "$SOURCE_APK" "$LATEST_APK"
+          cp "$SOURCE_APK" "$LATEST_NAMED_APK"
 
           cat <<EOF > version.json
           {
-          "latest_version_code": ${VC:-10},
-          "latest_version_name": "${VN:-2.9}",
-          "download_url": "https://github.com/dasakash24059/TaskFlow/releases/latest/download/TaskFlow.apk",
-          "release_notes": "TaskFlow update v${VN:-2.9}: Complete full APK update with updated UI layouts, button sizes, branding assets, colors, and direct Daily Check-in rewards.",
-          "force_update": false
+            "latest_version_code": ${VC:-44},
+            "latest_version_name": "${VN:-6.4}",
+            "download_url": "https://github.com/dasakash24059-web/TaskFlow/releases/latest/download/TaskFlow.apk",
+            "release_notes": "TaskFlow v${VN:-6.4}: Phase F.3 zero-trust server-ticketed proof upload pipeline, App Check debug/release Play Integrity separation, APK signature verification, and full security hardening.",
+            "force_update": false
           }
           EOF
           echo "apk_path=$RELEASE_APK" >> $GITHUB_OUTPUT
@@ -175,23 +262,23 @@ jobs:
           echo "version_json=version.json" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
-          echo "Prepared APKs: $RELEASE_APK and $LATEST_APK"
+          echo "Prepared verified release APKs: $RELEASE_APK and $LATEST_APK"
 
-      - name: Clean up restored keystore
+      - name: Clean up restored keystores
         if: always()
-        run: rm -f debug.keystore
+        run: rm -f debug.keystore my-upload-key.jks
 
-      - name: Upload APK Artifact
+      - name: Upload CI Verified Release APK Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: TaskFlow-APK
           path: |
-            app/build/outputs/apk/debug/TaskFlow-*.apk
-            app/build/outputs/apk/debug/TaskFlow.apk
+            ${{ steps.select_and_verify_apk.outputs.selected_apk }}
             version.json
           if-no-files-found: error
 
-      - name: Create or Update GitHub Release
+      - name: Create or Update GitHub Release (Explicit Tag or Manual Release Dispatch Only)
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
         uses: softprops/action-gh-release@v2
         with:
           name: "TaskFlow Release ${{ steps.prepare_apk.outputs.version }}"

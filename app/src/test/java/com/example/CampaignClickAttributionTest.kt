@@ -64,7 +64,6 @@ class CampaignClickAttributionTest {
           recordedCalls += fnName to map
           mapOf(
             "success" to true,
-            "clickId" to "clk_a1b2c3d4e5f60718293a4b5c6d7e8f90",
             "campaignId" to "camp_finance_01",
             "networkId" to "net_alpha",
             "verificationMode" to CampaignVerificationMode.AFFILIATE_POSTBACK.name,
@@ -92,7 +91,6 @@ class CampaignClickAttributionTest {
 
     assertTrue("Expected createCampaignClick to succeed", result.isSuccess)
     val issued = result.getOrThrow()
-    assertEquals("clk_a1b2c3d4e5f60718293a4b5c6d7e8f90", issued.clickId)
     assertEquals("camp_finance_01", issued.campaignId)
     assertEquals("net_alpha", issued.networkId)
     assertEquals(CampaignVerificationMode.AFFILIATE_POSTBACK, issued.resolvedVerificationMode())
@@ -118,7 +116,6 @@ class CampaignClickAttributionTest {
         rewardCallableInvoker = { _, _ ->
           mapOf(
             "success" to true,
-            "clickId" to "clk_1234567890abcdef1234567890abcdef",
             "campaignId" to "camp_finance_01",
             "trackingUrl" to "http://insecure.example.com/phish"
           )
@@ -172,7 +169,6 @@ class CampaignClickAttributionTest {
               gate.await()
               mapOf(
                 "success" to true,
-                "clickId" to "clk_99887766554433221100aabbccddeeff",
                 "campaignId" to "camp_tracked_99",
                 "networkId" to "net_s2s",
                 "verificationMode" to "ADVERTISER_S2S_API",

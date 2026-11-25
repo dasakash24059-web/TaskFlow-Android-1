@@ -115,6 +115,8 @@ abstract class FirestoreEmulatorTestBase {
       val endpoint = URL("http://$EMULATOR_HOST:$AUTH_PORT/emulator/v1/projects/$PROJECT_ID/accounts")
       val conn = (endpoint.openConnection() as HttpURLConnection).apply {
         requestMethod = "DELETE"
+        connectTimeout = 1500
+        readTimeout = 3000
         setRequestProperty("Authorization", "Bearer owner")
       }
       conn.responseCode
@@ -130,6 +132,8 @@ abstract class FirestoreEmulatorTestBase {
         )
       val conn = (endpoint.openConnection() as HttpURLConnection).apply {
         requestMethod = "POST"
+        connectTimeout = 1500
+        readTimeout = 3000
         setRequestProperty("Authorization", "Bearer owner")
         setRequestProperty("Content-Type", "application/json")
         doOutput = true
@@ -200,13 +204,25 @@ abstract class FirestoreEmulatorTestBase {
       val hasGlobalFirebase =
         runCatching {
           val probe = ProcessBuilder("firebase", "--version").redirectErrorStream(true).start()
-          probe.waitFor() == 0
+          val finished = probe.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+          if (!finished) {
+            probe.destroyForcibly()
+            false
+          } else {
+            probe.exitValue() == 0
+          }
         }.getOrDefault(false)
-      return if (hasGlobalFirebase) {
-        listOf("firebase") + baseArgs
-      } else {
-        listOf("npx", "--yes", "firebase-tools") + baseArgs
+      if (hasGlobalFirebase) {
+        return listOf("firebase") + baseArgs
       }
+      if (System.getenv("FIRESTORE_EMULATOR_ALLOW_NPX") == "true") {
+        return listOf("npx", "--yes", "firebase-tools") + baseArgs
+      }
+      error(
+        "Firebase CLI not found and emulators are not running on $EMULATOR_HOST:$AUTH_PORT/$FIRESTORE_PORT. " +
+          "Start emulators manually via `firebase emulators:start --config firebase.emulator.json --only auth,firestore` " +
+          "or set FIRESTORE_EMULATOR_ALLOW_NPX=true."
+      )
     }
 
     private fun ensureEmulatorsAndRulesReady(databaseId: String) {
@@ -216,11 +232,11 @@ abstract class FirestoreEmulatorTestBase {
         if (!isPortOpen(AUTH_PORT) || !isPortOpen(FIRESTORE_PORT)) {
           val cmd = resolveFirebaseCommand(rootDir)
           val logLines = Collections.synchronizedList(mutableListOf<String>())
-          val process =
-            ProcessBuilder(cmd)
-              .directory(rootDir)
-              .redirectErrorStream(true)
-              .start()
+          val processBuilder = ProcessBuilder(cmd)
+            .directory(rootDir)
+            .redirectErrorStream(true)
+          processBuilder.environment()["NPM_CONFIG_UPDATE_NOTIFIER"] = "false"
+          val process = processBuilder.start()
           managedEmulatorProcess = process
 
           Runtime.getRuntime().addShutdownHook(

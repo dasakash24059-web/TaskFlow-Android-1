@@ -177,7 +177,7 @@ fun ScratchCardScreen(
           )
           Spacer(modifier = Modifier.height(4.dp))
           Text(
-            text = "+${formatCoins(revealedCoins)} Coins",
+            text = "+${formatCoins(revealedCoins)}",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.SemiBold,
             color = tfColors.goldText,

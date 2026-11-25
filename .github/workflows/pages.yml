@@ -1,4 +1,4 @@
-name: Deploy TaskFlow Website to GitHub Pages
+name: Deploy TaskFlow Website & Controlled Version Metadata to GitHub Pages
 
 on:
   push:
@@ -8,9 +8,13 @@ on:
     paths:
       - 'index.html'
       - 'public/**'
-      - 'version.json'
-      - '.github/workflows/pages.yml'
   workflow_dispatch:
+    inputs:
+      publish_version_json:
+        description: 'Publish version.json update metadata (ONLY after Firebase backend deploy, smoke tests, and GitHub Release APK verification)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -35,17 +39,53 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Stage static website files only
+      - name: Stage static website files (Gate version.json exclusively on manual workflow_dispatch confirmation)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUBLISH_VERSION_JSON: ${{ inputs.publish_version_json }}
+          PAGES_URL: "https://dasakash24059-web.github.io/TaskFlow/version.json"
         run: |
+          set -euo pipefail
           rm -rf _site
           mkdir -p _site
           cp index.html _site/index.html
           if [ -d public ]; then
             cp -r public _site/public
           fi
-          if [ -f version.json ]; then
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$PUBLISH_VERSION_JSON" = "true" ]; then
+            echo "Explicit manual workflow_dispatch release announcement authorized: validating and staging repository version.json."
+            if [ ! -s version.json ]; then
+              echo "::error::Repository version.json is missing or empty!"
+              exit 1
+            fi
             cp version.json _site/version.json
+          else
+            echo "Ordinary website push (or workflow_dispatch with publish_version_json != true): preserving live version.json from $PAGES_URL."
+            if ! curl -fsSL --retry 3 --retry-delay 2 "$PAGES_URL" -o _site/version.json; then
+              echo "::error::FAIL-CLOSED: Could not fetch existing live version.json from $PAGES_URL. Aborting Pages deployment to prevent deleting or overwriting live version metadata."
+              exit 1
+            fi
+            if [ ! -s _site/version.json ]; then
+              echo "::error::FAIL-CLOSED: Fetched live version.json from $PAGES_URL is empty (0 bytes). Aborting Pages deployment."
+              exit 1
+            fi
           fi
+
+          node -e '
+            const fs = require("fs");
+            const raw = fs.readFileSync("_site/version.json", "utf8");
+            const parsed = JSON.parse(raw);
+            if (typeof parsed.latest_version_code !== "number" || typeof parsed.latest_version_name !== "string" || typeof parsed.download_url !== "string" || !parsed.download_url.startsWith("https://")) {
+              throw new Error("Invalid version.json schema: missing required fields (latest_version_code, latest_version_name, download_url)");
+            }
+            console.log("Validated _site/version.json:", JSON.stringify({
+              latest_version_code: parsed.latest_version_code,
+              latest_version_name: parsed.latest_version_name,
+              download_url: parsed.download_url
+            }));
+          '
+
           touch _site/.nojekyll
 
       - name: Configure GitHub Pages

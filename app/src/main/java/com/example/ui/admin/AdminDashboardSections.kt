@@ -495,7 +495,7 @@ fun AdminControlCenterHomeScreen(
           color = AdminSurfaceGrey
         ) {
           Text(
-            text = "10 Modules",
+            text = "${ADMIN_10_MAIN_SECTIONS.size} Modules",
             style = MaterialTheme.typography.labelSmall,
             color = AdminTextSecondary,
             fontWeight = FontWeight.SemiBold,

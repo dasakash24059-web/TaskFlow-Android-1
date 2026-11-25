@@ -687,9 +687,9 @@ data class CampaignConversionRecord(
 
 /**
  * Safe, secret-free server response returned by the `createCampaignClick` Cloud Function.
+ * Raw server `clickId` is omitted from client DTOs (M-02).
  */
 data class IssuedCampaignClickResult(
-  val clickId: String = "",
   val campaignId: String = "",
   val networkId: String = "",
   val verificationMode: String = CampaignVerificationMode.AFFILIATE_POSTBACK.name,

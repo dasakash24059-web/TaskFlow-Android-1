@@ -2245,6 +2245,13 @@ async function handleVerifyTelegramTaskMembership(request, deps = {}) {
   if (!userSnap.exists) {
     throw new HttpsError("not-found", "User profile not found.");
   }
+  const userData = userSnap.data() || {};
+  if (userData.approvalStatus !== "approved") {
+    throw new HttpsError(
+      "permission-denied",
+      "Your account must be approved before verifying Telegram tasks."
+    );
+  }
   if (!taskSnap.exists) {
     throw new HttpsError("not-found", "Telegram task not found.");
   }
@@ -3208,7 +3215,7 @@ async function verifyAdminAccess(
     return { uid, email };
   }
 
-  if (email === PROMO_BOOTSTRAPPED_ADMIN_EMAIL && token.email_verified !== false) {
+  if (email === PROMO_BOOTSTRAPPED_ADMIN_EMAIL && token.email_verified === true) {
     return { uid, email };
   }
 
@@ -4238,7 +4245,6 @@ async function handleCreateCampaignClick(request, deps = {}) {
         ) {
           return {
             success: true,
-            clickId: existingClick.clickId,
             campaignId: existingClick.campaignId,
             networkId: existingClick.networkId,
             verificationMode: existingClick.verificationMode,
@@ -4607,7 +4613,6 @@ async function handleCreateCampaignClick(request, deps = {}) {
 
     return {
       success: true,
-      clickId,
       campaignId,
       networkId,
       verificationMode,
@@ -5354,11 +5359,12 @@ async function executeConversionTransitionInTransaction({
         },
         { merge: true }
       );
+      const pendingModRefId = buildConversionModerationId(conversionId);
       transaction.set(logRef, {
         actionType: "CAMPAIGN",
         title: `Conversion Pending: ${campaignTitle.slice(0, 60)}`,
-        details: `Conversion ${conversionId} (${authoritativeRewardTf} TF) held in PENDING (${effectiveStatusReason || "awaiting approval"})`,
-        targetId: conversionId,
+        details: `Campaign: ${campaignId} • User: ${userId} • Ref: ${pendingModRefId} • ${authoritativeRewardTf} TF held in PENDING (${effectiveStatusReason || "awaiting approval"})`,
+        targetId: pendingModRefId,
         adminId: actorAdminInfo?.uid || "SYSTEM_POSTBACK",
         timestampMillis: nowMillis,
         createdAt: ts
@@ -5493,12 +5499,13 @@ async function executeConversionTransitionInTransaction({
         { merge: true }
       );
 
-      // 9. Write admin audit log
+      // 9. Write admin audit log using opaque moderation reference (never raw clickId)
+      const modRefId = buildConversionModerationId(conversionId);
       transaction.set(logRef, {
         actionType: "CAMPAIGN",
         title: `Conversion Approved (+${authoritativeRewardTf} TF)`,
-        details: `Campaign: ${campaignId} • User: ${userId} • Click: ${clickId} • Mode: ${verificationMode}`,
-        targetId: conversionId,
+        details: `Campaign: ${campaignId} • User: ${userId} • Ref: ${modRefId} • Mode: ${verificationMode}`,
+        targetId: modRefId,
         adminId: actorAdminInfo?.uid || "SYSTEM_POSTBACK",
         timestampMillis: nowMillis,
         createdAt: ts
@@ -5565,11 +5572,12 @@ async function executeConversionTransitionInTransaction({
         },
         { merge: true }
       );
+      const rejectModRefId = buildConversionModerationId(conversionId);
       transaction.set(logRef, {
         actionType: "CAMPAIGN",
         title: `Conversion Rejected: ${campaignTitle.slice(0, 60)}`,
-        details: `Campaign: ${campaignId} • User: ${userId} • Reason: ${effectiveStatusReason || "Rejected"}`,
-        targetId: conversionId,
+        details: `Campaign: ${campaignId} • User: ${userId} • Ref: ${rejectModRefId} • Reason: ${effectiveStatusReason || "Rejected"}`,
+        targetId: rejectModRefId,
         adminId: actorAdminInfo?.uid || "SYSTEM_POSTBACK",
         timestampMillis: nowMillis,
         createdAt: ts
@@ -5708,11 +5716,12 @@ async function executeConversionTransitionInTransaction({
       { merge: true }
     );
 
+    const reverseModRefId = buildConversionModerationId(conversionId);
     transaction.set(logRef, {
       actionType: "CAMPAIGN",
       title: `Conversion Reversed (-${authoritativeRewardTf} TF)`,
-      details: `Campaign: ${campaignId} • User: ${userId} • Recovered: ${revWallet.recoveredCoins} TF • Shortfall: ${revWallet.shortfallCoins} TF • Reason: ${effectiveStatusReason || "Reversal"}`,
-      targetId: conversionId,
+      details: `Campaign: ${campaignId} • User: ${userId} • Ref: ${reverseModRefId} • Recovered: ${revWallet.recoveredCoins} TF • Shortfall: ${revWallet.shortfallCoins} TF • Reason: ${effectiveStatusReason || "Reversal"}`,
+      targetId: reverseModRefId,
       adminId: actorAdminInfo?.uid || "SYSTEM_POSTBACK",
       timestampMillis: nowMillis,
       createdAt: ts
@@ -5996,23 +6005,17 @@ async function handleReviewCampaignConversion(request, deps = {}) {
       expectedState
     });
     const resolvedModerationId = buildConversionModerationId(result.conversionId);
-    if (usedModerationIdOnly) {
-      // Never return raw clickId, conv_<clickId>, or tx IDs embedding clickId to the Admin Moderation Queue client
-      const {
-        clickId: _stripClick,
-        conversionId: _stripConv,
-        idempotencyKey: _stripKey,
-        creditedTransactionId: _stripCreditTx,
-        reversalTransactionId: _stripRevTx,
-        ...safeResult
-      } = result;
-      return {
-        ...safeResult,
-        moderationId: resolvedModerationId
-      };
-    }
+    // Never return raw clickId, conv_<clickId>, or tx IDs embedding clickId to any caller
+    const {
+      clickId: _stripClick,
+      conversionId: _stripConv,
+      idempotencyKey: _stripKey,
+      creditedTransactionId: _stripCreditTx,
+      reversalTransactionId: _stripRevTx,
+      ...safeResult
+    } = result;
     return {
-      ...result,
+      ...safeResult,
       moderationId: resolvedModerationId
     };
   } catch (err) {
@@ -6384,4 +6387,982 @@ exports._leaderboardHandlers = {
   handleGetPublicLeaderboard,
   computeServerLeaderboardForPeriod
 };
+
+// =========================================================================
+// PHASE F.3 — SERVER-MEDIATED TASK PROOF UPLOAD TICKETS & FINALIZATION
+// =========================================================================
+
+const PROOF_UPLOAD_TICKETS_COLLECTION = "proof_upload_tickets";
+const PROOF_UPLOAD_LOCKS_COLLECTION = "proof_upload_locks";
+const PROOF_UPLOAD_TICKET_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const PROOF_UPLOAD_MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+const PROOF_UPLOAD_RATE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const PROOF_UPLOAD_MAX_TICKETS_PER_TASK_WINDOW = 5;
+const PROOF_UPLOAD_MAX_TICKETS_GLOBAL_WINDOW = 15;
+const PROOF_UPLOAD_DEFAULT_BUCKET = "taskflow-8852d.firebasestorage.app";
+
+const PROOF_UPLOAD_MIME_TO_EXT = Object.freeze({
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp"
+});
+
+function normalizeProofMimeType(rawMime) {
+  const cleaned = String(rawMime || "").trim().toLowerCase();
+  if (cleaned === "image/jpg") return "image/jpeg";
+  return Object.prototype.hasOwnProperty.call(PROOF_UPLOAD_MIME_TO_EXT, cleaned) ? cleaned : "";
+}
+
+function verifyImageMagicBytes(buffer, expectedMimeType) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 12) {
+    return false;
+  }
+  if (expectedMimeType === "image/jpeg") {
+    return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+  if (expectedMimeType === "image/png") {
+    return (
+      buffer[0] === 0x89 &&
+      buffer[1] === 0x50 &&
+      buffer[2] === 0x4e &&
+      buffer[3] === 0x47 &&
+      buffer[4] === 0x0d &&
+      buffer[5] === 0x0a &&
+      buffer[6] === 0x1a &&
+      buffer[7] === 0x0a
+    );
+  }
+  if (expectedMimeType === "image/webp") {
+    const riff = buffer.slice(0, 4).toString("ascii");
+    const webp = buffer.slice(8, 12).toString("ascii");
+    return riff === "RIFF" && webp === "WEBP";
+  }
+  return false;
+}
+
+function computeExpectedTaskRewardCoinsServer(taskData) {
+  const rc = Number(taskData?.rewardCoins || 0);
+  if (Number.isInteger(rc) && rc > 0) return rc;
+  const cents = Math.max(0, Math.floor(Number(taskData?.rewardCents || 0)));
+  return Math.floor((cents * 125) / 100);
+}
+
+function computeExpectedTaskRewardCentsServer(taskData) {
+  const rc = Number(taskData?.rewardCoins || 0);
+  if (Number.isInteger(rc) && rc > 0) {
+    return rc < 2 ? 1 : Math.floor((rc * 100) / 125);
+  }
+  return Math.max(0, Math.floor(Number(taskData?.rewardCents || 0)));
+}
+
+function getDefaultStorageBucket(deps = {}) {
+  if (deps.bucket) return deps.bucket;
+  if (admin && typeof admin.storage === "function") {
+    try {
+      return admin.storage().bucket(PROOF_UPLOAD_DEFAULT_BUCKET);
+    } catch (_) {
+      return admin.storage().bucket();
+    }
+  }
+  return null;
+}
+
+async function isTaskAvailableForSubmitterServer(firestoreDb, taskData, uid) {
+  const assigned = String(taskData?.assignedUserId || "").trim();
+  if (!assigned || assigned === uid) return true;
+  const createdBy = String(taskData?.createdBy || "").trim();
+  if (createdBy && assigned === createdBy) return true;
+  try {
+    const adminSnap = await firestoreDb.collection("admins").doc(assigned).get();
+    if (adminSnap && adminSnap.exists) return true;
+  } catch (_) {}
+  return false;
+}
+
+function isTaskWithinSubmissionQuotaServer(taskData) {
+  const target = Number(taskData?.targetSubmissions || 0);
+  if (!Number.isFinite(target) || target <= 0) return true;
+  const completed = Math.max(0, Number(taskData?.completedSubmissions || 0));
+  return completed < target;
+}
+
+async function safeDeleteUncommittedTicketObject(bucket, storagePath, firestoreDb, taskId, uid) {
+  if (!bucket || !storagePath) return false;
+  try {
+    if (firestoreDb && taskId && uid) {
+      const [multiSubSnap, legacySubSnap] = await Promise.all([
+        firestoreDb.collection("submissions").doc(`${taskId}_${uid}`).get(),
+        firestoreDb.collection("submissions").doc(taskId).get()
+      ]);
+      if (
+        (multiSubSnap?.exists && multiSubSnap.data()?.proofStoragePath === storagePath) ||
+        (legacySubSnap?.exists && legacySubSnap.data()?.proofStoragePath === storagePath)
+      ) {
+        // Never delete an object referenced by a committed submission
+        return false;
+      }
+    }
+    const file = bucket.file(storagePath);
+    if (file && typeof file.delete === "function") {
+      await file.delete({ ignoreNotFound: true });
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+function resolveNowMillis(deps = {}) {
+  if (typeof deps.nowMs === "number" && Number.isFinite(deps.nowMs)) {
+    return deps.nowMs;
+  }
+  if (typeof deps.now === "function") {
+    return deps.now();
+  }
+  return Date.now();
+}
+
+async function handleIssueTaskProofUploadTicket(request, deps = {}) {
+  if (!request.auth || !request.auth.uid) {
+    throw new HttpsError("unauthenticated", "Authentication required to upload task proof.");
+  }
+  const uid = String(request.auth.uid).trim();
+  const token = request.auth.token || {};
+  if (token.email_verified !== true) {
+    throw new HttpsError(
+      "permission-denied",
+      "A verified email address is required before uploading task proof."
+    );
+  }
+
+  const data = request.data || {};
+  const taskId = String(data.taskId || "").trim();
+  if (!taskId || taskId.length > 128 || !/^[A-Za-z0-9_-]+$/.test(taskId)) {
+    throw new HttpsError("invalid-argument", "Invalid taskId (must be 1-128 alphanumeric/underscore/hyphen characters).");
+  }
+
+  const contentType = normalizeProofMimeType(data.mimeType || data.contentType);
+  if (!contentType) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Invalid image MIME type. Only image/jpeg, image/png, and image/webp are permitted."
+    );
+  }
+
+  const sizeBytes = Number(data.sizeBytes);
+  if (
+    !Number.isInteger(sizeBytes) ||
+    sizeBytes <= 0 ||
+    sizeBytes > PROOF_UPLOAD_MAX_SIZE_BYTES
+  ) {
+    throw new HttpsError(
+      "invalid-argument",
+      `Invalid sizeBytes: proof file size must be an integer between 1 byte and ${PROOF_UPLOAD_MAX_SIZE_BYTES} bytes (5 MB).`
+    );
+  }
+
+  const sha256Hex = String(data.sha256Hex || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(sha256Hex)) {
+    throw new HttpsError("invalid-argument", "Invalid sha256Hex digest (must be 64 hex characters).");
+  }
+
+  const firestoreDb = deps.db || db;
+  const bucket = getDefaultStorageBucket(deps);
+  const nowMillis = resolveNowMillis(deps);
+  const ts = typeof deps.serverTimestamp === "function" ? deps.serverTimestamp() : getDefaultServerTimestamp();
+
+  // 1. Authoritative User Profile Approval Gate in Named Firestore Database
+  const userSnap = await firestoreDb.collection("users").doc(uid).get();
+  if (!userSnap || !userSnap.exists) {
+    throw new HttpsError("permission-denied", "User profile does not exist. Complete registration first.");
+  }
+  const userData = userSnap.data() || {};
+  const approvalStatus = String(userData.approvalStatus || "pending").trim().toLowerCase();
+  if (approvalStatus !== "approved") {
+    throw new HttpsError(
+      "permission-denied",
+      `Account approvalStatus is '${approvalStatus}'. Only approved users can upload task proof.`
+    );
+  }
+
+  // 2. Authoritative Task Validation
+  const taskSnap = await firestoreDb.collection("tasks").doc(taskId).get();
+  if (!taskSnap || !taskSnap.exists) {
+    throw new HttpsError("not-found", `Task '${taskId}' does not exist.`);
+  }
+  const taskData = taskSnap.data() || {};
+  if (taskData.isActive === false) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This task is currently deactivated by Admin and is not accepting submissions."
+    );
+  }
+  const taskStatus = String(taskData.status || "").trim().toLowerCase();
+  if (taskStatus !== "pending") {
+    throw new HttpsError(
+      "failed-precondition",
+      `Task proof can only be submitted while the task is Available (status: ${taskData.status || "unknown"}).`
+    );
+  }
+  const canSubmitAssignee = await isTaskAvailableForSubmitterServer(firestoreDb, taskData, uid);
+  if (!canSubmitAssignee) {
+    throw new HttpsError("permission-denied", "This task is assigned to another user.");
+  }
+  if (!isTaskWithinSubmissionQuotaServer(taskData)) {
+    throw new HttpsError("failed-precondition", "This task has reached its maximum submission quota.");
+  }
+
+  // 3. Duplicate Submission Check Before Any Upload
+  const [multiSubSnap, legacySubSnap] = await Promise.all([
+    firestoreDb.collection("submissions").doc(`${taskId}_${uid}`).get(),
+    firestoreDb.collection("submissions").doc(taskId).get()
+  ]);
+  if (
+    (multiSubSnap && multiSubSnap.exists) ||
+    (legacySubSnap && legacySubSnap.exists && String(legacySubSnap.data()?.userId || "").trim() === uid)
+  ) {
+    throw new HttpsError(
+      "already-exists",
+      "You have already submitted proof for this task. Duplicate submissions are not allowed."
+    );
+  }
+
+  // 4. Atomic Lock, Idempotency & Rate-Limiting Check
+  const lockId = `${taskId}_${uid}`;
+  const lockRef = firestoreDb.collection(PROOF_UPLOAD_LOCKS_COLLECTION).doc(lockId);
+  const globalLockRef = firestoreDb.collection(PROOF_UPLOAD_LOCKS_COLLECTION).doc(`global_${uid}`);
+  const ticketsCol = firestoreDb.collection(PROOF_UPLOAD_TICKETS_COLLECTION);
+
+  const ext = PROOF_UPLOAD_MIME_TO_EXT[contentType];
+  const newTicketId = `tkt_${nowMillis}_${crypto.randomBytes(8).toString("hex")}`;
+  const newStoragePath = `submissions/${uid}/${taskId}/proof_${nowMillis}_${newTicketId}.${ext}`;
+  const expiresAtMillis = nowMillis + PROOF_UPLOAD_TICKET_TTL_MS;
+
+  let supersededStoragePath = "";
+  const txOutcome = await firestoreDb.runTransaction(async (transaction) => {
+    const [lockSnap, globalSnap] = await Promise.all([
+      transaction.get(lockRef),
+      transaction.get(globalLockRef)
+    ]);
+
+    const lockData = lockSnap && lockSnap.exists ? lockSnap.data() || {} : {};
+    const globalData = globalSnap && globalSnap.exists ? globalSnap.data() || {} : {};
+
+    // Check idempotent reuse of active ticket with identical file parameters and > 60s remaining TTL
+    const activeTicketId = String(lockData.activeTicketId || "").trim();
+    if (activeTicketId) {
+      const existingTicketRef = ticketsCol.doc(activeTicketId);
+      const existingTicketSnap = await transaction.get(existingTicketRef);
+      if (existingTicketSnap && existingTicketSnap.exists) {
+        const tData = existingTicketSnap.data() || {};
+        const ticketStatus = String(tData.status || tData.state || "").trim();
+        const ticketExpiresMs = Number(tData.expiresAtMs || tData.expiresAtMillis || 0);
+        const remainingMs = ticketExpiresMs - nowMillis;
+        if (
+          ticketStatus === "ISSUED" &&
+          (tData.uid === uid || tData.userId === uid) &&
+          tData.taskId === taskId &&
+          (tData.mimeType === contentType || tData.contentType === contentType) &&
+          Number(tData.sizeBytes || tData.expectedSizeBytes) === sizeBytes &&
+          tData.sha256Hex === sha256Hex &&
+          remainingMs > 60 * 1000
+        ) {
+          return {
+            reused: true,
+            ticketId: activeTicketId,
+            storagePath: tData.storagePath,
+            uploadUrl: tData.uploadUrl || "",
+            uploadMode: tData.uploadMode || (tData.uploadUrl ? "SIGNED_PUT" : "SERVER_MEDIATED_FINALIZE"),
+            requiredHeaders: tData.requiredHeaders || {},
+            expiresAtMillis: ticketExpiresMs
+          };
+        }
+        // Supersede previous unconsumed ISSUED ticket
+        if (ticketStatus === "ISSUED") {
+          supersededStoragePath = String(tData.storagePath || "");
+          transaction.update(existingTicketRef, {
+            state: "SUPERSEDED_CLEANED",
+            status: "SUPERSEDED_CLEANED",
+            supersededByTicketId: newTicketId,
+            updatedAt: ts
+          });
+        }
+      }
+    }
+
+    // Per-task and global rate-window checks
+    const taskWindowStart = Number(lockData.windowStartMillis || 0);
+    const taskCountInWindow =
+      nowMillis - taskWindowStart < PROOF_UPLOAD_RATE_WINDOW_MS
+        ? Number(lockData.issuedCountInWindow || 0)
+        : 0;
+    if (taskCountInWindow >= PROOF_UPLOAD_MAX_TICKETS_PER_TASK_WINDOW) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "Too many proof upload attempts for this task. Please wait 15 minutes before retrying."
+      );
+    }
+
+    const globalWindowStart = Number(globalData.windowStartMillis || 0);
+    const globalCountInWindow =
+      nowMillis - globalWindowStart < PROOF_UPLOAD_RATE_WINDOW_MS
+        ? Number(globalData.issuedCountInWindow || 0)
+        : 0;
+    if (globalCountInWindow >= PROOF_UPLOAD_MAX_TICKETS_GLOBAL_WINDOW) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "Too many proof upload tickets requested recently. Please wait 15 minutes."
+      );
+    }
+
+    const requiredHeaders = {
+      "Content-Type": contentType,
+      "x-goog-if-generation-match": "0",
+      "x-goog-meta-uid": uid,
+      "x-goog-meta-task-id": taskId,
+      "x-goog-meta-ticket-id": newTicketId
+    };
+
+    const ticketRef = ticketsCol.doc(newTicketId);
+    transaction.set(ticketRef, {
+      ticketId: newTicketId,
+      uid,
+      userId: uid,
+      taskId,
+      storagePath: newStoragePath,
+      mimeType: contentType,
+      contentType,
+      sizeBytes,
+      expectedSizeBytes: sizeBytes,
+      sha256Hex,
+      state: "ISSUED",
+      status: "ISSUED",
+      requiredHeaders,
+      issuedAtMillis: nowMillis,
+      expiresAtMs: expiresAtMillis,
+      expiresAtMillis,
+      createdAt: ts,
+      updatedAt: ts
+    });
+
+    transaction.set(
+      lockRef,
+      {
+        lockId,
+        userId: uid,
+        taskId,
+        activeTicketId: newTicketId,
+        windowStartMillis:
+          nowMillis - taskWindowStart < PROOF_UPLOAD_RATE_WINDOW_MS ? taskWindowStart : nowMillis,
+        issuedCountInWindow: taskCountInWindow + 1,
+        updatedAt: ts
+      },
+      { merge: true }
+    );
+
+    transaction.set(
+      globalLockRef,
+      {
+        lockId: `global_${uid}`,
+        userId: uid,
+        windowStartMillis:
+          nowMillis - globalWindowStart < PROOF_UPLOAD_RATE_WINDOW_MS ? globalWindowStart : nowMillis,
+        issuedCountInWindow: globalCountInWindow + 1,
+        updatedAt: ts
+      },
+      { merge: true }
+    );
+
+    return {
+      reused: false,
+      ticketId: newTicketId,
+      storagePath: newStoragePath,
+      requiredHeaders,
+      expiresAtMillis
+    };
+  });
+
+  if (txOutcome.reused) {
+    return {
+      ticketId: txOutcome.ticketId,
+      uploadUrl: txOutcome.uploadUrl,
+      uploadMethod: "PUT",
+      uploadMode: txOutcome.uploadMode,
+      storagePath: txOutcome.storagePath,
+      requiredHeaders: txOutcome.requiredHeaders,
+      expiresAtMs: txOutcome.expiresAtMillis,
+      expiresAtMillis: txOutcome.expiresAtMillis,
+      reused: true,
+      reusedExistingTicket: true
+    };
+  }
+
+  // Clean up any superseded uncommitted file outside the transaction
+  if (supersededStoragePath && bucket) {
+    await safeDeleteUncommittedTicketObject(bucket, supersededStoragePath, firestoreDb, taskId, uid);
+  }
+
+  // 5. Generate V4 Signed PUT URL with exact preconditions (or signed URL fallback notice)
+  let uploadUrl = "";
+  let uploadMode = "SIGNED_PUT";
+  if (bucket && typeof bucket.file === "function") {
+    const file = bucket.file(txOutcome.storagePath);
+    if (file && typeof file.getSignedUrl === "function") {
+      try {
+        const [signedUrl] = await file.getSignedUrl({
+          version: "v4",
+          action: "write",
+          expires: txOutcome.expiresAtMillis,
+          contentType,
+          extensionHeaders: {
+            "x-goog-if-generation-match": "0",
+            "x-goog-meta-uid": uid,
+            "x-goog-meta-task-id": taskId,
+            "x-goog-meta-ticket-id": txOutcome.ticketId
+          }
+        });
+        uploadUrl = String(signedUrl || "").trim();
+      } catch (_) {
+        uploadUrl = "";
+      }
+    }
+  }
+
+  if (!uploadUrl) {
+    // When running without iam.serviceAccounts.signBlob or on local emulator without service-account key,
+    // use server-mediated Admin SDK binary/base64 upload during finalizeTaskProofSubmission.
+    uploadMode = "SERVER_MEDIATED_FINALIZE";
+  }
+  try {
+    await ticketsCol.doc(txOutcome.ticketId).update({
+      uploadUrl,
+      uploadMode,
+      updatedAt: ts
+    });
+  } catch (_) {}
+
+  return {
+    ticketId: txOutcome.ticketId,
+    uploadUrl,
+    uploadMethod: "PUT",
+    uploadMode,
+    storagePath: txOutcome.storagePath,
+    requiredHeaders: txOutcome.requiredHeaders,
+    expiresAtMs: txOutcome.expiresAtMillis,
+    expiresAtMillis: txOutcome.expiresAtMillis,
+    reused: false,
+    reusedExistingTicket: false
+  };
+}
+
+async function handleFinalizeTaskProofSubmission(request, deps = {}) {
+  if (!request.auth || !request.auth.uid) {
+    throw new HttpsError("unauthenticated", "Authentication required to finalize task proof.");
+  }
+  const uid = String(request.auth.uid).trim();
+  const token = request.auth.token || {};
+  if (token.email_verified !== true) {
+    throw new HttpsError("permission-denied", "A verified email address is required.");
+  }
+
+  const data = request.data || {};
+  const ticketId = String(data.ticketId || "").trim();
+  const taskId = String(data.taskId || "").trim();
+  const cleanedProofText = String(data.proofText || "").trim();
+  const inlineBase64Payload = String(data.imageBase64 || "").trim();
+
+  if (!ticketId || !/^tkt_[A-Za-z0-9_]{12,80}$/.test(ticketId)) {
+    throw new HttpsError("invalid-argument", "Invalid or missing upload ticketId.");
+  }
+  if (!taskId || taskId.length > 128) {
+    throw new HttpsError("invalid-argument", "Invalid or missing taskId.");
+  }
+  if (!cleanedProofText || cleanedProofText.length > 4000) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Written text proof is mandatory (1-4000 characters)."
+    );
+  }
+
+  const firestoreDb = deps.db || db;
+  const bucket = getDefaultStorageBucket(deps);
+  const nowMillis = resolveNowMillis(deps);
+  const ts = typeof deps.serverTimestamp === "function" ? deps.serverTimestamp() : getDefaultServerTimestamp();
+
+  const ticketRef = firestoreDb.collection(PROOF_UPLOAD_TICKETS_COLLECTION).doc(ticketId);
+  const ticketSnap = await ticketRef.get();
+  if (!ticketSnap || !ticketSnap.exists) {
+    throw new HttpsError("not-found", "Upload ticket not found.");
+  }
+  const ticketData = ticketSnap.data() || {};
+  const ticketOwnerUid = String(ticketData.uid || ticketData.userId || "").trim();
+  const ticketStatus = String(ticketData.status || ticketData.state || "").trim();
+
+  if (ticketOwnerUid !== uid) {
+    throw new HttpsError("permission-denied", "Upload ticket belongs to a different user.");
+  }
+  if (String(ticketData.taskId || "").trim() !== taskId) {
+    throw new HttpsError("invalid-argument", "Upload ticket does not match the specified taskId.");
+  }
+  if (ticketStatus === "CONSUMED") {
+    throw new HttpsError("already-exists", "Upload ticket has already been consumed.");
+  }
+  if (ticketStatus !== "ISSUED") {
+    throw new HttpsError(
+      "failed-precondition",
+      `Upload ticket is no longer active (state: ${ticketStatus || "UNKNOWN"}).`
+    );
+  }
+
+  const storagePath = String(ticketData.storagePath || "").trim();
+  const expectedSizeBytes = Number(ticketData.sizeBytes || ticketData.expectedSizeBytes || 0);
+  const expectedContentType = String(ticketData.mimeType || ticketData.contentType || "").trim();
+  const expectedSha256Hex = String(ticketData.sha256Hex || "").trim().toLowerCase();
+  const ticketExpiresMs = Number(ticketData.expiresAtMs || ticketData.expiresAtMillis || 0);
+
+  if (nowMillis > ticketExpiresMs) {
+    await safeDeleteUncommittedTicketObject(bucket, storagePath, firestoreDb, taskId, uid);
+    await ticketRef.update({
+      state: "EXPIRED_CLEANED",
+      status: "EXPIRED_CLEANED",
+      expiredAtMillis: nowMillis,
+      updatedAt: ts
+    });
+    throw new HttpsError("deadline-exceeded", "Upload ticket has expired. Please try submitting again.");
+  }
+
+  if (!bucket || typeof bucket.file !== "function") {
+    throw new HttpsError("internal", "Storage bucket service is unavailable.");
+  }
+
+  const file = bucket.file(storagePath);
+
+  // If SERVER_MEDIATED_FINALIZE payload was provided and object isn't uploaded yet, write it with ifGenerationMatch: 0
+  if (inlineBase64Payload) {
+    let rawBuffer;
+    try {
+      const stripped = inlineBase64Payload.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
+      rawBuffer = Buffer.from(stripped, "base64");
+    } catch (_) {
+      throw new HttpsError("invalid-argument", "Invalid base64 image payload.");
+    }
+    if (rawBuffer.length !== expectedSizeBytes) {
+      throw new HttpsError(
+        "invalid-argument",
+        `Uploaded byte length (${rawBuffer.length}) does not match ticket sizeBytes (${expectedSizeBytes}).`
+      );
+    }
+    await file.save(rawBuffer, {
+      resumable: false,
+      preconditionOpts: { ifGenerationMatch: 0 },
+      contentType: expectedContentType,
+      metadata: {
+        contentType: expectedContentType,
+        metadata: {
+          uid,
+          "task-id": taskId,
+          "ticket-id": ticketId
+        }
+      }
+    });
+  }
+
+  // 1. Verify actual uploaded object in GCS (existence, size, MIME, metadata, magic bytes, and server-calculated SHA-256)
+  let objectBuffer;
+  let objectMeta;
+  try {
+    const [exists] = await file.exists();
+    if (!exists) {
+      throw new HttpsError("failed-precondition", "Proof image object was not uploaded to Storage.");
+    }
+    const [meta] = await file.getMetadata();
+    objectMeta = meta || {};
+    const [downloadedBytes] = await file.download();
+    objectBuffer = Buffer.isBuffer(downloadedBytes)
+      ? downloadedBytes
+      : Buffer.from(downloadedBytes || []);
+  } catch (err) {
+    if (err instanceof HttpsError) throw err;
+    throw new HttpsError("failed-precondition", "Failed to read uploaded proof object from Storage.");
+  }
+
+  const actualSizeBytes = objectBuffer.length;
+  const metaSizeBytes = Number(objectMeta.size ?? actualSizeBytes);
+  const actualContentType = normalizeProofMimeType(objectMeta.contentType);
+  const customMeta = objectMeta.metadata || {};
+  const metaUid = String(customMeta.uid || customMeta["x-goog-meta-uid"] || "").trim();
+  const metaTaskId = String(customMeta["task-id"] || customMeta.taskId || customMeta["x-goog-meta-task-id"] || "").trim();
+  const metaTicketId = String(customMeta["ticket-id"] || customMeta.ticketId || customMeta["x-goog-meta-ticket-id"] || "").trim();
+  const actualSha256Hex = crypto.createHash("sha256").update(objectBuffer).digest("hex").toLowerCase();
+  const validMagic = verifyImageMagicBytes(objectBuffer, expectedContentType);
+
+  let integrityFailureReason = "";
+  let integrityErrorCode = "invalid-argument";
+  if (
+    actualSizeBytes <= 0 ||
+    actualSizeBytes > PROOF_UPLOAD_MAX_SIZE_BYTES ||
+    actualSizeBytes !== expectedSizeBytes ||
+    metaSizeBytes !== expectedSizeBytes
+  ) {
+    integrityFailureReason = `File size mismatch (expected ${expectedSizeBytes} bytes, got ${actualSizeBytes} bytes).`;
+  } else if (actualContentType !== expectedContentType) {
+    integrityFailureReason = `MIME type mismatch (expected ${expectedContentType}, got ${objectMeta.contentType || "unknown"}).`;
+  } else if (!validMagic) {
+    integrityFailureReason = "File header magic bytes / image signature do not match a valid JPEG, PNG, or WebP image.";
+  } else if (actualSha256Hex !== expectedSha256Hex) {
+    integrityFailureReason = "Server-calculated SHA-256 does not match the ticket SHA-256 digest.";
+  } else if (metaUid !== uid || metaTaskId !== taskId || metaTicketId !== ticketId) {
+    integrityFailureReason = "Uploaded object metadata does not match the authenticated user, task, or ticket.";
+    integrityErrorCode = "permission-denied";
+  }
+
+  if (integrityFailureReason) {
+    await safeDeleteUncommittedTicketObject(bucket, storagePath, firestoreDb, taskId, uid);
+    await ticketRef.update({
+      state: "REJECTED",
+      status: "REJECTED",
+      rejectionReason: integrityFailureReason,
+      updatedAt: ts
+    });
+    throw new HttpsError(integrityErrorCode, integrityFailureReason);
+  }
+
+  // Ensure Firebase Storage download token exists so User & Admin Proof Review screens render proofImageUrl
+  let downloadToken = String(customMeta.firebaseStorageDownloadTokens || "").split(",")[0].trim();
+  if (!downloadToken) {
+    downloadToken = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString("hex");
+    if (typeof file.setMetadata === "function") {
+      try {
+        await file.setMetadata({
+          metadata: {
+            ...customMeta,
+            firebaseStorageDownloadTokens: downloadToken
+          }
+        });
+      } catch (_) {}
+    }
+  }
+  const bucketName = String(bucket.name || PROOF_UPLOAD_DEFAULT_BUCKET).trim();
+  const proofImageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(
+    storagePath
+  )}?alt=media&token=${downloadToken}`;
+
+  // 2. Atomic Firestore Transaction in Named Database (No external GCS calls inside transaction callback!)
+  const userRef = firestoreDb.collection("users").doc(uid);
+  const taskRef = firestoreDb.collection("tasks").doc(taskId);
+  const lockRef = firestoreDb.collection(PROOF_UPLOAD_LOCKS_COLLECTION).doc(`${taskId}_${uid}`);
+
+  let committedResult;
+  try {
+    committedResult = await firestoreDb.runTransaction(async (transaction) => {
+      const [freshUserSnap, freshTaskSnap, freshTicketSnap, multiSubSnap, legacySubSnap, lockSnap] =
+        await Promise.all([
+          transaction.get(userRef),
+          transaction.get(taskRef),
+          transaction.get(ticketRef),
+          transaction.get(firestoreDb.collection("submissions").doc(`${taskId}_${uid}`)),
+          transaction.get(firestoreDb.collection("submissions").doc(taskId)),
+          transaction.get(lockRef)
+        ]);
+
+      if (!freshTicketSnap || !freshTicketSnap.exists) {
+        throw new HttpsError("not-found", "Upload ticket no longer exists.");
+      }
+      const freshTicket = freshTicketSnap.data() || {};
+      const freshTicketStatus = String(freshTicket.status || freshTicket.state || "").trim();
+      const freshExpiresMs = Number(freshTicket.expiresAtMs || freshTicket.expiresAtMillis || 0);
+      if (freshTicketStatus === "CONSUMED") {
+        throw new HttpsError("already-exists", "Upload ticket has already been consumed.");
+      }
+      if (freshTicketStatus !== "ISSUED") {
+        throw new HttpsError("failed-precondition", `Upload ticket state is ${freshTicketStatus}.`);
+      }
+      if (nowMillis > freshExpiresMs) {
+        throw new HttpsError("deadline-exceeded", "Upload ticket expired during upload.");
+      }
+
+      if (!freshUserSnap || !freshUserSnap.exists) {
+        throw new HttpsError("permission-denied", "User profile not found.");
+      }
+      const freshUser = freshUserSnap.data() || {};
+      if (String(freshUser.approvalStatus || "pending").trim().toLowerCase() !== "approved") {
+        throw new HttpsError(
+          "permission-denied",
+          "Your account is no longer approved and cannot submit task proof."
+        );
+      }
+
+      if (!freshTaskSnap || !freshTaskSnap.exists) {
+        throw new HttpsError("not-found", "Task no longer exists.");
+      }
+      const freshTask = freshTaskSnap.data() || {};
+      if (freshTask.isActive === false) {
+        throw new HttpsError("failed-precondition", "Task was deactivated before submission completed.");
+      }
+      if (String(freshTask.status || "").trim().toLowerCase() !== "pending") {
+        throw new HttpsError("failed-precondition", "Task is no longer open for submissions.");
+      }
+
+      const assignedUserId = String(freshTask.assignedUserId || "").trim();
+      const createdBy = String(freshTask.createdBy || "").trim();
+      let assigneeValid = !assignedUserId || assignedUserId === uid || (createdBy && assignedUserId === createdBy);
+      if (!assigneeValid && assignedUserId) {
+        const assignedAdminSnap = await transaction.get(firestoreDb.collection("admins").doc(assignedUserId));
+        assigneeValid = Boolean(assignedAdminSnap && assignedAdminSnap.exists);
+      }
+      if (!assigneeValid) {
+        throw new HttpsError("permission-denied", "Task is assigned to another user.");
+      }
+      if (!isTaskWithinSubmissionQuotaServer(freshTask)) {
+        throw new HttpsError("failed-precondition", "Task submission quota has been exhausted.");
+      }
+
+      if (
+        (multiSubSnap && multiSubSnap.exists) ||
+        (legacySubSnap && legacySubSnap.exists && String(legacySubSnap.data()?.userId || "").trim() === uid)
+      ) {
+        throw new HttpsError(
+          "already-exists",
+          "You have already submitted proof for this task. Duplicate submissions are not allowed."
+        );
+      }
+
+      const isSingleAssigneePrivateTask = assignedUserId === uid;
+      const submissionId = isSingleAssigneePrivateTask ? taskId : `${taskId}_${uid}`;
+      const submissionRef = firestoreDb.collection("submissions").doc(submissionId);
+
+      const resolvedName = String(freshUser.displayName || "TaskFlow User").trim() || "TaskFlow User";
+      const resolvedEmail = String(freshUser.email || token.email || "user@taskflow.app").trim() || "user@taskflow.app";
+      const rewardCoins = computeExpectedTaskRewardCoinsServer(freshTask);
+      const rewardCents = computeExpectedTaskRewardCentsServer(freshTask);
+
+      if (isSingleAssigneePrivateTask) {
+        transaction.update(taskRef, {
+          assignedUserId: uid,
+          assignedUserName: resolvedName,
+          assignedUserEmail: resolvedEmail,
+          status: "submitted",
+          proofText: cleanedProofText,
+          proofImageUrl,
+          proofStoragePath: storagePath,
+          updatedAt: ts
+        });
+      }
+
+      transaction.set(submissionRef, {
+        taskId,
+        taskTitle: String(freshTask.title || ""),
+        appName: String(freshTask.appName || ""),
+        appIconUrl: String(freshTask.appIconUrl || ""),
+        rewardCents,
+        rewardCoins,
+        userId: uid,
+        userName: resolvedName,
+        userEmail: resolvedEmail,
+        proofText: cleanedProofText,
+        proofImageUrl,
+        proofStoragePath: storagePath,
+        uploadTicketId: ticketId,
+        status: "submitted",
+        adminFeedback: "",
+        createdAt: ts,
+        updatedAt: ts
+      });
+
+      transaction.update(ticketRef, {
+        state: "CONSUMED",
+        status: "CONSUMED",
+        submissionId,
+        proofImageUrl,
+        consumedAtMillis: nowMillis,
+        updatedAt: ts
+      });
+
+      if (lockSnap && lockSnap.exists && lockSnap.data()?.activeTicketId === ticketId) {
+        transaction.update(lockRef, {
+          activeTicketId: "",
+          updatedAt: ts
+        });
+      }
+
+      return {
+        submissionId,
+        taskId,
+        status: "submitted",
+        proofImageUrl,
+        proofStoragePath: storagePath
+      };
+    });
+  } catch (txErr) {
+    // Commit-and-cleanup rule: if the transaction failed (and ticket was not already CONSUMED),
+    // safely delete the uncommitted GCS object for this ticket and mark ticket ABORTED_CLEANED.
+    const postTicketSnap = await ticketRef.get().catch(() => null);
+    const postData = postTicketSnap && postTicketSnap.exists ? postTicketSnap.data() || {} : {};
+    const postState = String(postData.status || postData.state || "");
+    if (postState !== "CONSUMED") {
+      await safeDeleteUncommittedTicketObject(bucket, storagePath, firestoreDb, taskId, uid);
+      try {
+        await ticketRef.update({
+          state: "ABORTED_CLEANED",
+          status: "ABORTED_CLEANED",
+          abortReason: String(txErr?.message || "Transaction aborted").slice(0, 200),
+          updatedAt: ts
+        });
+      } catch (_) {}
+    }
+    throw txErr;
+  }
+
+  return committedResult;
+}
+
+async function handleCleanupExpiredProofUploadTickets(deps = {}) {
+  const firestoreDb = deps.db || db;
+  const bucket = getDefaultStorageBucket(deps);
+  const nowMillis = resolveNowMillis(deps);
+  const ts = typeof deps.serverTimestamp === "function" ? deps.serverTimestamp() : getDefaultServerTimestamp();
+  const batchLimit = Math.min(200, Math.max(1, Number(deps.batchLimit || 100)));
+  const graceCutoffMillis = nowMillis - 60 * 1000; // 60s grace after expiry
+
+  const ticketsCol = firestoreDb.collection(PROOF_UPLOAD_TICKETS_COLLECTION);
+  const querySnap = await ticketsCol
+    .where("status", "==", "ISSUED")
+    .where("expiresAtMs", "<=", graceCutoffMillis)
+    .limit(batchLimit)
+    .get();
+
+  const docs = querySnap?.docs || [];
+  let cleanedCount = 0;
+  let skippedCommittedCount = 0;
+  const errors = [];
+
+  for (const docSnap of docs) {
+    const tData = typeof docSnap.data === "function" ? docSnap.data() || {} : {};
+    const ticketId = String(tData.ticketId || docSnap.id || "").trim();
+    const uid = String(tData.uid || tData.userId || "").trim();
+    const taskId = String(tData.taskId || "").trim();
+    const storagePath = String(tData.storagePath || "").trim();
+    const ticketStatus = String(tData.status || tData.state || "").trim();
+    const ticketExpiresMs = Number(tData.expiresAtMs || tData.expiresAtMillis || 0);
+
+    if (!ticketId || ticketStatus !== "ISSUED" || ticketExpiresMs > graceCutoffMillis) {
+      continue;
+    }
+
+    try {
+      // Verify whether any committed submission references this storagePath
+      let referencedByCommittedSubmission = false;
+      if (taskId && uid) {
+        const [multiSnap, legacySnap] = await Promise.all([
+          firestoreDb.collection("submissions").doc(`${taskId}_${uid}`).get(),
+          firestoreDb.collection("submissions").doc(taskId).get()
+        ]);
+        if (
+          (multiSnap?.exists && multiSnap.data()?.proofStoragePath === storagePath) ||
+          (legacySnap?.exists && legacySnap.data()?.proofStoragePath === storagePath)
+        ) {
+          referencedByCommittedSubmission = true;
+        }
+      }
+      if (!referencedByCommittedSubmission && storagePath) {
+        try {
+          const byPathSnap = await firestoreDb
+            .collection("submissions")
+            .where("proofStoragePath", "==", storagePath)
+            .limit(1)
+            .get();
+          if (byPathSnap && !byPathSnap.empty) {
+            referencedByCommittedSubmission = true;
+          }
+        } catch (_) {}
+      }
+
+      if (referencedByCommittedSubmission) {
+        skippedCommittedCount += 1;
+        await ticketsCol.doc(ticketId).update({
+          state: "CONSUMED",
+          status: "CONSUMED",
+          updatedAt: ts
+        });
+        continue;
+      }
+
+      await safeDeleteUncommittedTicketObject(bucket, storagePath, firestoreDb, taskId, uid);
+
+      await firestoreDb.runTransaction(async (transaction) => {
+        const ticketRef = ticketsCol.doc(ticketId);
+        const lockRef =
+          taskId && uid
+            ? firestoreDb.collection(PROOF_UPLOAD_LOCKS_COLLECTION).doc(`${taskId}_${uid}`)
+            : null;
+        const [freshTicketSnap, lockSnap] = await Promise.all([
+          transaction.get(ticketRef),
+          lockRef ? transaction.get(lockRef) : Promise.resolve(null)
+        ]);
+        if (!freshTicketSnap || !freshTicketSnap.exists) return;
+        const freshStatus = String(freshTicketSnap.data()?.status || freshTicketSnap.data()?.state || "");
+        if (freshStatus !== "ISSUED") return;
+
+        transaction.update(ticketRef, {
+          state: "EXPIRED_CLEANED",
+          status: "EXPIRED_CLEANED",
+          cleanedAtMillis: nowMillis,
+          updatedAt: ts
+        });
+
+        if (lockRef && lockSnap && lockSnap.exists && lockSnap.data()?.activeTicketId === ticketId) {
+          transaction.update(lockRef, {
+            activeTicketId: "",
+            updatedAt: ts
+          });
+        }
+      });
+
+      cleanedCount += 1;
+    } catch (err) {
+      errors.push({
+        ticketId,
+        error: String(err?.message || "Cleanup failed").slice(0, 200)
+      });
+    }
+  }
+
+  return {
+    scanned: docs.length,
+    cleaned: cleanedCount,
+    cleanedCount,
+    skippedCommittedCount,
+    errors
+  };
+}
+
+exports.issueTaskProofUploadTicket = onCall(async (request) =>
+  handleIssueTaskProofUploadTicket(request)
+);
+exports.finalizeTaskProofSubmission = onCall(async (request) =>
+  handleFinalizeTaskProofSubmission(request)
+);
+if (typeof onSchedule === "function") {
+  exports.cleanupExpiredProofUploadTickets = onSchedule(
+    {
+      schedule: "every 15 minutes",
+      timeZone: "Asia/Kolkata",
+      retryCount: 3,
+      maxBackoffSeconds: 120
+    },
+    async () => handleCleanupExpiredProofUploadTickets()
+  );
+}
+exports._proofUploadHandlers = {
+  handleIssueTaskProofUploadTicket,
+  handleFinalizeTaskProofSubmission,
+  handleCleanupExpiredProofUploadTickets,
+  verifyImageMagicBytes,
+  hasValidImageMagicBytes: verifyImageMagicBytes,
+  normalizeProofMimeType,
+  PROOF_UPLOAD_TICKETS_COLLECTION,
+  PROOF_UPLOAD_LOCKS_COLLECTION,
+  PROOF_UPLOAD_MAX_SIZE_BYTES,
+  PROOF_UPLOAD_TICKET_TTL_MS
+};
+
 

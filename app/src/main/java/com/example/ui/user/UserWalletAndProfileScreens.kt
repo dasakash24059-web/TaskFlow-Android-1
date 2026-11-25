@@ -174,7 +174,7 @@ fun UserWalletScreen(
       if (hasEarningsOrReversalTxs) {
         computeNetCreditedEarningsCoins(transactions)
       } else {
-        approvedUserTasks.sumOf { it.getEffectiveRewardCoins() } + totalBalanceCoins
+        maxOf(approvedUserTasks.sumOf { it.getEffectiveRewardCoins() }, totalBalanceCoins)
       }
     }
 
@@ -255,7 +255,7 @@ fun UserWalletScreen(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Eligible Withdrawable Coins vs Promotional Coins breakdown
+            // Task-Earned vs Promotional Bonus breakdown (both spendable in Withdraw Coins)
             Row(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -268,7 +268,7 @@ fun UserWalletScreen(
               ) {
                 Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                   Text(
-                    text = "Eligible Withdrawable",
+                    text = "Task Earnings",
                     style = MaterialTheme.typography.labelSmall,
                     color = tfColors.rewardBadgeText,
                     fontWeight = FontWeight.Medium,
@@ -292,7 +292,7 @@ fun UserWalletScreen(
               ) {
                 Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                   Text(
-                    text = "Promotional Coins",
+                    text = "Bonus & Rewards",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     fontWeight = FontWeight.Medium,

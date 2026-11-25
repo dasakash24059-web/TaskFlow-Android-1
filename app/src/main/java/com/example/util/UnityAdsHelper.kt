@@ -154,9 +154,17 @@ object UnityAdsHelper {
   const val BANNER_PLACEMENT_ID = "BP_Banner_Android"
   const val INTERSTITIAL_PLACEMENT_ID = "BP_Interstitial_Android"
 
+  // Allow unit tests to simulate release vs debug build behavior without mutating BuildConfig.
+  @Volatile internal var isDebugBuildOverride: Boolean? = null
+
   // Enable Unity Ads test mode in debug builds only; release APKs serve live production ads.
   val TEST_MODE: Boolean
-    get() = BuildConfig.DEBUG
+    get() = isDebugBuildOverride ?: BuildConfig.DEBUG
+
+  internal fun shouldUseFallbackGameIdForCurrentBuild(): Boolean = TEST_MODE
+
+  internal fun shouldUseTestEndpointForCurrentBuild(preferTestEndpoint: Boolean): Boolean =
+    TEST_MODE && preferTestEndpoint
 
   const val UNAVAILABLE_MESSAGE = "Video is currently unavailable. Please try again later."
   private const val AD_OPERATION_TIMEOUT_MS = 25_000L
@@ -400,8 +408,8 @@ object UnityAdsHelper {
               val errMsg = message ?: "No message"
               Log.e(TAG, "[Init] onInitializationFailed (gameId=$gameIdToUse): error=$errCode, message=$errMsg")
 
-              if (!isFallbackAttempt && gameIdToUse != FALLBACK_AUCTION_GAME_ID) {
-                Log.w(TAG, "[Init] Retrying UnityAds.initialize with fallback project configuration...")
+              if (TEST_MODE && !isFallbackAttempt && gameIdToUse != FALLBACK_AUCTION_GAME_ID) {
+                Log.w(TAG, "[Init] Retrying UnityAds.initialize with debug fallback project configuration...")
                 isInitializing = false
                 initialize(initContext, gameIdToUse = FALLBACK_AUCTION_GAME_ID, isFallbackAttempt = true)
                 return
@@ -550,7 +558,7 @@ object UnityAdsHelper {
 
     val json =
       fetchConfigForGameId(GAME_ID)
-        ?: fetchConfigForGameId(FALLBACK_AUCTION_GAME_ID)
+        ?: (if (TEST_MODE) fetchConfigForGameId(FALLBACK_AUCTION_GAME_ID) else null)
         ?: JSONObject()
     cachedPublisherConfig = json
     cachedPublisherConfigTimeMs = now
@@ -710,31 +718,35 @@ object UnityAdsHelper {
         buildRequestBytes(adFormatStr = "rewarded", allowSkipFlag = false)
       }
 
+    val effectivePreferTestEndpoint = TEST_MODE && preferTestEndpoint
+
     fun tryAuctionForGameId(targetGameId: String, payloadBytes: ByteArray): JSONObject? {
       val prodUrl = "https://auction-load.unityads.unity3d.com/v6/games/$targetGameId/requests?$commonQuery"
       val testUrl = "https://auction.unityads.unity3d.com/v6/test/games/$targetGameId/requests?$commonQuery&test=true"
-      if (!preferTestEndpoint) {
+      if (!effectivePreferTestEndpoint) {
         val prodResp = postAuction(prodUrl, payloadBytes)
         if (prodResp != null && hasValidMediaFill(prodResp, placementId)) {
           return prodResp
         }
       }
-      val testResp = postAuction(testUrl, payloadBytes)
-      if (testResp != null && hasValidMediaFill(testResp, placementId)) {
-        return testResp
+      if (TEST_MODE) {
+        val testResp = postAuction(testUrl, payloadBytes)
+        if (testResp != null && hasValidMediaFill(testResp, placementId)) {
+          return testResp
+        }
       }
       return null
     }
 
     var selectedResponse: JSONObject? =
       tryAuctionForGameId(GAME_ID, primaryBytes)
-        ?: tryAuctionForGameId(FALLBACK_AUCTION_GAME_ID, primaryBytes)
+        ?: if (TEST_MODE) tryAuctionForGameId(FALLBACK_AUCTION_GAME_ID, primaryBytes) else null
 
     if (selectedResponse == null && isInterstitial) {
       val videoBytes = buildRequestBytes(adFormatStr = "rewarded", allowSkipFlag = true)
       selectedResponse =
         tryAuctionForGameId(GAME_ID, videoBytes)
-          ?: tryAuctionForGameId(FALLBACK_AUCTION_GAME_ID, videoBytes)
+          ?: if (TEST_MODE) tryAuctionForGameId(FALLBACK_AUCTION_GAME_ID, videoBytes) else null
     }
 
     if (selectedResponse == null || !hasValidMediaFill(selectedResponse, placementId)) {
@@ -854,7 +866,7 @@ object UnityAdsHelper {
       onReady = {
         executeRewardedAdLoad(
           context = context,
-          preferTestEndpoint = hasAttemptedTestFallback
+          preferTestEndpoint = TEST_MODE && hasAttemptedTestFallback
         )
       },
       onFailed = { initErr ->
@@ -1072,7 +1084,7 @@ object UnityAdsHelper {
           placementId = BANNER_PLACEMENT_ID,
           isBanner = true,
           isInterstitial = false,
-          preferTestEndpoint = preferTestEndpoint
+          preferTestEndpoint = TEST_MODE && preferTestEndpoint
         )
         runOnMainThread {
           try {
@@ -1090,8 +1102,8 @@ object UnityAdsHelper {
           }
         }
       } catch (t: Throwable) {
-        Log.w(BANNER_TAG, "Failed to fetch banner adMarkup (${t.message}); attempting fallback load.")
-        if (!preferTestEndpoint) {
+        Log.w(BANNER_TAG, "Failed to fetch banner adMarkup (${t.message}); attempting standard load.")
+        if (TEST_MODE && !preferTestEndpoint) {
           loadBannerWithBiddingMarkup(context, bannerView, preferTestEndpoint = true)
         } else {
           runOnMainThread {

@@ -100,7 +100,28 @@ import kotlinx.coroutines.withTimeout
 
 data class UploadedProofPhoto(
   val downloadUrl: String,
-  val storagePath: String
+  val storagePath: String,
+  val ticketId: String = "",
+  val uploadMode: String = "",
+  val imageBase64: String = ""
+)
+
+data class IssuedProofUploadTicket(
+  val ticketId: String,
+  val uploadUrl: String = "",
+  val uploadMode: String = "SIGNED_PUT_V4",
+  val storagePath: String,
+  val requiredHeaders: Map<String, String> = emptyMap(),
+  val expiresAtMillis: Long = 0L,
+  val reused: Boolean = false
+)
+
+data class FinalizedProofSubmissionResult(
+  val submissionId: String,
+  val taskId: String,
+  val status: String = "submitted",
+  val proofImageUrl: String,
+  val proofStoragePath: String
 )
 
 fun interface ProofPhotoUploader {
@@ -420,6 +441,31 @@ interface RewardCloudFunctionsClient {
   ): AdminConversionReviewResult = AdminConversionReviewResult(moderationId = moderationId, state = action)
 
   suspend fun getPublicLeaderboard(): PublicLeaderboardSnapshot = PublicLeaderboardSnapshot()
+
+  suspend fun issueTaskProofUploadTicket(
+    taskId: String,
+    contentType: String,
+    sizeBytes: Int,
+    sha256Hex: String
+  ): IssuedProofUploadTicket =
+    IssuedProofUploadTicket(
+      ticketId = "tkt_default",
+      storagePath = "submissions/u_default/$taskId/proof_tkt_default.jpg"
+    )
+
+  suspend fun finalizeTaskProofSubmission(
+    ticketId: String,
+    taskId: String,
+    proofText: String,
+    imageBase64: String = ""
+  ): FinalizedProofSubmissionResult =
+    FinalizedProofSubmissionResult(
+      submissionId = "${taskId}_u_default",
+      taskId = taskId,
+      status = "submitted",
+      proofImageUrl = "https://firebasestorage.googleapis.com/v0/b/taskflow-8852d.firebasestorage.app/o/submissions%2Fu_default%2F$taskId%2Fproof_$ticketId.jpg?alt=media",
+      proofStoragePath = "submissions/u_default/$taskId/proof_$ticketId.jpg"
+    )
 
   fun getOrAssignSessionRewardCoins(sessionId: String): Long = 0L
 
@@ -772,16 +818,16 @@ class FirebaseRewardCloudFunctionsClient(
     require(cleanedSessionId.isNotBlank() && !cleanedSessionId.startsWith("ad_")) {
       "Invalid or unverified reward session."
     }
-    if (!hasCustomCallableInvoker) return
 
     val sessionRef = firestore.collection("reward_sessions").document(cleanedSessionId)
     var lastStatus = "PENDING"
     var isS2sVerified = false
+    val maxAttempts = 15
 
-    for (attempt in 1..6) {
+    for (attempt in 1..maxAttempts) {
       val snap = try {
         withTimeout(5_000L) { sessionRef.get().await() }
-      } catch (e: Throwable) {
+      } catch (_: Throwable) {
         null
       }
       if (snap == null || !snap.exists()) {
@@ -801,8 +847,8 @@ class FirebaseRewardCloudFunctionsClient(
       if (isS2sVerified && lastStatus == "VERIFIED") {
         return
       }
-      if (attempt < 6) {
-        delay(500L)
+      if (attempt < maxAttempts) {
+        delay(1000L)
       }
     }
 
@@ -1471,9 +1517,7 @@ class FirebaseRewardCloudFunctionsClient(
     val success = dataMap["success"] as? Boolean ?: true
     check(success) { "Campaign click request was rejected by server." }
 
-    val clickId = (dataMap["clickId"] as? String)?.trim().orEmpty()
     val trackingUrl = (dataMap["trackingUrl"] as? String)?.trim().orEmpty()
-    check(clickId.isNotBlank()) { "Server did not return a valid clickId." }
     check(trackingUrl.isNotBlank() && isValidTaskUrl(trackingUrl)) {
       "Server returned an invalid or unsafe campaign tracking URL."
     }
@@ -1481,7 +1525,6 @@ class FirebaseRewardCloudFunctionsClient(
     val resolvedMode = (dataMap["verificationMode"] as? String)?.trim().orEmpty()
       .ifEmpty { CampaignVerificationMode.AFFILIATE_POSTBACK.name }
     IssuedCampaignClickResult(
-      clickId = clickId,
       campaignId = (dataMap["campaignId"] as? String)?.trim().orEmpty().ifEmpty { cleanCampaignId },
       networkId = (dataMap["networkId"] as? String)?.trim().orEmpty(),
       verificationMode = resolvedMode,
@@ -1817,6 +1860,125 @@ class FirebaseRewardCloudFunctionsClient(
       thisWeek = parseEntries(dataMap["thisWeek"])
     )
   }
+
+  override suspend fun issueTaskProofUploadTicket(
+    taskId: String,
+    contentType: String,
+    sizeBytes: Int,
+    sha256Hex: String
+  ): IssuedProofUploadTicket = withTimeout(20_000L) {
+    val cleanTaskId = taskId.trim()
+    val cleanMime = contentType.trim().lowercase(Locale.US)
+    val cleanHash = sha256Hex.trim().lowercase(Locale.US)
+    require(cleanTaskId.isNotEmpty() && cleanTaskId.length <= 128) {
+      "Task ID must be 1–128 characters."
+    }
+    require(cleanMime in setOf("image/jpeg", "image/jpg", "image/png", "image/webp")) {
+      "Only JPEG, PNG, and WebP proof screenshots are allowed."
+    }
+    require(sizeBytes in 1..(5 * 1024 * 1024)) {
+      "Proof image size must be between 1 byte and 5 MB."
+    }
+    require(cleanHash.matches(Regex("^[a-f0-9]{64}$"))) {
+      "Invalid SHA-256 hash format."
+    }
+
+    val payload = mapOf(
+      "taskId" to cleanTaskId,
+      "contentType" to if (cleanMime == "image/jpg") "image/jpeg" else cleanMime,
+      "sizeBytes" to sizeBytes,
+      "sha256Hex" to cleanHash
+    )
+    val responseData = try {
+      invokeRewardCallable("issueTaskProofUploadTicket", payload)
+    } catch (e: Exception) {
+      if (e is CancellationException) throw e
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to request proof upload ticket."),
+        e
+      )
+    }
+
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from issueTaskProofUploadTicket.")
+    val ticketId = (dataMap["ticketId"] as? String)?.trim().orEmpty()
+    val storagePath = (dataMap["storagePath"] as? String)?.trim().orEmpty()
+    check(ticketId.isNotEmpty() && storagePath.isNotEmpty()) {
+      "Server returned an incomplete proof upload ticket."
+    }
+    val uploadUrl = (dataMap["uploadUrl"] as? String)?.trim().orEmpty()
+    val uploadMode = (dataMap["uploadMode"] as? String)?.trim().orEmpty().ifEmpty {
+      if (uploadUrl.isNotEmpty()) "SIGNED_PUT_V4" else "SERVER_MEDIATED_FINALIZE"
+    }
+    val rawHeaders = dataMap["requiredHeaders"] as? Map<*, *> ?: emptyMap<Any?, Any?>()
+    val headers = rawHeaders.entries.mapNotNull { (k, v) ->
+      val key = (k as? String)?.trim().orEmpty()
+      val value = (v as? String)?.trim().orEmpty()
+      if (key.isNotEmpty() && value.isNotEmpty()) key to value else null
+    }.toMap()
+
+    IssuedProofUploadTicket(
+      ticketId = ticketId,
+      uploadUrl = uploadUrl,
+      uploadMode = uploadMode,
+      storagePath = storagePath,
+      requiredHeaders = headers,
+      expiresAtMillis = (dataMap["expiresAtMillis"] as? Number)?.toLong() ?: 0L,
+      reused = dataMap["reused"] as? Boolean ?: false
+    )
+  }
+
+  override suspend fun finalizeTaskProofSubmission(
+    ticketId: String,
+    taskId: String,
+    proofText: String,
+    imageBase64: String
+  ): FinalizedProofSubmissionResult = withTimeout(30_000L) {
+    val cleanTicketId = ticketId.trim()
+    val cleanTaskId = taskId.trim()
+    val cleanText = proofText.trim()
+    require(cleanTicketId.isNotEmpty()) { "Upload ticket ID is required." }
+    require(cleanTaskId.isNotEmpty()) { "Task ID is required." }
+    require(cleanText.isNotEmpty() && cleanText.length <= 4000) {
+      "Written text proof is mandatory (1–4000 characters)."
+    }
+
+    val payload = mutableMapOf<String, Any>(
+      "ticketId" to cleanTicketId,
+      "taskId" to cleanTaskId,
+      "proofText" to cleanText
+    )
+    if (imageBase64.isNotBlank()) {
+      payload["imageBase64"] = imageBase64.trim()
+    }
+
+    val responseData = try {
+      invokeRewardCallable("finalizeTaskProofSubmission", payload)
+    } catch (e: Exception) {
+      if (e is CancellationException) throw e
+      throw IllegalStateException(
+        extractCloudFunctionErrorMessage(e, "Failed to finalize task proof submission."),
+        e
+      )
+    }
+
+    val dataMap = responseData as? Map<*, *>
+      ?: throw IllegalStateException("Empty response from finalizeTaskProofSubmission.")
+    val submissionId = (dataMap["submissionId"] as? String)?.trim().orEmpty()
+    val proofImageUrl = (dataMap["proofImageUrl"] as? String)?.trim().orEmpty()
+    val proofStoragePath = (dataMap["proofStoragePath"] as? String)?.trim().orEmpty()
+    check(submissionId.isNotEmpty() && proofImageUrl.isNotEmpty() && proofStoragePath.isNotEmpty()) {
+      "Server did not confirm proof submission finalization."
+    }
+
+    FinalizedProofSubmissionResult(
+      submissionId = submissionId,
+      taskId = (dataMap["taskId"] as? String)?.trim().orEmpty().ifEmpty { cleanTaskId },
+      status = (dataMap["status"] as? String)?.trim().orEmpty().ifEmpty { TaskStatus.SUBMITTED },
+      proofImageUrl = proofImageUrl,
+      proofStoragePath = proofStoragePath
+    )
+  }
 }
 
 /**
@@ -1828,12 +1990,66 @@ fun encodeGalleryImageAsDataUri(
   maxDimensionPx: Int = 900,
   initialQuality: Int = 72
 ): String? {
+  val prepared = prepareGalleryProofImageBytes(context, imageUri, maxDimensionPx, initialQuality)
+    ?: return null
+  val base64Str = Base64.encodeToString(prepared.bytes, Base64.NO_WRAP)
+  return "data:${prepared.contentType};base64,$base64Str"
+}
+
+internal data class PreparedProofImagePayload(
+  val bytes: ByteArray,
+  val contentType: String,
+  val sha256Hex: String
+)
+
+internal fun detectImageMimeTypeFromMagicBytes(bytes: ByteArray): String? {
+  if (bytes.size < 12) return null
+  if (
+    (bytes[0].toInt() and 0xFF) == 0xFF &&
+      (bytes[1].toInt() and 0xFF) == 0xD8 &&
+      (bytes[2].toInt() and 0xFF) == 0xFF
+  ) {
+    return "image/jpeg"
+  }
+  if (
+    (bytes[0].toInt() and 0xFF) == 0x89 &&
+      bytes[1] == 0x50.toByte() &&
+      bytes[2] == 0x4E.toByte() &&
+      bytes[3] == 0x47.toByte() &&
+      bytes[4] == 0x0D.toByte() &&
+      bytes[5] == 0x0A.toByte() &&
+      bytes[6] == 0x1A.toByte() &&
+      bytes[7] == 0x0A.toByte()
+  ) {
+    return "image/png"
+  }
+  val riff = String(bytes, 0, 4, Charsets.US_ASCII)
+  val webp = String(bytes, 8, 4, Charsets.US_ASCII)
+  if (riff == "RIFF" && webp == "WEBP") {
+    return "image/webp"
+  }
+  return null
+}
+
+internal fun computeSha256Hex(bytes: ByteArray): String {
+  val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+  return digest.joinToString("") { "%02x".format(it) }
+}
+
+internal fun prepareGalleryProofImageBytes(
+  context: Context,
+  imageUri: Uri,
+  maxDimensionPx: Int = 900,
+  initialQuality: Int = 72
+): PreparedProofImagePayload? {
   return runCatching {
     val rawBytes =
       context.contentResolver.openInputStream(imageUri)?.use { it.readBytes() }
         ?: return null
     if (rawBytes.isEmpty()) return null
+    val detectedMime = detectImageMimeTypeFromMagicBytes(rawBytes) ?: return null
 
+    // Compress valid JPEG/PNG/WebP via BitmapFactory while enforcing <= 5 MB
     val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, boundsOptions)
 
@@ -1844,109 +2060,184 @@ fun encodeGalleryImageAsDataUri(
       while (width / sampleSize > maxDimensionPx * 2 || height / sampleSize > maxDimensionPx * 2) {
         sampleSize *= 2
       }
+      val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+      val decodedBitmap =
+        BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, decodeOptions)
+      if (decodedBitmap != null) {
+        val scaledBitmap =
+          if (decodedBitmap.width > maxDimensionPx || decodedBitmap.height > maxDimensionPx) {
+            val ratio =
+              minOf(
+                maxDimensionPx.toFloat() / decodedBitmap.width.toFloat(),
+                maxDimensionPx.toFloat() / decodedBitmap.height.toFloat()
+              )
+            val targetW = (decodedBitmap.width * ratio).toInt().coerceAtLeast(1)
+            val targetH = (decodedBitmap.height * ratio).toInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(decodedBitmap, targetW, targetH, true)
+          } else {
+            decodedBitmap
+          }
+
+        var quality = initialQuality
+        var compressedBytes: ByteArray
+        do {
+          val out = ByteArrayOutputStream()
+          scaledBitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+          compressedBytes = out.toByteArray()
+          quality -= 12
+        } while (compressedBytes.size > 160_000 && quality >= 30)
+
+        if (compressedBytes.isNotEmpty() && compressedBytes.size <= 5 * 1024 * 1024) {
+          return@runCatching PreparedProofImagePayload(
+            bytes = compressedBytes,
+            contentType = "image/jpeg",
+            sha256Hex = computeSha256Hex(compressedBytes)
+          )
+        }
+      }
     }
 
-    val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
-    val decodedBitmap =
-      BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, decodeOptions) ?: return null
-
-    val scaledBitmap =
-      if (decodedBitmap.width > maxDimensionPx || decodedBitmap.height > maxDimensionPx) {
-        val ratio =
-          minOf(
-            maxDimensionPx.toFloat() / decodedBitmap.width.toFloat(),
-            maxDimensionPx.toFloat() / decodedBitmap.height.toFloat()
-          )
-        val targetW = (decodedBitmap.width * ratio).toInt().coerceAtLeast(1)
-        val targetH = (decodedBitmap.height * ratio).toInt().coerceAtLeast(1)
-        Bitmap.createScaledBitmap(decodedBitmap, targetW, targetH, true)
-      } else {
-        decodedBitmap
-      }
-
-    var quality = initialQuality
-    var compressedBytes: ByteArray
-    do {
-      val out = ByteArrayOutputStream()
-      scaledBitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
-      compressedBytes = out.toByteArray()
-      quality -= 12
-    } while (compressedBytes.size > 160_000 && quality >= 30)
-
-    val base64Str = Base64.encodeToString(compressedBytes, Base64.NO_WRAP)
-    "data:image/jpeg;base64,$base64Str"
+    if (rawBytes.size > 5 * 1024 * 1024) return null
+    PreparedProofImagePayload(
+      bytes = rawBytes,
+      contentType = detectedMime,
+      sha256Hex = computeSha256Hex(rawBytes)
+    )
   }.getOrNull()
 }
 
+/**
+ * Phase F.3 Zero-Trust Server-Mediated Proof Uploader.
+ * Replaces unrestricted direct `FirebaseStorage.putFile(...)` uploads with the server-issued
+ * upload ticket lifecycle (`issueTaskProofUploadTicket` + signed PUT / server-mediated finalize).
+ * Never falls back to direct client `FirebaseStorage.putFile(...)`.
+ */
 class FirebaseStorageProofUploader(
-  private val storageProvider: () -> FirebaseStorage = { FirebaseStorage.getInstance() },
+  private val rewardFunctionsClientProvider: () -> RewardCloudFunctionsClient = {
+    FirebaseRewardCloudFunctionsClient(FirebaseFirestore.getInstance())
+  },
   private val contextProvider: () -> Context? = {
     runCatching { FirebaseApp.getInstance().applicationContext }.getOrNull()
-  }
+  },
+  private val signedUrlHttpPutExecutor: (suspend (uploadUrl: String, bytes: ByteArray, headers: Map<String, String>, onProgress: (Int) -> Unit) -> Unit)? = null
 ) : ProofPhotoUploader {
+
   override suspend fun uploadProofPhoto(
     userId: String,
     taskId: String,
     imageUri: Uri,
     onProgress: (Int) -> Unit
-  ): UploadedProofPhoto {
-    val timestamp = System.currentTimeMillis()
-    val storagePath = "submissions/$userId/$taskId/proof_${timestamp}.jpg"
+  ): UploadedProofPhoto = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    require(userId.isNotBlank()) { "Authenticated userId is required for proof upload." }
+    require(taskId.isNotBlank()) { "Valid taskId is required for proof upload." }
     onProgress(10)
 
-    // 1. Primary path: Upload to Firebase Storage and retrieve HTTPS download URL
-    val firebaseUploadResult = runCatching {
-      val storageRef = storageProvider().reference.child(storagePath)
-      val uploadTask = storageRef.putFile(imageUri)
-      uploadTask.addOnProgressListener { snapshot ->
-        val total = snapshot.totalByteCount
-        if (total > 0L) {
-          val pct = ((snapshot.bytesTransferred * 100L) / total).toInt().coerceIn(10, 95)
-          onProgress(pct)
-        }
-      }
-      uploadTask.await()
-      val downloadUrl = storageRef.downloadUrl.await().toString().trim()
-      check(downloadUrl.isNotEmpty()) {
-        "Firebase Storage did not return a valid download URL for the uploaded proof image."
-      }
-      onProgress(100)
-      UploadedProofPhoto(
-        downloadUrl = downloadUrl,
-        storagePath = storagePath
-      )
-    }
-
-    if (firebaseUploadResult.isSuccess) {
-      return firebaseUploadResult.getOrThrow()
-    }
-
-    // 2. Resilient fallback: If Firebase Storage rules/bucket are not yet published in Console,
-    // compress & encode the selected Gallery screenshot as a real JPEG data URI stored in Firestore
     val appContext = contextProvider()
-    if (appContext != null) {
-      onProgress(55)
-      val encodedDataUri = encodeGalleryImageAsDataUri(appContext, imageUri)
-      if (!encodedDataUri.isNullOrBlank()) {
-        onProgress(100)
-        return UploadedProofPhoto(
-          downloadUrl = encodedDataUri,
-          storagePath = "inline://$storagePath"
+      ?: throw IllegalStateException("Application context is unavailable to read gallery proof image.")
+    val prepared = prepareGalleryProofImageBytes(appContext, imageUri)
+      ?: throw IllegalArgumentException(
+        "Selected file is not a valid JPEG, PNG, or WebP screenshot (or exceeds 5 MB)."
+      )
+    check(prepared.bytes.isNotEmpty() && prepared.bytes.size <= 5 * 1024 * 1024) {
+      "Proof image size must be between 1 byte and 5 MB."
+    }
+
+    onProgress(25)
+    val ticket = rewardFunctionsClientProvider().issueTaskProofUploadTicket(
+      taskId = taskId,
+      contentType = prepared.contentType,
+      sizeBytes = prepared.bytes.size,
+      sha256Hex = prepared.sha256Hex
+    )
+
+    onProgress(45)
+    if (ticket.uploadUrl.isNotBlank() && ticket.uploadMode != "SERVER_MEDIATED_FINALIZE") {
+      val customPut = signedUrlHttpPutExecutor
+      if (customPut != null) {
+        customPut.invoke(ticket.uploadUrl, prepared.bytes, ticket.requiredHeaders, onProgress)
+      } else {
+        executeSignedPutUpload(
+          uploadUrl = ticket.uploadUrl,
+          bytes = prepared.bytes,
+          contentType = prepared.contentType,
+          requiredHeaders = ticket.requiredHeaders,
+          onProgress = onProgress
         )
       }
+      onProgress(90)
+      UploadedProofPhoto(
+        downloadUrl = "ticket://${ticket.ticketId}",
+        storagePath = ticket.storagePath,
+        ticketId = ticket.ticketId,
+        uploadMode = ticket.uploadMode.ifBlank { "SIGNED_PUT" },
+        imageBase64 = ""
+      )
+    } else {
+      val base64Str = Base64.encodeToString(prepared.bytes, Base64.NO_WRAP)
+      onProgress(90)
+      UploadedProofPhoto(
+        downloadUrl = "ticket://${ticket.ticketId}",
+        storagePath = ticket.storagePath,
+        ticketId = ticket.ticketId,
+        uploadMode = "SERVER_MEDIATED_FINALIZE",
+        imageBase64 = base64Str
+      )
     }
+  }
 
-    throw firebaseUploadResult.exceptionOrNull()
-      ?: IllegalStateException("Failed to upload proof image. Please select a valid screenshot from Gallery.")
+  private fun executeSignedPutUpload(
+    uploadUrl: String,
+    bytes: ByteArray,
+    contentType: String,
+    requiredHeaders: Map<String, String>,
+    onProgress: (Int) -> Unit
+  ) {
+    val url = java.net.URL(uploadUrl)
+    val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+      requestMethod = "PUT"
+      doOutput = true
+      connectTimeout = 15_000
+      readTimeout = 30_000
+      setFixedLengthStreamingMode(bytes.size)
+      setRequestProperty("Content-Type", contentType)
+      requiredHeaders.forEach { (k, v) ->
+        setRequestProperty(k, v)
+      }
+    }
+    try {
+      conn.outputStream.use { out ->
+        var offset = 0
+        val chunkSize = 16 * 1024
+        while (offset < bytes.size) {
+          val count = minOf(chunkSize, bytes.size - offset)
+          out.write(bytes, offset, count)
+          offset += count
+          val pct = 45 + ((offset.toLong() * 45L) / bytes.size.toLong()).toInt()
+          onProgress(pct.coerceIn(45, 90))
+        }
+        out.flush()
+      }
+      val status = conn.responseCode
+      if (status !in 200..299) {
+        val errText = runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }
+          .getOrNull()
+          .orEmpty()
+          .take(200)
+        throw IllegalStateException("Proof storage upload rejected (HTTP $status). $errText".trim())
+      }
+    } finally {
+      conn.disconnect()
+    }
   }
 }
 
 class TaskFlowRepository(
   private val firestore: FirebaseFirestore,
   private val authProvider: () -> FirebaseAuth = { Firebase.auth },
-  private val photoUploader: ProofPhotoUploader = FirebaseStorageProofUploader(),
   private val rewardFunctionsClient: RewardCloudFunctionsClient =
     FirebaseRewardCloudFunctionsClient(firestore),
+  private val photoUploader: ProofPhotoUploader =
+    FirebaseStorageProofUploader(rewardFunctionsClientProvider = { rewardFunctionsClient }),
   private val telegramMembershipVerifier: TelegramMembershipVerifier =
     HttpTelegramBotMembershipVerifier(),
   private val authenticatedUidProvider: () -> String? = { authProvider().currentUser?.uid }
@@ -2195,10 +2486,15 @@ class TaskFlowRepository(
    * Checks if the current user is an authorized administrator via `/admins/{uid}` (and bootstrapped owner).
    * Never trusts client-editable `role` in `/users/{uid}`.
    */
-  fun observeAdminAuthorization(uid: String, email: String): Flow<Boolean> = callbackFlow {
+  fun observeAdminAuthorization(
+    uid: String,
+    email: String,
+    emailVerified: Boolean = true
+  ): Flow<Boolean> = callbackFlow {
     require(uid.isNotBlank()) { "uid must not be blank" }
     val normalizedEmail = email.trim().lowercase(Locale.US)
-    val isBootstrappedEmail = normalizedEmail == BOOTSTRAPPED_ADMIN_EMAIL.lowercase(Locale.US)
+    val isBootstrappedEmail =
+      emailVerified && normalizedEmail == BOOTSTRAPPED_ADMIN_EMAIL.lowercase(Locale.US)
     if (isBootstrappedEmail) {
       trySend(true)
     }
@@ -2220,11 +2516,15 @@ class TaskFlowRepository(
    * (and initializes `/admins/{uid}` if the user is the verified bootstrap Admin).
    * Never trusts client-editable `role` in `/users/{uid}`.
    */
-  suspend fun checkAndEnsureAdminAuthorization(uid: String, email: String): Boolean {
+  suspend fun checkAndEnsureAdminAuthorization(
+    uid: String,
+    email: String,
+    emailVerified: Boolean = true
+  ): Boolean {
     if (uid.isBlank()) return false
     val safeEmail = email.trim()
     val isBootstrappedAdmin =
-      safeEmail.lowercase(Locale.US) == BOOTSTRAPPED_ADMIN_EMAIL.lowercase(Locale.US)
+      emailVerified && safeEmail.lowercase(Locale.US) == BOOTSTRAPPED_ADMIN_EMAIL.lowercase(Locale.US)
     return runCatching {
       val adminDocRef = adminsCollection.document(uid)
       val adminSnap = adminDocRef.get().await()
@@ -2249,12 +2549,13 @@ class TaskFlowRepository(
 
   /**
    * Ensures the signed-in user has a document in `/users/{userId}`, syncs `/leaderboard/{userId}`
-   * (without private email), and if they match the bootstrapped admin email, also initializes `/admins/{userId}`.
+   * (without private email), and if they match the verified bootstrapped admin email, also initializes `/admins/{userId}`.
    */
   suspend fun ensureUserProfile(
     uid: String,
     email: String,
-    displayName: String
+    displayName: String,
+    emailVerified: Boolean = true
   ): Result<UserProfile> = runCatching {
     require(uid.isNotBlank()) { "uid must not be blank" }
     val safeEmail = email.trim().ifEmpty { "user@taskflow.app" }
@@ -2263,7 +2564,7 @@ class TaskFlowRepository(
         safeEmail.substringBefore("@").replaceFirstChar { it.uppercase() }
       }
     val isBootstrappedAdmin =
-      safeEmail.lowercase(Locale.US) == BOOTSTRAPPED_ADMIN_EMAIL.lowercase(Locale.US)
+      emailVerified && safeEmail.lowercase(Locale.US) == BOOTSTRAPPED_ADMIN_EMAIL.lowercase(Locale.US)
 
     if (isBootstrappedAdmin) {
       val adminDocRef = adminsCollection.document(uid)
@@ -3044,18 +3345,6 @@ class TaskFlowRepository(
       "Task proof can only be submitted while the task is Available (current status: ${TaskStatus.label(currentStatus)})."
     }
 
-    // 3. Upload / encode mandatory photo proof and verify non-empty reference
-    val uploadedPhoto =
-      photoUploader.uploadProofPhoto(
-        userId = uid,
-        taskId = task.id,
-        imageUri = imageUri,
-        onProgress = onProgress
-      )
-    check(uploadedPhoto.downloadUrl.isNotBlank() && uploadedPhoto.storagePath.isNotBlank()) {
-      "Photo proof upload did not complete. Please try again."
-    }
-
     val latestTitle = latestTaskSnap.getString("title") ?: task.title
     val latestAppName = latestTaskSnap.getString("appName") ?: task.appName
     val latestAppIconUrl = latestTaskSnap.getString("appIconUrl") ?: task.appIconUrl
@@ -3071,7 +3360,7 @@ class TaskFlowRepository(
     val submissionId = if (isSingleAssigneePrivateTask) task.id else "${task.id}_$uid"
     val submissionRef = submissionsCollection.document(submissionId)
 
-    // Prevent duplicate submissions by the same user on the same task
+    // 3. Prevent duplicate submissions by the same user on the same task BEFORE issuing an upload ticket
     val existingDirectSub = submissionRef.get().await()
     check(!existingDirectSub.exists()) {
       "You have already submitted proof for this task. Duplicate submissions are not allowed."
@@ -3085,7 +3374,39 @@ class TaskFlowRepository(
       throw IllegalStateException("You have already submitted proof for this task. Duplicate submissions are not allowed.")
     }
 
-    // 4. Atomically record submission proof with immutable audit trail
+    // 4. Request server-issued upload ticket, upload mandatory photo proof, and verify non-empty reference
+    val uploadedPhoto =
+      photoUploader.uploadProofPhoto(
+        userId = uid,
+        taskId = task.id,
+        imageUri = imageUri,
+        onProgress = onProgress
+      )
+    check(uploadedPhoto.storagePath.isNotBlank()) {
+      "Photo proof upload did not complete. Please try again."
+    }
+
+    // 5. If uploaded via Phase F.3 server-ticketed proof uploader, finalize atomically via Cloud Function
+    if (uploadedPhoto.ticketId.isNotBlank()) {
+      val finalized =
+        rewardFunctionsClient.finalizeTaskProofSubmission(
+          ticketId = uploadedPhoto.ticketId,
+          taskId = task.id,
+          proofText = cleanedProofText,
+          imageBase64 = uploadedPhoto.imageBase64
+        )
+      check(finalized.proofImageUrl.isNotBlank() && finalized.proofStoragePath.isNotBlank()) {
+        "Server proof finalization did not return a valid proof image reference."
+      }
+      onProgress(100)
+      return@runCatching
+    }
+
+    check(uploadedPhoto.downloadUrl.isNotBlank()) {
+      "Photo proof upload did not complete. Please try again."
+    }
+
+    // Fallback path used only by custom injected test photoUploaders in local Firestore Rule tests
     val batch = firestore.batch()
     if (isSingleAssigneePrivateTask) {
       batch.update(
