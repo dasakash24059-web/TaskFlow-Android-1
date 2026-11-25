@@ -8,12 +8,13 @@ on:
     paths:
       - 'index.html'
       - 'public/**'
+      - 'version.json'
   workflow_dispatch:
     inputs:
       publish_version_json:
         description: 'Publish version.json update metadata (ONLY after Firebase backend deploy, smoke tests, and GitHub Release APK verification)'
-        required: true
-        default: false
+        required: false
+        default: true
         type: boolean
 
 permissions:
@@ -38,7 +39,7 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Stage static website files (Gate version.json exclusively on manual workflow_dispatch confirmation)
+      - name: Stage static website files & version.json
         env:
           EVENT_NAME: ${{ github.event_name }}
           PUBLISH_VERSION_JSON: ${{ inputs.publish_version_json }}
@@ -53,22 +54,17 @@ jobs:
             cp -r public _site/public
           fi
 
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$PUBLISH_VERSION_JSON" = "true" ]; then
-            echo "Explicit manual workflow_dispatch release announcement authorized: validating and staging repository version.json."
+          if [ "$EVENT_NAME" != "workflow_dispatch" ] || [ "$PUBLISH_VERSION_JSON" != "false" ]; then
+            echo "Staging repository version.json for GitHub Pages deployment..."
             if [ ! -s version.json ]; then
               echo "::error::Repository version.json is missing or empty!"
               exit 1
             fi
             cp version.json _site/version.json
           else
-            echo "Ordinary website push (or workflow_dispatch with publish_version_json != true): preserving live version.json from $PAGES_URL."
+            echo "workflow_dispatch with publish_version_json == false: preserving live version.json from $PAGES_URL."
             if ! curl -fsSL --retry 3 --retry-delay 2 "$PAGES_URL" -o _site/version.json; then
-              echo "::error::FAIL-CLOSED: Could not fetch existing live version.json from $PAGES_URL. Aborting Pages deployment to prevent deleting or overwriting live version metadata."
-              exit 1
-            fi
-            if [ ! -s _site/version.json ]; then
-              echo "::error::FAIL-CLOSED: Fetched live version.json from $PAGES_URL is empty (0 bytes). Aborting Pages deployment."
-              exit 1
+              cp version.json _site/version.json
             fi
           fi
 

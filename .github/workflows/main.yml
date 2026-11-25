@@ -19,9 +19,9 @@ on:
         default: true
         type: boolean
       release_tag:
-        description: 'Release tag to publish (e.g. v6.8)'
+        description: 'Release tag to publish (leave empty to auto-detect from app/build.gradle.kts, e.g. v6.9)'
         required: false
-        default: 'v6.8'
+        default: ''
         type: string
 
 permissions:
@@ -236,7 +236,7 @@ jobs:
           elif [ -n "${{ inputs.release_tag }}" ]; then
             TAG_NAME="${{ inputs.release_tag }}"
           else
-            TAG_NAME="v${VN:-6.8}"
+            TAG_NAME="v${VN:-6.9}"
           fi
           VERSION="$TAG_NAME"
 
@@ -255,10 +255,10 @@ jobs:
 
           cat <<EOF > version.json
           {
-            "latest_version_code": ${VC:-48},
-            "latest_version_name": "${VN:-6.8}",
+            "latest_version_code": ${VC:-49},
+            "latest_version_name": "${VN:-6.9}",
             "download_url": "https://github.com/${{ github.repository }}/releases/latest/download/TaskFlow.apk",
-            "release_notes": "TaskFlow v${VN:-6.8}: Phase F.3 zero-trust server-ticketed proof upload pipeline, App Check debug/release Play Integrity separation, APK signature verification, and full security hardening.",
+            "release_notes": "TaskFlow v${VN:-6.9}: Phase F.3 zero-trust server-ticketed proof upload pipeline, App Check debug/release Play Integrity separation, APK signature verification, and full security hardening.",
             "force_update": false
           }
           EOF
@@ -279,16 +279,14 @@ jobs:
         with:
           name: TaskFlow-APK
           path: |
-            ${{ steps.select_and_verify_apk.outputs.selected_apk }}
             ${{ steps.prepare_apk.outputs.apk_path }}
             ${{ steps.prepare_apk.outputs.latest_apk }}
-            ${{ steps.prepare_apk.outputs.latest_named_apk }}
             version.json
           if-no-files-found: error
 
-      - name: Create or Update GitHub Release
+      - name: Create or Update GitHub Release Automatically (Direct .apk & version.json in Releases)
         id: create_release
-        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
+        if: github.event_name != 'workflow_dispatch' || inputs.publish_release == true
         uses: softprops/action-gh-release@v2
         with:
           name: "TaskFlow Release ${{ steps.prepare_apk.outputs.version }}"
@@ -301,17 +299,18 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
+          make_latest: "true"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Release APK Assets via GitHub Release Asset Uploader (Verify & Guarantee APK Attachment)
-        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
+      - name: Upload & Verify Release APK Assets on GitHub Release
+        if: github.event_name != 'workflow_dispatch' || inputs.publish_release == true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           TAG="${{ steps.prepare_apk.outputs.tag_name }}"
-          echo "Uploading and verifying APK assets on GitHub Release '$TAG'..."
+          echo "Uploading and verifying direct .apk assets on GitHub Release '$TAG'..."
           gh release upload "$TAG" \
             "${{ steps.prepare_apk.outputs.apk_path }}" \
             "${{ steps.prepare_apk.outputs.latest_apk }}" \
@@ -327,5 +326,6 @@ jobs:
             echo "::error::TaskFlow.apk ফাইলটি GitHub Release '$TAG'-এ যুক্ত হয়নি!"
             exit 1
           fi
-          echo "SUCCESS: APK assets are verified and attached to GitHub Release '$TAG'!"
+          echo "SUCCESS: Direct APK files (${{ steps.prepare_apk.outputs.apk_path }}, TaskFlow.apk) and version.json are published to GitHub Releases under '$TAG'!"
+
 
