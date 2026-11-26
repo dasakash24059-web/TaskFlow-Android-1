@@ -24,8 +24,8 @@ android {
         applicationId = "com.aistudio.taskflow.kxmpzq"
         minSdk = 24
         targetSdk = 36
-        versionCode = 51
-        versionName = "7.1"
+        versionCode = 52
+        versionName = "7.2"
 
         testInstrumentationRunner =
             "androidx.test.runner.AndroidJUnitRunner"
@@ -39,6 +39,8 @@ android {
             storePassword = System.getenv("STORE_PASSWORD")
             keyAlias = "upload"
             keyPassword = System.getenv("KEY_PASSWORD")
+            enableV1Signing = true
+            enableV2Signing = true
         }
 
         create("debugConfig") {
@@ -54,8 +56,8 @@ android {
     buildTypes {
         release {
             isCrunchPngs = false
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

@@ -219,10 +219,42 @@ jobs:
             exit 1
           fi
 
-          echo "selected_apk=$SELECTED_APK" >> $GITHUB_OUTPUT
-          echo "SUCCESS: Release APK ($SELECTED_APK) matches established TaskFlow SHA-1 and SHA-256 signing identity!"
+          # Verify Universal APK completeness: size >= 18 MB, all 4 ABIs present, package ID and launchable activity intact
+          APK_BYTES=$(wc -c < "$SELECTED_APK" | tr -d ' ')
+          echo "Verified Universal APK Size (bytes): $APK_BYTES"
+          if [ "$APK_BYTES" -lt 18000000 ]; then
+            echo "::error::APK size ($APK_BYTES bytes) is unexpectedly small (< 18 MB)! R8 shrinking or incomplete packaging detected."
+            exit 1
+          fi
 
-      - name: Prepare Versioned Release Assets
+          for ABI in "arm64-v8a" "armeabi-v7a" "x86" "x86_64"; do
+            if ! unzip -l "$SELECTED_APK" | grep -q "lib/$ABI/"; then
+              echo "::error::Universal APK is missing native library directory for ABI: $ABI"
+              exit 1
+            fi
+          done
+
+          AAPT2=""
+          if [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR/build-tools" ]; then
+            AAPT2=$(find "$SDK_DIR/build-tools" -maxdepth 2 \( -type f -o -type l \) -name aapt2 2>/dev/null | sort -V | tail -n 1 || true)
+          fi
+          if [ -n "$AAPT2" ] && [ -x "$AAPT2" ]; then
+            BADGING=$("$AAPT2" dump badging "$SELECTED_APK")
+            echo "$BADGING" | grep -E "package:|launchable-activity:|native-code:"
+            if ! printf '%s\n' "$BADGING" | grep -q "name='com.aistudio.taskflow.kxmpzq'"; then
+              echo "::error::APK package ID mismatch in badging!"
+              exit 1
+            fi
+            if ! printf '%s\n' "$BADGING" | grep -q "launchable-activity: name='com.example.MainActivity'"; then
+              echo "::error::APK launchable-activity com.example.MainActivity missing!"
+              exit 1
+            fi
+          fi
+
+          echo "selected_apk=$SELECTED_APK" >> $GITHUB_OUTPUT
+          echo "SUCCESS: Universal Release APK ($SELECTED_APK) matches established TaskFlow SHA-1, SHA-256, package ID, and multi-ABI native libraries!"
+
+      - name: Prepare Single Full Release APK & version.json
         id: prepare_apk
         run: |
           set -euo pipefail
@@ -236,7 +268,7 @@ jobs:
           elif [ -n "${{ inputs.release_tag }}" ]; then
             TAG_NAME="${{ inputs.release_tag }}"
           else
-            TAG_NAME="v${VN:-6.9}"
+            TAG_NAME="v${VN:-7.2}"
           fi
           VERSION="$TAG_NAME"
 
@@ -246,45 +278,41 @@ jobs:
             exit 1
           fi
 
-          RELEASE_APK="app/build/outputs/apk/release/TaskFlow-${VERSION}.apk"
-          LATEST_APK="app/build/outputs/apk/release/TaskFlow.apk"
-          LATEST_NAMED_APK="app/build/outputs/apk/release/TaskFlow-latest.apk"
-          cp "$SOURCE_APK" "$RELEASE_APK"
-          cp "$SOURCE_APK" "$LATEST_APK"
-          cp "$SOURCE_APK" "$LATEST_NAMED_APK"
+          SINGLE_APK="app/build/outputs/apk/release/TaskFlow.apk"
+          cp "$SOURCE_APK" "$SINGLE_APK"
+
+          APK_SIZE=$(ls -lh "$SINGLE_APK" | awk '{print $5}')
+          echo "Single Full APK Size: $APK_SIZE ($SINGLE_APK)"
 
           cat <<EOF > version.json
           {
-            "latest_version_code": ${VC:-49},
-            "latest_version_name": "${VN:-6.9}",
+            "latest_version_code": ${VC:-52},
+            "latest_version_name": "${VN:-7.2}",
             "download_url": "https://github.com/${{ github.repository }}/releases/latest/download/TaskFlow.apk",
-            "release_notes": "TaskFlow v${VN:-6.9}: Phase F.3 zero-trust server-ticketed proof upload pipeline, App Check debug/release Play Integrity separation, APK signature verification, and full security hardening.",
+            "release_notes": "TaskFlow v${VN:-7.2}: Complete Universal APK restoration with full multi-ABI native libraries, Phase F.3 server-ticketed proof upload pipeline, App Check Play Integrity, and APK signature verification.",
             "force_update": false
           }
           EOF
-          echo "apk_path=$RELEASE_APK" >> $GITHUB_OUTPUT
-          echo "latest_apk=$LATEST_APK" >> $GITHUB_OUTPUT
-          echo "latest_named_apk=$LATEST_NAMED_APK" >> $GITHUB_OUTPUT
+          echo "single_apk=$SINGLE_APK" >> $GITHUB_OUTPUT
           echo "version_json=version.json" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
-          echo "Prepared verified release APKs: $RELEASE_APK, $LATEST_APK, and $LATEST_NAMED_APK"
+          echo "Prepared single full APK: $SINGLE_APK ($APK_SIZE) and version.json"
 
       - name: Clean up restored keystores
         if: always()
         run: rm -f debug.keystore my-upload-key.jks
 
-      - name: Upload CI Verified Release APK Build Artifact
+      - name: Upload Single Full APK Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: TaskFlow-APK
           path: |
-            ${{ steps.prepare_apk.outputs.apk_path }}
-            ${{ steps.prepare_apk.outputs.latest_apk }}
+            ${{ steps.prepare_apk.outputs.single_apk }}
             version.json
           if-no-files-found: error
 
-      - name: Create or Update GitHub Release Automatically (Direct .apk & version.json in Releases)
+      - name: Create or Update GitHub Release Automatically (Single TaskFlow.apk & version.json)
         id: create_release
         if: github.event_name != 'workflow_dispatch' || inputs.publish_release == true
         uses: softprops/action-gh-release@v2
@@ -292,9 +320,7 @@ jobs:
           name: "TaskFlow Release ${{ steps.prepare_apk.outputs.version }}"
           tag_name: ${{ steps.prepare_apk.outputs.tag_name }}
           files: |
-            ${{ steps.prepare_apk.outputs.apk_path }}
-            ${{ steps.prepare_apk.outputs.latest_apk }}
-            ${{ steps.prepare_apk.outputs.latest_named_apk }}
+            ${{ steps.prepare_apk.outputs.single_apk }}
             ${{ steps.prepare_apk.outputs.version_json }}
           generate_release_notes: true
           draft: false
@@ -303,29 +329,37 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload & Verify Release APK Assets on GitHub Release
+      - name: Upload & Verify Single TaskFlow.apk and version.json on GitHub Release
         if: github.event_name != 'workflow_dispatch' || inputs.publish_release == true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           TAG="${{ steps.prepare_apk.outputs.tag_name }}"
-          echo "Uploading and verifying direct .apk assets on GitHub Release '$TAG'..."
+          echo "Uploading and verifying single full TaskFlow.apk and version.json on GitHub Release '$TAG'..."
           gh release upload "$TAG" \
-            "${{ steps.prepare_apk.outputs.apk_path }}" \
-            "${{ steps.prepare_apk.outputs.latest_apk }}" \
-            "${{ steps.prepare_apk.outputs.latest_named_apk }}" \
+            "${{ steps.prepare_apk.outputs.single_apk }}" \
             "${{ steps.prepare_apk.outputs.version_json }}" \
             --clobber --repo "${{ github.repository }}"
 
-          ASSETS_JSON=$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name')
-          echo "Attached Release Assets:"
+          # Remove any duplicate legacy APK asset names if they exist on this tag
+          EXISTING_ASSETS=$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' || true)
+          for ASSET_NAME in $EXISTING_ASSETS; do
+            if [ "$ASSET_NAME" != "TaskFlow.apk" ] && [ "$ASSET_NAME" != "version.json" ]; then
+              echo "Removing duplicate extra asset '$ASSET_NAME' from release '$TAG' so only TaskFlow.apk and version.json remain..."
+              gh release delete-asset "$TAG" "$ASSET_NAME" --yes --repo "${{ github.repository }}" || true
+            fi
+          done
+
+          ASSETS_JSON=$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[] | "\(.name) (\(.size) bytes)"')
+          echo "Final Attached Release Assets on '$TAG':"
           echo "$ASSETS_JSON"
 
-          if ! printf '%s\n' "$ASSETS_JSON" | grep -Fxq "TaskFlow.apk"; then
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' | grep -Fxq "TaskFlow.apk"; then
             echo "::error::TaskFlow.apk ফাইলটি GitHub Release '$TAG'-এ যুক্ত হয়নি!"
             exit 1
           fi
-          echo "SUCCESS: Direct APK files (${{ steps.prepare_apk.outputs.apk_path }}, TaskFlow.apk) and version.json are published to GitHub Releases under '$TAG'!"
+          echo "SUCCESS: Single full TaskFlow.apk and version.json are published to GitHub Releases under '$TAG'!"
+
 
 
