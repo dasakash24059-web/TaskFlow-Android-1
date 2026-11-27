@@ -8,6 +8,14 @@ on:
         required: true
         default: ''
         type: string
+      deploy_target:
+        description: 'Deployment scope: campaign_tracking_only (13 secret-free Campaign Tracking functions + composite indexes) or full_production (all indexes, all 37 functions, and rules)'
+        required: true
+        default: 'campaign_tracking_only'
+        type: choice
+        options:
+          - campaign_tracking_only
+          - full_production
 
 concurrency:
   group: firebase-production-deploy-taskflow-8852d
@@ -19,6 +27,7 @@ jobs:
     env:
       FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_TASKFLOW_8852D }}
+      DEPLOY_TARGET: ${{ inputs.deploy_target }}
     steps:
       - name: Verify Explicit Production Deployment Authorization & Credentials
         run: |
@@ -27,11 +36,15 @@ jobs:
             echo "::error::Production deployment aborted: confirm_production_deploy input must equal 'DEPLOY-TASKFLOW-8852D'."
             exit 1
           fi
+          if [ "${DEPLOY_TARGET}" != "campaign_tracking_only" ] && [ "${DEPLOY_TARGET}" != "full_production" ]; then
+            echo "::error::Invalid deploy_target '${DEPLOY_TARGET}'. Allowed values: campaign_tracking_only, full_production."
+            exit 1
+          fi
           if [ -z "${FIREBASE_SERVICE_ACCOUNT:-}" ] && [ -z "${FIREBASE_TOKEN:-}" ]; then
             echo "::error::Missing Firebase deployment credentials! Configure FIREBASE_SERVICE_ACCOUNT_TASKFLOW_8852D or FIREBASE_TOKEN in GitHub Repository Secrets."
             exit 1
           fi
-          echo "Explicit production deployment authorization and credentials confirmed for project taskflow-8852d."
+          echo "Explicit production deployment authorization and credentials confirmed for project taskflow-8852d (target: ${DEPLOY_TARGET})."
 
       - name: Checkout Repo
         uses: actions/checkout@v4
@@ -83,7 +96,7 @@ jobs:
           npm install --no-save @firebase/rules-unit-testing@^5.0.0 firebase@^12.0.0
           npx --yes firebase-tools emulators:exec --config firebase.emulator.json --project demo-no-project --only auth,firestore,storage "node --test --test-concurrency=1 storage.test.js firestore.test.js firestore.promo.test.js firestore.withdrawal.test.js firestore.campaign_tracking.test.js"
 
-      - name: Ordered Firebase CLI Deployment (1. Indexes -> 2. All 37 Cloud Functions -> 3. Firestore & Storage Rules)
+      - name: Ordered Firebase CLI Deployment (campaign_tracking_only or full_production)
         if: env.FIREBASE_TOKEN != '' || env.FIREBASE_SERVICE_ACCOUNT != ''
         run: |
           set -euo pipefail
@@ -107,11 +120,21 @@ jobs:
             exit 1
           fi
 
-          echo "Step 1/3: Deploying Firestore Composite Indexes..."
-          firebase deploy --only firestore:indexes --project taskflow-8852d "${AUTH_ARGS[@]}"
+          if [ "${DEPLOY_TARGET}" = "campaign_tracking_only" ]; then
+            CAMPAIGN_TRACKING_TARGETS="functions:adminGetCampaignTrackingDashboard,functions:adminListCampaignNetworks,functions:adminListCampaignTrackingConfigs,functions:adminListCampaignConversions,functions:adminUpsertCampaignNetwork,functions:adminSetCampaignNetworkStatus,functions:adminUpsertCampaignTrackingConfig,functions:adminSetCampaignTrackingStatus,functions:reviewCampaignConversion,functions:listUserEligibleTrackedCampaigns,functions:listUserTrackedRewardActivity,functions:createCampaignClick,functions:releaseExpiredCampaignClickReservations"
 
-          echo "Step 2/3: Deploying all 37 Cloud Functions..."
-          firebase deploy --only functions --project taskflow-8852d "${AUTH_ARGS[@]}"
+            echo "Step 1/2 (campaign_tracking_only): Deploying required Firestore Composite Indexes..."
+            firebase deploy --only firestore:indexes --project taskflow-8852d "${AUTH_ARGS[@]}"
 
-          echo "Step 3/3: Deploying Firestore Rules and Storage Rules..."
-          firebase deploy --only firestore:rules,storage --project taskflow-8852d "${AUTH_ARGS[@]}"
+            echo "Step 2/2 (campaign_tracking_only): Deploying exact 13 secret-free Campaign Tracking Cloud Functions..."
+            firebase deploy --only "${CAMPAIGN_TRACKING_TARGETS}" --project taskflow-8852d "${AUTH_ARGS[@]}"
+          else
+            echo "Step 1/3 (full_production): Deploying Firestore Composite Indexes..."
+            firebase deploy --only firestore:indexes --project taskflow-8852d "${AUTH_ARGS[@]}"
+
+            echo "Step 2/3 (full_production): Deploying all 37 Cloud Functions..."
+            firebase deploy --only functions --project taskflow-8852d "${AUTH_ARGS[@]}"
+
+            echo "Step 3/3 (full_production): Deploying Firestore Rules and Storage Rules..."
+            firebase deploy --only firestore:rules,storage --project taskflow-8852d "${AUTH_ARGS[@]}"
+          fi
