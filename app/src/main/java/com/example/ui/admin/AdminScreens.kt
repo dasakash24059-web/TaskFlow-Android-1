@@ -788,7 +788,10 @@ fun AdminDashboardScreen(
               onApplyConversionsFilters = onApplyCampaignConversionsFilters,
               onRefreshConversions = onRefreshCampaignConversions,
               onLoadMoreConversions = onLoadMoreCampaignConversions,
-              onReviewConversion = onReviewCampaignConversion
+              onReviewConversion = onReviewCampaignConversion,
+              onNavigateToManualCampaigns = { navigateToTab(AdminTab.CAMPAIGNS) },
+              onNavigateToManualTasks = { navigateToTab(AdminTab.TASKS) },
+              onNavigateToProofSubmissions = { navigateToTab(AdminTab.SUBMISSIONS) }
             )
           }
           AdminTab.COINS_REWARDS -> {

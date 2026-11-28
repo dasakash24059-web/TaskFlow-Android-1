@@ -1453,8 +1453,14 @@ class TaskFlowViewModel(
                 _watchEarnUiState.value =
                   com.example.data.model.WatchEarnUiState(
                     status = com.example.data.model.WatchEarnFlowStatus.ERROR,
+                    activeSessionId = "",
+                    videosCompletedInCycle = 0,
+                    lastRewardCoins = 0L,
                     errorMessage = rawErr
                   )
+                if (com.example.data.repository.isSparkPlaybackCorrelationId(sessionId)) {
+                  _bannerMessage.value = rawErr
+                }
               }
           }
         },
@@ -1822,11 +1828,15 @@ class TaskFlowViewModel(
                       }
                   }
                   .onFailure { err ->
+                    val rawErr = err.localizedMessage ?: "Ad verification failed."
                     _spinEarnUiState.value =
                       _spinEarnUiState.value.copy(
                         isLoadingAd = false,
-                        errorMessage = err.localizedMessage ?: "Ad verification failed."
+                        errorMessage = rawErr
                       )
+                    if (com.example.data.repository.isSparkPlaybackCorrelationId(sessionId)) {
+                      _bannerMessage.value = rawErr
+                    }
                   }
               }
             },
@@ -2836,11 +2846,16 @@ class TaskFlowViewModel(
                 }
               }
               .onFailure { err ->
+                val rawErr =
+                  err.localizedMessage ?: "Reward video completion has not been verified by server yet."
                 _scratchCardUiState.update {
                   it.copy(
                     isAdLoading = false,
-                    errorMessage = err.localizedMessage ?: "Reward video completion has not been verified by server yet."
+                    errorMessage = rawErr
                   )
+                }
+                if (com.example.data.repository.isSparkPlaybackCorrelationId(sessionId)) {
+                  _bannerMessage.value = rawErr
                 }
               }
           }
@@ -3458,6 +3473,7 @@ class TaskFlowViewModel(
               isLoadingDashboard = false,
               dashboardError = null,
               hasLoadedDashboard = true,
+              isSparkFunctionsUnavailable = false,
               selectedDateRange = dateRange,
               timezone = result.timezone,
               summary = result.summary,
@@ -3468,12 +3484,16 @@ class TaskFlowViewModel(
           }
         }
         .onFailure { err ->
-          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
-            ?: "Failed to load campaign tracking analytics."
+          val isSpark = com.example.data.repository.isCallableUndeployedError(err)
+          val msg =
+            if (isSpark) com.example.data.repository.SPARK_UNDEPLOYED_ADMIN_CAMPAIGN_TRACKING_MESSAGE
+            else err.localizedMessage?.takeIf { it.isNotBlank() }
+              ?: "Failed to load campaign tracking analytics."
           _campaignTrackingAdminState.update {
             it.copy(
               isLoadingDashboard = false,
-              dashboardError = msg
+              dashboardError = msg,
+              isSparkFunctionsUnavailable = it.isSparkFunctionsUnavailable || isSpark
             )
           }
         }
@@ -3512,16 +3532,24 @@ class TaskFlowViewModel(
             prev.copy(
               isLoadingNetworks = false,
               networksError = null,
+              isSparkFunctionsUnavailable = false,
               networks = merged,
               resolvedNetworksById = mergedResolved
             )
           }
         }
         .onFailure { err ->
-          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
-            ?: "Failed to load campaign networks."
+          val isSpark = com.example.data.repository.isCallableUndeployedError(err)
+          val msg =
+            if (isSpark) com.example.data.repository.SPARK_UNDEPLOYED_ADMIN_CAMPAIGN_TRACKING_MESSAGE
+            else err.localizedMessage?.takeIf { it.isNotBlank() }
+              ?: "Failed to load campaign networks."
           _campaignTrackingAdminState.update {
-            it.copy(isLoadingNetworks = false, networksError = msg)
+            it.copy(
+              isLoadingNetworks = false,
+              networksError = msg,
+              isSparkFunctionsUnavailable = it.isSparkFunctionsUnavailable || isSpark
+            )
           }
         }
     }
@@ -3552,6 +3580,7 @@ class TaskFlowViewModel(
               prev.copy(
                 isLoadingNetworkLookup = false,
                 networkLookupError = null,
+                isSparkFunctionsUnavailable = false,
                 resolvedNetworksById = prev.resolvedNetworksById + (fetched.networkId to fetched)
               )
             } else {
@@ -3563,10 +3592,17 @@ class TaskFlowViewModel(
           }
         }
         .onFailure { err ->
-          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
-            ?: "Failed to look up campaign network '$targetId'."
+          val isSpark = com.example.data.repository.isCallableUndeployedError(err)
+          val msg =
+            if (isSpark) com.example.data.repository.SPARK_UNDEPLOYED_ADMIN_CAMPAIGN_TRACKING_MESSAGE
+            else err.localizedMessage?.takeIf { it.isNotBlank() }
+              ?: "Failed to look up campaign network '$targetId'."
           _campaignTrackingAdminState.update {
-            it.copy(isLoadingNetworkLookup = false, networkLookupError = msg)
+            it.copy(
+              isLoadingNetworkLookup = false,
+              networkLookupError = msg,
+              isSparkFunctionsUnavailable = it.isSparkFunctionsUnavailable || isSpark
+            )
           }
         }
     }
@@ -3601,15 +3637,23 @@ class TaskFlowViewModel(
             prev.copy(
               isLoadingConfigs = false,
               configsError = null,
+              isSparkFunctionsUnavailable = false,
               configs = merged
             )
           }
         }
         .onFailure { err ->
-          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
-            ?: "Failed to load campaign tracking configurations."
+          val isSpark = com.example.data.repository.isCallableUndeployedError(err)
+          val msg =
+            if (isSpark) com.example.data.repository.SPARK_UNDEPLOYED_ADMIN_CAMPAIGN_TRACKING_MESSAGE
+            else err.localizedMessage?.takeIf { it.isNotBlank() }
+              ?: "Failed to load campaign tracking configurations."
           _campaignTrackingAdminState.update {
-            it.copy(isLoadingConfigs = false, configsError = msg)
+            it.copy(
+              isLoadingConfigs = false,
+              configsError = msg,
+              isSparkFunctionsUnavailable = it.isSparkFunctionsUnavailable || isSpark
+            )
           }
         }
     }
@@ -3652,6 +3696,7 @@ class TaskFlowViewModel(
               }
             prev.copy(
               isSaving = false,
+              isSparkFunctionsUnavailable = false,
               networks = prev.networks.copy(
                 items = updatedItems,
                 totalCount = maxOf(prev.networks.totalCount, updatedItems.size)
@@ -3667,10 +3712,18 @@ class TaskFlowViewModel(
           onSuccess()
         }
         .onFailure { err ->
-          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
-            ?: "Failed to save campaign network."
+          val isSpark = com.example.data.repository.isCallableUndeployedError(err)
+          val msg =
+            if (isSpark) com.example.data.repository.SPARK_UNDEPLOYED_ADMIN_CAMPAIGN_TRACKING_MESSAGE
+            else err.localizedMessage?.takeIf { it.isNotBlank() }
+              ?: "Failed to save campaign network."
           _campaignTrackingAdminState.update {
-            it.copy(isSaving = false, feedbackMessage = msg, feedbackIsError = true)
+            it.copy(
+              isSaving = false,
+              feedbackMessage = msg,
+              feedbackIsError = true,
+              isSparkFunctionsUnavailable = it.isSparkFunctionsUnavailable || isSpark
+            )
           }
         }
     }
@@ -3696,6 +3749,7 @@ class TaskFlowViewModel(
           _campaignTrackingAdminState.update { prev ->
             prev.copy(
               isSaving = false,
+              isSparkFunctionsUnavailable = false,
               networks = prev.networks.copy(
                 items = prev.networks.items.map {
                   if (it.networkId == updated.networkId) updated else it
@@ -3711,10 +3765,18 @@ class TaskFlowViewModel(
           loadCampaignTrackingDashboard()
         }
         .onFailure { err ->
-          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
-            ?: "Failed to update campaign network status."
+          val isSpark = com.example.data.repository.isCallableUndeployedError(err)
+          val msg =
+            if (isSpark) com.example.data.repository.SPARK_UNDEPLOYED_ADMIN_CAMPAIGN_TRACKING_MESSAGE
+            else err.localizedMessage?.takeIf { it.isNotBlank() }
+              ?: "Failed to update campaign network status."
           _campaignTrackingAdminState.update {
-            it.copy(isSaving = false, feedbackMessage = msg, feedbackIsError = true)
+            it.copy(
+              isSaving = false,
+              feedbackMessage = msg,
+              feedbackIsError = true,
+              isSparkFunctionsUnavailable = it.isSparkFunctionsUnavailable || isSpark
+            )
           }
         }
     }
@@ -3788,6 +3850,7 @@ class TaskFlowViewModel(
               }
             prev.copy(
               isSaving = false,
+              isSparkFunctionsUnavailable = false,
               configs = prev.configs.copy(
                 items = updatedItems,
                 totalCount = maxOf(prev.configs.totalCount, updatedItems.size)
@@ -3802,10 +3865,18 @@ class TaskFlowViewModel(
           onSuccess()
         }
         .onFailure { err ->
-          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
-            ?: "Failed to save campaign tracking configuration."
+          val isSpark = com.example.data.repository.isCallableUndeployedError(err)
+          val msg =
+            if (isSpark) com.example.data.repository.SPARK_UNDEPLOYED_ADMIN_CAMPAIGN_TRACKING_MESSAGE
+            else err.localizedMessage?.takeIf { it.isNotBlank() }
+              ?: "Failed to save campaign tracking configuration."
           _campaignTrackingAdminState.update {
-            it.copy(isSaving = false, feedbackMessage = msg, feedbackIsError = true)
+            it.copy(
+              isSaving = false,
+              feedbackMessage = msg,
+              feedbackIsError = true,
+              isSparkFunctionsUnavailable = it.isSparkFunctionsUnavailable || isSpark
+            )
           }
         }
     }
@@ -3831,6 +3902,7 @@ class TaskFlowViewModel(
           _campaignTrackingAdminState.update { prev ->
             prev.copy(
               isSaving = false,
+              isSparkFunctionsUnavailable = false,
               configs = prev.configs.copy(
                 items = prev.configs.items.map {
                   if (it.campaignId == updated.campaignId) updated else it
@@ -3845,10 +3917,18 @@ class TaskFlowViewModel(
           loadCampaignTrackingDashboard()
         }
         .onFailure { err ->
-          val msg = err.localizedMessage?.takeIf { it.isNotBlank() }
-            ?: "Failed to update campaign status."
+          val isSpark = com.example.data.repository.isCallableUndeployedError(err)
+          val msg =
+            if (isSpark) com.example.data.repository.SPARK_UNDEPLOYED_ADMIN_CAMPAIGN_TRACKING_MESSAGE
+            else err.localizedMessage?.takeIf { it.isNotBlank() }
+              ?: "Failed to update campaign status."
           _campaignTrackingAdminState.update {
-            it.copy(isSaving = false, feedbackMessage = msg, feedbackIsError = true)
+            it.copy(
+              isSaving = false,
+              feedbackMessage = msg,
+              feedbackIsError = true,
+              isSparkFunctionsUnavailable = it.isSparkFunctionsUnavailable || isSpark
+            )
           }
         }
     }
@@ -3942,6 +4022,43 @@ class TaskFlowViewModel(
       return
     }
 
+    // Spark Free Plan & Manual Proof offers: open the linked manual proof task directly
+    // rather than calling the undeployed createCampaignClick Cloud Function.
+    if (campaign.verificationMode.equals("MANUAL_PROOF", ignoreCase = true)) {
+      val explicitTaskId =
+        campaign.linkedTaskId.trim().ifEmpty {
+          campaign.campaignId.removePrefix("task_").trim()
+        }
+      val loadedTasks = (userTasksState.value as? UiState.Success<List<TaskItem>>)?.data.orEmpty()
+      val matchedTask =
+        loadedTasks.firstOrNull { it.id == explicitTaskId }
+          ?: loadedTasks.firstOrNull { it.title.equals(campaign.title, ignoreCase = true) }
+      val targetTaskId = matchedTask?.id?.trim().orEmpty().ifEmpty { explicitTaskId }
+
+      if (targetTaskId.isNotEmpty()) {
+        _userTrackedCampaignsState.update {
+          it.copy(
+            launchingCampaignId = null,
+            feedbackMessage =
+              "Opened Manual Proof task '${campaign.title}'. Complete the steps and submit a screenshot proof to earn +${campaign.rewardTf} TF.",
+            feedbackIsError = false
+          )
+        }
+        setTrackedActivityScreenVisible(false)
+        setOfferWallScreenVisible(false)
+        selectTask(targetTaskId)
+      } else {
+        _userTrackedCampaignsState.update {
+          it.copy(
+            launchingCampaignId = null,
+            feedbackMessage = "No active Manual Proof task is linked to '${campaign.title}'.",
+            feedbackIsError = true
+          )
+        }
+      }
+      return
+    }
+
     _userTrackedCampaignsState.update {
       it.copy(
         launchingCampaignId = campaign.campaignId,
@@ -3977,9 +4094,16 @@ class TaskFlowViewModel(
             }
           }
           .onFailure { err ->
+            val isSpark = com.example.data.repository.isCallableUndeployedError(err)
+            val feedback =
+              if (isSpark) {
+                "Automated partner click tracking requires deployed Cloud Functions (unavailable on the Firebase Spark Free Plan). Choose a Manual Proof offer to submit screenshot proof."
+              } else {
+                formatUserCampaignClickError(err.localizedMessage)
+              }
             _userTrackedCampaignsState.update {
               it.copy(
-                feedbackMessage = formatUserCampaignClickError(err.localizedMessage),
+                feedbackMessage = feedback,
                 feedbackIsError = true
               )
             }
@@ -4106,17 +4230,23 @@ class TaskFlowViewModel(
             prev.copy(
               isLoadingConversions = false,
               conversionsError = null,
+              isSparkFunctionsUnavailable = false,
               conversions = slice.copy(items = mergedItems),
               conversionsScanLimit = scanLimit
             )
           }
         }
         .onFailure { err ->
+          val isSpark = com.example.data.repository.isCallableUndeployedError(err)
+          val msg =
+            if (isSpark) com.example.data.repository.SPARK_UNDEPLOYED_ADMIN_CAMPAIGN_TRACKING_MESSAGE
+            else err.localizedMessage?.takeIf(String::isNotBlank)
+              ?: "Failed to load campaign conversions."
           _campaignTrackingAdminState.update {
             it.copy(
               isLoadingConversions = false,
-              conversionsError = err.localizedMessage?.takeIf(String::isNotBlank)
-                ?: "Failed to load campaign conversions."
+              conversionsError = msg,
+              isSparkFunctionsUnavailable = it.isSparkFunctionsUnavailable || isSpark
             )
           }
         }
@@ -4184,6 +4314,7 @@ class TaskFlowViewModel(
           _campaignTrackingAdminState.update {
             it.copy(
               reviewingModerationId = null,
+              isSparkFunctionsUnavailable = false,
               feedbackMessage = feedback,
               feedbackIsError = false
             )
@@ -4194,13 +4325,17 @@ class TaskFlowViewModel(
           onSuccess()
         }
         .onFailure { err ->
-          val msg = err.localizedMessage?.takeIf(String::isNotBlank)
-            ?: "Failed to complete moderation action."
+          val isSpark = com.example.data.repository.isCallableUndeployedError(err)
+          val msg =
+            if (isSpark) com.example.data.repository.SPARK_UNDEPLOYED_ADMIN_CAMPAIGN_TRACKING_MESSAGE
+            else err.localizedMessage?.takeIf(String::isNotBlank)
+              ?: "Failed to complete moderation action."
           _campaignTrackingAdminState.update {
             it.copy(
               reviewingModerationId = null,
               feedbackMessage = msg,
-              feedbackIsError = true
+              feedbackIsError = true,
+              isSparkFunctionsUnavailable = it.isSparkFunctionsUnavailable || isSpark
             )
           }
           // Refresh queue automatically when a stale-state conflict occurs

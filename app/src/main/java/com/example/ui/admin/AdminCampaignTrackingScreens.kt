@@ -117,7 +117,10 @@ fun AdminCampaignTrackingSection(
   onApplyConversionsFilters: (String, String) -> Unit = { _, _ -> },
   onRefreshConversions: () -> Unit = {},
   onLoadMoreConversions: () -> Unit = {},
-  onReviewConversion: (AdminCampaignConversionItem, AdminConversionReviewAction, String, () -> Unit) -> Unit = { _, _, _, onDone -> onDone() }
+  onReviewConversion: (AdminCampaignConversionItem, AdminConversionReviewAction, String, () -> Unit) -> Unit = { _, _, _, onDone -> onDone() },
+  onNavigateToManualCampaigns: (() -> Unit)? = null,
+  onNavigateToManualTasks: (() -> Unit)? = null,
+  onNavigateToProofSubmissions: (() -> Unit)? = null
 ) {
   val tfColors = taskFlowColors()
   var activeSubTab by rememberSaveable { mutableStateOf(CampaignTrackingSubTab.OVERVIEW) }
@@ -246,6 +249,14 @@ fun AdminCampaignTrackingSection(
           }
         }
       }
+    }
+
+    if (state.isSparkFunctionsUnavailable) {
+      SparkPlanCampaignTrackingNoticeCard(
+        onNavigateToManualCampaigns = onNavigateToManualCampaigns,
+        onNavigateToManualTasks = onNavigateToManualTasks,
+        onNavigateToProofSubmissions = onNavigateToProofSubmissions
+      )
     }
 
     // Feedback Banner
@@ -1852,3 +1863,94 @@ private fun TrackingEmptyBlock(
     }
   }
 }
+
+@Composable
+internal fun SparkPlanCampaignTrackingNoticeCard(
+  onNavigateToManualCampaigns: (() -> Unit)? = null,
+  onNavigateToManualTasks: (() -> Unit)? = null,
+  onNavigateToProofSubmissions: (() -> Unit)? = null
+) {
+  val tfColors = taskFlowColors()
+  Card(
+    shape = RoundedCornerShape(14.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(horizontal = 16.dp, vertical = 10.dp)
+      .testTag("spark_plan_campaign_tracking_notice_card")
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        Icon(
+          imageVector = Icons.Default.Lock,
+          contentDescription = "Spark Free Plan Mode",
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(20.dp)
+        )
+        Text(
+          text = "Firebase Spark Free Plan Mode",
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onSurface
+        )
+      }
+      Text(
+        text = "• Available on Spark: Manual Proof Campaign Management, Task Management, User Proof Screenshot Upload, and Admin Proof Submissions Review.",
+        style = MaterialTheme.typography.bodySmall,
+        color = tfColors.statusConfirmedFg
+      )
+      Text(
+        text = "• Requires Deployed Cloud Functions (Unavailable on Spark): Automatic Affiliate / CPA Network S2S Tracking, Outbound Click Attribution, and Postback Conversion Moderation.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+      )
+      if (
+        onNavigateToManualCampaigns != null ||
+          onNavigateToManualTasks != null ||
+          onNavigateToProofSubmissions != null
+      ) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          onNavigateToManualCampaigns?.let { goCampaigns ->
+            OutlinedButton(
+              onClick = goCampaigns,
+              modifier = Modifier.testTag("spark_go_manual_campaigns_button")
+            ) {
+              Text("Open Manual Campaigns")
+            }
+          }
+          onNavigateToManualTasks?.let { goTasks ->
+            OutlinedButton(
+              onClick = goTasks,
+              modifier = Modifier.testTag("spark_go_manual_tasks_button")
+            ) {
+              Text("Open Tasks")
+            }
+          }
+          onNavigateToProofSubmissions?.let { goSubmissions ->
+            Button(
+              onClick = goSubmissions,
+              modifier = Modifier.testTag("spark_go_proof_submissions_button")
+            ) {
+              Text("Review Proof Submissions")
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

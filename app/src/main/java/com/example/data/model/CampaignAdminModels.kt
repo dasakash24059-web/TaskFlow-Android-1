@@ -328,7 +328,8 @@ data class AdminCampaignTrackingUiState(
   val reviewingModerationId: String? = null,
   val isSaving: Boolean = false,
   val feedbackMessage: String? = null,
-  val feedbackIsError: Boolean = false
+  val feedbackIsError: Boolean = false,
+  val isSparkFunctionsUnavailable: Boolean = false
 )
 
 /**
@@ -548,7 +549,8 @@ data class UserTrackedCampaignItem(
   val remainingSubmissions: Long? = null,
   val userStatus: String = "AVAILABLE", // AVAILABLE, PENDING, COMPLETED
   val canClick: Boolean = true,
-  val allowMultipleConversions: Boolean = false
+  val allowMultipleConversions: Boolean = false,
+  val linkedTaskId: String = ""
 )
 
 data class UserTrackedCampaignsUiState(
